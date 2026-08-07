@@ -2,7 +2,7 @@ import { ShoppingBag, Home, Search, MessageSquare } from 'lucide-react';
 import { useLanguage } from '../lib/LanguageContext';
 
 interface NavbarProps {
-  onNavigate: (page: string) => void;
+  onNavigate: (page: string, param?: string) => void;
   currentPage: string;
 }
 
@@ -34,14 +34,9 @@ export default function Navbar({ onNavigate, currentPage }: NavbarProps) {
             {t('home')}
           </button>
           <button
-            onClick={() => {
-              onNavigate('home');
-              setTimeout(() => {
-                document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth' });
-              }, 100);
-            }}
+            onClick={() => onNavigate('shop')}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
-              currentPage === 'product'
+              currentPage === 'shop'
                 ? 'bg-stone-900 text-white'
                 : 'text-stone-600 hover:bg-stone-200/60 hover:text-stone-900'
             }`}

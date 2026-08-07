@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import HomePage from './pages/HomePage';
+import ShopPage from './pages/ShopPage';
 import ProductPage from './pages/ProductPage';
 import CheckoutPage from './pages/CheckoutPage';
 import AdminPage from './pages/AdminPage';
@@ -7,7 +8,7 @@ import FeedbackPage from './pages/FeedbackPage';
 import Navbar from './components/Navbar';
 import { LanguageProvider, useLanguage } from './lib/LanguageContext';
 
-type Page = 'home' | 'product' | 'checkout' | 'admin' | 'feedback';
+type Page = 'home' | 'shop' | 'product' | 'checkout' | 'admin' | 'feedback';
 
 function AppContent() {
   const { t } = useLanguage();
@@ -18,6 +19,8 @@ function AppContent() {
   const navigate = (target: string, param?: string) => {
     if (target === 'home') {
       setPage('home');
+    } else if (target === 'shop') {
+      setPage('shop');
     } else if (target === 'product' && param) {
       setProductId(param);
       setPage('product');
@@ -51,6 +54,7 @@ function AppContent() {
       )}
 
       {page === 'home' && <HomePage onNavigate={navigate} />}
+      {page === 'shop' && <ShopPage onNavigate={navigate} />}
       {page === 'product' && <ProductPage productId={productId} onNavigate={navigate} />}
       {page === 'checkout' && (
         <CheckoutPage productId={productId} selectedSize={selectedSize} onNavigate={navigate} />

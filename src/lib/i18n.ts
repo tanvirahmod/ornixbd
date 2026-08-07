@@ -14,6 +14,12 @@ export type TranslationKey =
   | 'qualityGuaranteed'
   | 'bkashPayment'
   | 'allProducts'
+  | 'discountedProducts'
+  | 'discountedProductsSubtitle'
+  | 'newArrivals'
+  | 'newArrivalsSubtitle'
+  | 'noDiscountedProducts'
+  | 'noNewArrivals'
   | 'itemsCountOne'
   | 'itemsCountMany'
   | 'searchPlaceholder'
@@ -110,6 +116,12 @@ const en: TranslationMap = {
   qualityGuaranteed: 'Quality guaranteed',
   bkashPayment: 'bKash payment',
   allProducts: 'All Products',
+  discountedProducts: 'Discounted Products',
+  discountedProductsSubtitle: 'Our best offers are updated automatically when discounts are applied.',
+  newArrivals: 'New Arrivals',
+  newArrivalsSubtitle: 'This section updates automatically with the latest added products.',
+  noDiscountedProducts: 'No discounted products available right now.',
+  noNewArrivals: 'No new arrivals yet. Check back soon.',
   itemsCountOne: '1 item',
   itemsCountMany: '{{count}} items',
   searchPlaceholder: 'Search products by name or code...',
@@ -204,6 +216,12 @@ const bn: TranslationMap = {
   qualityGuaranteed: 'মান নিশ্চয়তা',
   bkashPayment: 'bKash পেমেন্ট',
   allProducts: 'সব পণ্য',
+  discountedProducts: 'ডিসকাউন্টেড পণ্য',
+  discountedProductsSubtitle: 'ডিসকাউন্ট দেওয়া পণ্যগুলো স্বয়ংক্রিয়ভাবে আপডেট হবে।',
+  newArrivals: 'নতুন আগমন',
+  newArrivalsSubtitle: 'নতুন পণ্য যোগ করলে এখানে স্বয়ংক্রিয়ভাবে দেখানো হবে।',
+  noDiscountedProducts: 'এই মুহূর্তে কোন ডিসকাউন্টেড পণ্য নেই।',
+  noNewArrivals: 'এখনও কোন নতুন আগমন নেই। দয়া করে পরে আবার দেখুন।',
   itemsCountOne: '১ টি পণ্য',
   itemsCountMany: '{{count}} টি পণ্য',
   searchPlaceholder: 'পণ্যের নাম বা কোড দিয়ে সন্ধান করুন...',

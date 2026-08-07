@@ -89,7 +89,7 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
         <div className="grid md:grid-cols-2 gap-8 lg:gap-16">
           {/* Image Gallery */}
           <div className="space-y-4">
-            <div className="relative aspect-square bg-white rounded-3xl overflow-hidden shadow-md group">
+            <div className="relative aspect-[4/5] sm:aspect-square bg-white rounded-3xl overflow-hidden shadow-md group">
               <img
                 src={images[currentImageIndex].image_url}
                 alt={product.title}
@@ -138,7 +138,7 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
                   <button
                     key={img.id}
                     onClick={() => setCurrentImageIndex(i)}
-                    className={`flex-shrink-0 w-18 h-18 w-16 h-16 rounded-2xl overflow-hidden border-2 transition-all duration-200 ${
+                    className={`flex-shrink-0 w-16 h-16 rounded-2xl overflow-hidden border-2 transition-all duration-200 ${
                       i === currentImageIndex ? 'border-brand-500 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'
                     }`}
                   >
