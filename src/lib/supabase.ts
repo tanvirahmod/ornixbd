@@ -39,6 +39,7 @@ export type Order = {
   product_title: string;
   product_code: string | null;
   selected_size: string | null;
+  quantity: number;
   customer_name: string;
   customer_phone: string;
   customer_address: string;

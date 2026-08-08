@@ -88,6 +88,21 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     );
   });
 
+  const getOrderPricing = (order: Order) => {
+    const matchingProduct = products.find((product) => product.id === order.product_id);
+    const unitPrice = matchingProduct
+      ? (matchingProduct.discount_price != null && matchingProduct.discount_price < matchingProduct.price
+        ? Number(matchingProduct.discount_price)
+        : Number(matchingProduct.price))
+      : 0;
+    const qty = Number(order.quantity ?? 1) || 1;
+    const subtotal = unitPrice * qty;
+    const deliveryFee = 150;
+    const total = subtotal + deliveryFee;
+
+    return { unitPrice, qty, subtotal, deliveryFee, total };
+  };
+
   useEffect(() => {
     if (isAuthenticated) {
       fetchAll();
@@ -319,8 +334,26 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   };
 
   const toggleDelivered = async (orderId: string, current: boolean) => {
+    const nextValue = !current;
     setUpdatingDelivery(orderId);
-    await supabase.from('orders').update({ delivered: !current }).eq('id', orderId);
+
+    setOrders((prev) => prev.map((order) => (
+      order.id === orderId ? { ...order, delivered: nextValue } : order
+    )));
+    setNotifications((prev) => prev.map((notification) => (
+      notification.id === orderId ? { ...notification, delivered: nextValue } : notification
+    )));
+
+    const { error } = await supabase.from('orders').update({ delivered: nextValue }).eq('id', orderId);
+    if (error) {
+      setOrders((prev) => prev.map((order) => (
+        order.id === orderId ? { ...order, delivered: current } : order
+      )));
+      setNotifications((prev) => prev.map((notification) => (
+        notification.id === orderId ? { ...notification, delivered: current } : notification
+      )));
+    }
+
     setUpdatingDelivery(null);
   };
 
@@ -662,62 +695,70 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredOrders.map((order) => (
-                  <div key={order.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5 hover:shadow-md transition-shadow">
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold text-stone-900">{order.product_title}</p>
-                          {order.product_code && (
-                            <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">
-                              {order.product_code}
+                {filteredOrders.map((order) => {
+                  const pricing = getOrderPricing(order);
+                  return (
+                    <div key={order.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5 hover:shadow-md transition-shadow">
+                      <div className="flex items-start justify-between gap-4 flex-wrap">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold text-stone-900">{order.product_title}</p>
+                            {order.product_code && (
+                              <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">
+                                {order.product_code}
+                              </span>
+                            )}
+                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                              order.delivered
+                                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-600 border border-amber-200'
+                            }`}>
+                              {order.delivered ? <><CheckCheck className="w-3 h-3" /> Delivered</> : <><Clock className="w-3 h-3" /> Pending</>}
                             </span>
+                          </div>
+                          {order.selected_size && (
+                            <p className="text-xs text-stone-500">Size: <span className="font-medium text-stone-700">{order.selected_size}</span></p>
                           )}
-                          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                            order.delivered
-                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                              : 'bg-amber-50 text-amber-600 border border-amber-200'
-                          }`}>
-                            {order.delivered ? <><CheckCheck className="w-3 h-3" /> Delivered</> : <><Clock className="w-3 h-3" /> Pending</>}
-                          </span>
+                          <p className="text-xs text-stone-500">Qty: <span className="font-medium text-stone-700">{order.quantity ?? 1}</span></p>
                         </div>
-                        {order.selected_size && (
-                          <p className="text-xs text-stone-500">Size: <span className="font-medium text-stone-700">{order.selected_size}</span></p>
-                        )}
+                        <span className="text-xs text-stone-400 flex-shrink-0">
+                          {new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                        </span>
                       </div>
-                      <span className="text-xs text-stone-400 flex-shrink-0">
-                        {new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
-                      </span>
+                      <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                        <div><span className="text-xs text-stone-400">Customer</span><p className="font-medium text-stone-800">{order.customer_name}</p></div>
+                        <div><span className="text-xs text-stone-400">Phone</span><p className="font-medium text-stone-800">{order.customer_phone}</p></div>
+                        <div><span className="text-xs text-stone-400">Quantity</span><p className="font-medium text-stone-800">{order.quantity ?? 1}</p></div>
+                        <div><span className="text-xs text-stone-400">bKash Number</span><p className="font-medium text-stone-800">{order.bkash_number ?? '—'}</p></div>
+                        <div><span className="text-xs text-stone-400">Order Amount</span><p className="font-medium text-stone-800">৳{pricing.subtotal.toFixed(0)}</p></div>
+                        <div><span className="text-xs text-stone-400">Delivery Fee</span><p className="font-medium text-stone-800">৳{pricing.deliveryFee.toFixed(0)}</p></div>
+                        <div className="sm:col-span-2"><span className="text-xs text-stone-400">Total to Pay</span><p className="font-semibold text-stone-900">৳{pricing.total.toFixed(0)}</p></div>
+                        <div className="sm:col-span-2"><span className="text-xs text-stone-400">Address</span><p className="font-medium text-stone-800">{order.customer_address}</p></div>
+                        <div className="sm:col-span-2"><span className="text-xs text-stone-400">TrxID</span><p className="font-medium text-stone-800">{order.trx_id ?? '—'}</p></div>
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-stone-100">
+                        <button
+                          onClick={() => toggleDelivered(order.id, order.delivered)}
+                          disabled={updatingDelivery === order.id}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                            order.delivered
+                              ? 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                              : 'bg-emerald-500 text-white hover:bg-emerald-400 hover:shadow-md'
+                          } disabled:opacity-60`}
+                        >
+                          {updatingDelivery === order.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : order.delivered ? (
+                            <Clock className="w-4 h-4" />
+                          ) : (
+                            <Truck className="w-4 h-4" />
+                          )}
+                          {order.delivered ? 'Mark as Pending' : 'Mark as Delivered'}
+                        </button>
+                      </div>
                     </div>
-                    <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                      <div><span className="text-xs text-stone-400">Customer</span><p className="font-medium text-stone-800">{order.customer_name}</p></div>
-                      <div><span className="text-xs text-stone-400">Phone</span><p className="font-medium text-stone-800">{order.customer_phone}</p></div>
-                      <div className="sm:col-span-2"><span className="text-xs text-stone-400">Address</span><p className="font-medium text-stone-800">{order.customer_address}</p></div>
-                      <div><span className="text-xs text-stone-400">bKash Number</span><p className="font-medium text-stone-800">{order.bkash_number ?? '—'}</p></div>
-                      <div><span className="text-xs text-stone-400">TrxID</span><p className="font-medium text-stone-800">{order.trx_id ?? '—'}</p></div>
-                    </div>
-                    <div className="mt-3 pt-3 border-t border-stone-100">
-                      <button
-                        onClick={() => toggleDelivered(order.id, order.delivered)}
-                        disabled={updatingDelivery === order.id}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                          order.delivered
-                            ? 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-                            : 'bg-emerald-500 text-white hover:bg-emerald-400 hover:shadow-md'
-                        } disabled:opacity-60`}
-                      >
-                        {updatingDelivery === order.id ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : order.delivered ? (
-                          <Clock className="w-4 h-4" />
-                        ) : (
-                          <Truck className="w-4 h-4" />
-                        )}
-                        {order.delivered ? 'Mark as Pending' : 'Mark as Delivered'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

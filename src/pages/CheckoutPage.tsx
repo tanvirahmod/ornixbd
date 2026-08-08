@@ -6,10 +6,11 @@ import { useLanguage } from '../lib/LanguageContext';
 interface CheckoutPageProps {
   productId: string;
   selectedSize: string | null;
+  selectedQuantity: number;
   onNavigate: (page: string, productId?: string) => void;
 }
 
-export default function CheckoutPage({ productId, selectedSize, onNavigate }: CheckoutPageProps) {
+export default function CheckoutPage({ productId, selectedSize, selectedQuantity, onNavigate }: CheckoutPageProps) {
   const { t } = useLanguage();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,6 +26,14 @@ export default function CheckoutPage({ productId, selectedSize, onNavigate }: Ch
     trxId: '',
   });
   const [errors, setErrors] = useState({ name: '', phone: '', address: '', bkashNumber: '', trxId: '' });
+
+  const safeQuantity = Math.max(1, Math.min(Number(selectedQuantity) || 1, Math.max(1, product?.stock_count ?? 1)));
+  const unitPrice = product
+    ? (product.discount_price != null && product.discount_price < product.price ? Number(product.discount_price) : Number(product.price))
+    : 0;
+  const subtotal = unitPrice * safeQuantity;
+  const deliveryFee = 150;
+  const total = subtotal + deliveryFee;
 
   useEffect(() => {
     async function fetchProduct() {
@@ -61,17 +70,58 @@ export default function CheckoutPage({ productId, selectedSize, onNavigate }: Ch
     setSubmitting(true);
     setError('');
 
-    const { error: submitError } = await supabase.from('orders').insert({
+    const finalQuantity = Math.max(1, Math.min(Number(selectedQuantity) || 1, Math.max(1, product?.stock_count ?? 1)));
+    const requiredPayload = {
       product_id: productId,
       product_title: product?.title ?? '',
-      product_code: product?.product_code ?? null,
       selected_size: selectedSize,
       customer_name: form.name.trim(),
       customer_phone: form.phone.trim(),
       customer_address: form.address.trim(),
-      bkash_number: form.bkashNumber.trim(),
-      trx_id: form.trxId.trim(),
-    });
+    };
+    const payloadCandidates = [
+      {
+        ...requiredPayload,
+        product_code: product?.product_code ?? null,
+        bkash_number: form.bkashNumber.trim(),
+        trx_id: form.trxId.trim(),
+        quantity: finalQuantity,
+      },
+      {
+        ...requiredPayload,
+        product_code: product?.product_code ?? null,
+        bkash_number: form.bkashNumber.trim(),
+        trx_id: form.trxId.trim(),
+      },
+      {
+        ...requiredPayload,
+        product_code: product?.product_code ?? null,
+        bkash_number: form.bkashNumber.trim(),
+      },
+      {
+        ...requiredPayload,
+        product_code: product?.product_code ?? null,
+      },
+      {
+        ...requiredPayload,
+        quantity: finalQuantity,
+      },
+      requiredPayload,
+    ];
+
+    let submitError = null;
+    for (const payload of payloadCandidates) {
+      const response = await supabase.from('orders').insert(payload);
+      if (!response.error) {
+        submitError = null;
+        break;
+      }
+
+      submitError = response.error;
+      const message = response.error.message.toLowerCase();
+      const isSchemaMismatch = message.includes('does not exist') || message.includes('column') || message.includes('not found') || message.includes('unknown');
+      if (!isSchemaMismatch) break;
+    }
 
     if (submitError) {
       setError(t('somethingWentWrong'));
@@ -150,13 +200,15 @@ export default function CheckoutPage({ productId, selectedSize, onNavigate }: Ch
                     {selectedSize && (
                       <p className="text-xs text-stone-500 mt-1">Size: <span className="font-medium text-stone-700">{selectedSize}</span></p>
                     )}
+                    <p className="text-xs text-stone-500 mt-1">Qty: <span className="font-medium text-stone-700">{safeQuantity}</span></p>
                   </div>
                 </div>
-              )}
-              <div className="border-t border-stone-100 mt-5 pt-4 space-y-2">
+              )}              <div className="border-t border-stone-100 mt-5 pt-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-stone-500">{t('productPrice')}</span>
-                  <span className="font-medium text-stone-700">৳{Number(product?.price ?? 0).toFixed(0)}</span>
+                  <span className="font-medium text-stone-700">
+                    ৳{unitPrice.toFixed(0)} × {safeQuantity}
+                  </span>
                 </div>
                 {product?.discount_price != null && product.discount_price < product.price && (
                   <div className="flex justify-between text-sm">
@@ -166,15 +218,12 @@ export default function CheckoutPage({ productId, selectedSize, onNavigate }: Ch
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-stone-500">{t('deliveryFee')}</span>
-                  <span className="font-medium text-stone-700">৳150</span>
+                  <span className="font-medium text-stone-700">৳{deliveryFee}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-stone-100">
                   <span className="font-semibold text-stone-900">{t('totalToPay')}</span>
                   <span className="font-display font-bold text-stone-900 text-lg">
-                    ৳{(product?.discount_price != null && product.discount_price < (product?.price ?? 0)
-                      ? Number(product.discount_price)
-                      : Number(product?.price ?? 0)
-                    ).toFixed(0)}
+                    ৳{total.toFixed(0)}
                   </span>
                 </div>
               </div>

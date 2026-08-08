@@ -15,6 +15,7 @@ function AppContent() {
   const [page, setPage] = useState<Page>('home');
   const [productId, setProductId] = useState<string>('');
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
+  const [selectedQuantity, setSelectedQuantity] = useState<number>(1);
 
   const navigate = (target: string, param?: string) => {
     if (target === 'home') {
@@ -25,9 +26,11 @@ function AppContent() {
       setProductId(param);
       setPage('product');
     } else if (target === 'checkout' && param) {
-      const [id, size] = param.split('__');
+      const [id, sizeToken, qtyToken] = param.split('__');
       setProductId(id);
-      setSelectedSize(size ?? null);
+      setSelectedSize(sizeToken && sizeToken !== 'none' ? sizeToken : null);
+      const parsedQty = Number(qtyToken ?? 1);
+      setSelectedQuantity(Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 1);
       setPage('checkout');
     } else if (target === 'admin') {
       setPage('admin');
@@ -57,7 +60,12 @@ function AppContent() {
       {page === 'shop' && <ShopPage onNavigate={navigate} />}
       {page === 'product' && <ProductPage productId={productId} onNavigate={navigate} />}
       {page === 'checkout' && (
-        <CheckoutPage productId={productId} selectedSize={selectedSize} onNavigate={navigate} />
+        <CheckoutPage
+          productId={productId}
+          selectedSize={selectedSize}
+          selectedQuantity={selectedQuantity}
+          onNavigate={navigate}
+        />
       )}
       {page === 'admin' && <AdminPage onNavigate={navigate} />}
       {page === 'feedback' && <FeedbackPage onNavigate={navigate} />}

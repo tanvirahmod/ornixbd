@@ -14,6 +14,7 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
+  const [quantity, setQuantity] = useState(1);
   const [sizeError, setSizeError] = useState(false);
 
   useEffect(() => {
@@ -48,7 +49,8 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
       setSizeError(true);
       return;
     }
-    onNavigate('checkout', productId + (selectedSize ? `__${selectedSize}` : ''));
+    const safeQuantity = Math.max(1, Math.min(quantity, Math.max(1, product?.stock_count ?? 1)));
+    onNavigate('checkout', `${productId}__${selectedSize ?? 'none'}__${safeQuantity}`);
   };
 
   const prevImage = () => setCurrentImageIndex((i) => (i === 0 ? images.length - 1 : i - 1));
@@ -238,6 +240,37 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
               </div>
             )}
 
+            {/* Quantity */}
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-stone-700">Quantity</span>
+                <div className="inline-flex items-center gap-3 rounded-full border border-stone-200 bg-white px-2 py-1.5 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                    disabled={quantity <= 1}
+                    className="w-8 h-8 flex items-center justify-center rounded-full text-lg font-semibold text-stone-700 disabled:text-stone-300 disabled:cursor-not-allowed hover:bg-stone-100"
+                    aria-label="Decrease quantity"
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[2rem] text-center font-semibold text-stone-900">{quantity}</span>
+                  <button
+                    type="button"
+                    onClick={() => setQuantity((q) => Math.min(product.stock_count, q + 1))}
+                    disabled={quantity >= product.stock_count}
+                    className="w-8 h-8 flex items-center justify-center rounded-full text-lg font-semibold text-stone-700 disabled:text-stone-300 disabled:cursor-not-allowed hover:bg-stone-100"
+                    aria-label="Increase quantity"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-stone-500">
+                {product.stock_count > 0 ? `${product.stock_count} available in stock` : 'Out of stock'}
+              </p>
+            </div>
+
             {/* Buy Now */}
             <div className="mt-auto pt-2">
               <button
@@ -250,8 +283,8 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
                   ? t('outOfStock')
                   : t('addToCart', {
                       price: (product.discount_price != null && product.discount_price < product.price
-                        ? Number(product.discount_price)
-                        : Number(product.price)).toFixed(0),
+                        ? Number(product.discount_price) * quantity
+                        : Number(product.price) * quantity).toFixed(0),
                     })}
               </button>
               <div className="flex items-center justify-center gap-6 mt-4 text-xs text-stone-400">
