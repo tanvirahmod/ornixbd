@@ -23,18 +23,22 @@ export default function HeroBanner({ onNavigate }: HeroBannerProps) {
         Mobile image: visible by default, hidden on md+
         Desktop image: hidden by default, visible on md+
       */}
-      <img
-        src={mobileBg}
-        alt=""
-        className="absolute inset-0 w-full h-full object-cover object-top md:hidden"
-        loading="eager"
-      />
-      <img
-        src={desktopBg}
-        alt=""
-        className="absolute inset-0 w-full h-full object-cover object-top hidden md:block"
-        loading="eager"
-      />
+      {mobileBg && (
+        <img
+          src={mobileBg}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover object-top md:hidden"
+          loading="eager"
+        />
+      )}
+      {desktopBg && (
+        <img
+          src={desktopBg}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover object-top hidden md:block"
+          loading="eager"
+        />
+      )}
 
       {/* Subtle dark overlay */}
       <div className="absolute inset-0 bg-black/30" />

@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS product_sizes (
   UNIQUE(product_id, size)
 );
 
+ALTER TABLE product_sizes REPLICA IDENTITY FULL;
+
 INSERT INTO product_sizes (product_id, size, quantity)
 SELECT id, unnest(sizes), 0
 FROM products
@@ -19,3 +21,5 @@ CREATE POLICY "Allow public read product_sizes" ON product_sizes FOR SELECT USIN
 CREATE POLICY "Allow public insert product_sizes" ON product_sizes FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow public update product_sizes" ON product_sizes FOR UPDATE USING (true);
 CREATE POLICY "Allow public delete product_sizes" ON product_sizes FOR DELETE USING (true);
+
+ALTER PUBLICATION supabase_realtime ADD TABLE product_sizes;

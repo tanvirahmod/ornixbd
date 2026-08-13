@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Announcement, Category } from './supabase';
 
-const HERO_BG_FALLBACK = 'https://images.pexels.com/photos/1183266/pexels-photo-1183266.jpeg?auto=compress&cs=tinysrgb&w=1600';
 const ANNOUNCEMENT_FALLBACK = '⚡ FREE SHIPPING NATIONWIDE ⚡  •  QUALITY STREETWEAR FROM BANGLADESH  •  NEW ARRIVALS EVERY WEEK  •';
 
 export function useAnnouncements() {
@@ -131,5 +130,5 @@ export function getAnnouncementText(announcements: Announcement[], loading: bool
 }
 
 export function getHeroBgImage(value: string | null): string {
-  return value || HERO_BG_FALLBACK;
+  return value || '';
 }

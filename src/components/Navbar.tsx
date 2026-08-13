@@ -123,7 +123,7 @@ export default function Navbar() {
               onClick={() => navigateTo('home')}
               className="font-display text-2xl sm:text-3xl tracking-widest text-black hover:text-sale transition-colors duration-200 uppercase"
             >
-              LEON OUTFITS
+               ORNIX
             </button>
           </div>
 

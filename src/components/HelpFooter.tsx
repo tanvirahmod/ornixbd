@@ -22,7 +22,7 @@ const FAQ_ITEMS = [
     icon: '👥',
     question: 'Who are we?',
     answer:
-      'LEON OUTFITS is a Bangladeshi streetwear brand dedicated to delivering bold, quality fashion at fair prices. We are a small passionate team building a local brand for the streets. Follow us on Instagram and Facebook for the latest drops.',
+      'ORNIX is a Bangladeshi streetwear brand dedicated to delivering bold, quality fashion at fair prices. We are a small passionate team building a local brand for the streets. Follow us on Instagram and Facebook for the latest drops.',
   },
   {
     icon: '💳',
@@ -129,7 +129,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
               className="font-display text-2xl uppercase tracking-widest text-white mb-4"
               style={{ fontFamily: 'Anton, Impact, Arial Black, sans-serif' }}
             >
-              LEON OUTFITS
+               ORNIX
             </h3>
             <p className="text-white/50 text-sm leading-relaxed mb-6 font-medium">
               Bold streetwear crafted in Bangladesh. Quality you can feel, style
@@ -221,7 +221,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
 
             {/* Copyright */}
             <p className="text-white/35 text-xs text-center">
-              © {new Date().getFullYear()} LEON OUTFITS. A Bangladeshi Brand. All rights reserved.
+               © {new Date().getFullYear()} ORNIX. A Bangladeshi Brand. All rights reserved.
             </p>
 
             {/* Social links text */}

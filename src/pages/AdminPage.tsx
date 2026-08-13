@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, Truck, Clock, MessageSquare, Mail, Settings
- } from 'lucide-react';
-import { supabase, Product, Order, Category, Feedback, Announcement, SiteSetting } from '../lib/supabase';
+   Bell, CheckCheck, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw
+} from 'lucide-react';
+import { supabase, Product, ProductSize, Order, Category, Feedback, Announcement, SiteSetting } from '../lib/supabase';
 import { verifyAdmin } from '../lib/adminCredentials';
 import { useNavigation } from '../lib/navigation';
 
-type Tab = 'products' | 'categories' | 'orders' | 'feedback' | 'settings';
+type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'feedback' | 'settings';
 type ModalMode = 'add' | 'edit';
 
 const EMPTY_FORM = {
@@ -56,7 +56,9 @@ export default function AdminPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'product' | 'category'; id: string } | null>(null);
 
   const [productSearch, setProductSearch] = useState('');
+  const [stockSearch, setStockSearch] = useState('');
   const [orderSearch, setOrderSearch] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Order[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [updatingDelivery, setUpdatingDelivery] = useState<string | null>(null);
@@ -169,7 +171,30 @@ export default function AdminPage() {
         { event: 'DELETE', schema: 'public', table: 'feedback' },
         (payload) => {
           const deleted = payload.old as Feedback;
-          setFeedbackList((prev) => prev.filter((f) => f.id !== deleted.id));
+          setFeedbackList((prev) => prev.filter((f) => (f.id !== deleted.id)));
+        }
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'product_sizes' },
+        (payload) => {
+          const updated = payload.new as ProductSize;
+          if (!updated?.id || !updated?.product_id || updated.quantity == null) return;
+          setProducts((prev) => prev.map((p) => {
+            if (p.id !== updated.product_id) return p;
+            const newProductSizes = (p.product_sizes ?? []).map((ps) =>
+              ps.id === updated.id ? { ...ps, quantity: updated.quantity } : ps
+            );
+            const newStock = newProductSizes.reduce((sum, ps) => sum + ps.quantity, 0);
+            return { ...p, product_sizes: newProductSizes, stock_count: newStock };
+          }));
+        }
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'products' },
+        (payload) => {
+          const updated = payload.new as Product;
+          if (!updated?.id || updated.stock_count == null) return;
+          setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, stock_count: updated.stock_count } : p)));
         }
       )
       .subscribe();
@@ -218,6 +243,12 @@ export default function AdminPage() {
     }
     setLoading(false);
   }
+
+  const handleRefreshStock = async () => {
+    setRefreshing(true);
+    await fetchAll();
+    setRefreshing(false);
+  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -413,6 +444,54 @@ export default function AdminPage() {
     }
 
     setUpdatingDelivery(null);
+  };
+
+  const handleSellProduct = async (productId: string, size: string | null, currentQty: number) => {
+    if (currentQty <= 0) return;
+    const newQty = currentQty - 1;
+
+    if (size) {
+      setProducts((prev) => prev.map((p) => {
+        if (p.id !== productId) return p;
+        const newProductSizes = p.product_sizes?.map((ps) =>
+          ps.size === size ? { ...ps, quantity: Math.max(0, ps.quantity - 1) } : ps
+        );
+        const newStock = newProductSizes?.reduce((sum, ps) => sum + ps.quantity, 0) ?? p.stock_count;
+        return { ...p, product_sizes: newProductSizes, stock_count: Math.max(0, newStock) };
+      }));
+
+      const { error: sizeError } = await supabase
+        .from('product_sizes')
+        .update({ quantity: Math.max(0, newQty) })
+        .eq('product_id', productId)
+        .eq('size', size);
+
+      if (sizeError) {
+        await fetchAll();
+        return;
+      }
+    } else {
+      setProducts((prev) => prev.map((p) =>
+        p.id === productId ? { ...p, stock_count: Math.max(0, p.stock_count - 1) } : p
+      ));
+    }
+
+    const { data: current } = await supabase
+      .from('products')
+      .select('stock_count')
+      .eq('id', productId)
+      .maybeSingle();
+
+    if (current) {
+      const { error: productError } = await supabase
+        .from('products')
+        .update({ stock_count: Math.max(0, (current.stock_count ?? 0) - 1) })
+        .eq('id', productId);
+
+      if (productError) {
+        await fetchAll();
+      }
+    }
   };
 
   const handleDeleteFeedback = async (id: string) => {
@@ -679,24 +758,25 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="bg-white border-b border-stone-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
-          {(['products', 'categories', 'orders', 'feedback', 'settings'] as Tab[]).map((t) => (
+          {(['products', 'stock', 'categories', 'orders', 'feedback', 'settings'] as Tab[]).map((t) => (
              <button key={t} onClick={() => setTab(t)}
                className={`flex items-center gap-2 px-5 py-4 text-sm font-semibold capitalize border-b-2 transition-all whitespace-nowrap ${
                  tab === t ? 'border-brand-500 text-brand-600' : 'border-transparent text-stone-500 hover:text-stone-800'
                }`}>
-               {t === 'products' && <Package className="w-4 h-4" />}
-               {t === 'categories' && <Tag className="w-4 h-4" />}
-               {t === 'orders' && <ShoppingBag className="w-4 h-4" />}
-               {t === 'feedback' && <MessageSquare className="w-4 h-4" />}
-               {t === 'settings' && <Settings className="w-4 h-4" />}
-               {t}
-               {t === 'feedback' && unreadFeedback > 0 && (
-                 <span className="bg-brand-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-                   {unreadFeedback > 9 ? '9+' : unreadFeedback}
-                 </span>
-               )}
-             </button>
-           ))}
+                {t === 'products' && <Package className="w-4 h-4" />}
+                {t === 'stock' && <Package className="w-4 h-4" />}
+                {t === 'categories' && <Tag className="w-4 h-4" />}
+                {t === 'orders' && <ShoppingBag className="w-4 h-4" />}
+                {t === 'feedback' && <MessageSquare className="w-4 h-4" />}
+                {t === 'settings' && <Settings className="w-4 h-4" />}
+                {t}
+                {t === 'feedback' && unreadFeedback > 0 && (
+                  <span className="bg-brand-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                    {unreadFeedback > 9 ? '9+' : unreadFeedback}
+                  </span>
+                )}
+              </button>
+            ))}
         </div>
       </div>
 
@@ -790,6 +870,100 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* ── Stock tab ── */}
+        {tab === 'stock' && (
+          <div>
+            <div className="mb-6 flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-display text-xl font-bold text-stone-900">Stock Management</h2>
+                <p className="text-sm text-stone-500">Sell products in-store. Updates sync across all admins instantly.</p>
+              </div>
+              <button
+                onClick={handleRefreshStock}
+                disabled={refreshing}
+                className="flex items-center gap-2 bg-white border border-stone-200 hover:border-stone-300 text-stone-700 hover:text-stone-900 font-semibold px-4 py-2 rounded-xl transition-all text-sm disabled:opacity-60"
+              >
+                {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                {refreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+
+            <div className="relative mb-6">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+              <input
+                type="text"
+                value={stockSearch}
+                onChange={(e) => setStockSearch(e.target.value)}
+                placeholder="Search products..."
+                className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+              />
+            </div>
+
+            {products.length === 0 ? (
+              <div className="text-center py-20 text-stone-400">
+                <Package className="w-12 h-12 mx-auto mb-3 text-stone-300" />
+                <p>No products yet.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {products.filter((p) => {
+                  const q = stockSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  return p.title.toLowerCase().includes(q) || (p.product_code ?? '').toLowerCase().includes(q);
+                }).map((product) => {
+                  const cover = product.product_images?.[0]?.image_url
+                    ?? 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400';
+                  return (
+                    <div key={product.id} className="bg-white rounded-2xl shadow-sm overflow-hidden border border-stone-100">
+                      <div className="aspect-video bg-stone-100 overflow-hidden relative">
+                        <img src={cover} alt={product.title} className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400'; }}
+                        />
+                      </div>
+                      <div className="p-4">
+                        <h3 className="font-semibold text-stone-900 text-sm leading-snug mb-1">{product.title}</h3>
+                        <p className="text-xs text-stone-500 mb-3">{product.stock_count} total in stock</p>
+
+                        {product.sizes.length > 0 && product.product_sizes && product.product_sizes.length > 0 ? (
+                          <div className="space-y-2">
+                            {product.sizes.map((size) => {
+                              const ps = product.product_sizes?.find((p) => p.size === size);
+                              const qty = ps?.quantity ?? 0;
+                              return (
+                                <div key={size} className="flex items-center justify-between bg-stone-50 rounded-xl px-3 py-2">
+                                  <div>
+                                    <span className="text-xs font-semibold text-stone-700 uppercase">{size}</span>
+                                    <span className="text-xs text-stone-500 ml-2">{qty} left</span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleSellProduct(product.id, size, qty)}
+                                    disabled={qty <= 0}
+                                    className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 hover:bg-red-100 text-red-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                                  >
+                                    <Minus className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => handleSellProduct(product.id, null, product.stock_count)}
+                            disabled={product.stock_count <= 0}
+                            className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 disabled:opacity-40 disabled:cursor-not-allowed font-semibold py-2.5 rounded-xl transition-all text-sm"
+                          >
+                            <Minus className="w-4 h-4" /> Sell (-1)
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Categories tab ── */}
         {tab === 'categories' && (
           <div>
@@ -872,67 +1046,66 @@ export default function AdminPage() {
                 <p>{orderSearch ? 'No orders match your search.' : 'No orders yet.'}</p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {filteredOrders.map((order) => {
                   const pricing = getOrderPricing(order);
                   return (
-                    <div key={order.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5 hover:shadow-md transition-shadow">
-                      <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div key={order.id} className="bg-white rounded-xl border border-stone-100 p-4">
+                      <div className="flex items-center justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <p className="font-semibold text-stone-900">{order.product_title}</p>
+                            <p className="font-semibold text-stone-900 text-base truncate">{order.product_title}</p>
                             {order.product_code && (
-                              <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">
+                              <span className="text-xs font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full flex-shrink-0">
                                 {order.product_code}
                               </span>
                             )}
-                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${
                               order.delivered
                                 ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
                                 : 'bg-amber-50 text-amber-600 border border-amber-200'
                             }`}>
-                              {order.delivered ? <><CheckCheck className="w-3 h-3" /> Delivered</> : <><Clock className="w-3 h-3" /> Pending</>}
+                              {order.delivered ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</> : <><Clock className="w-3.5 h-3.5" /> Pending</>}
                             </span>
                           </div>
-                          {order.selected_size && (
-                            <p className="text-xs text-stone-500">Size: <span className="font-medium text-stone-700">{order.selected_size}</span></p>
-                          )}
-                          <p className="text-xs text-stone-500">Qty: <span className="font-medium text-stone-700">{order.quantity ?? 1}</span></p>
+                          <div className="flex items-center gap-3 mt-1 text-sm text-stone-500 flex-wrap">
+                            {order.selected_size && (
+                              <span>Size: <span className="font-medium text-stone-700">{order.selected_size}</span></span>
+                            )}
+                            <span>Qty: <span className="font-medium text-stone-700">{order.quantity ?? 1}</span></span>
+                            <span className="font-medium text-stone-700">৳{pricing.total.toFixed(0)}</span>
+                          </div>
                         </div>
-                        <span className="text-xs text-stone-400 flex-shrink-0">
-                          {new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
-                        </span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs text-stone-400 hidden sm:block">
+                            {new Date(order.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </span>
+                          <button
+                            onClick={() => toggleDelivered(order.id, order.delivered)}
+                            disabled={updatingDelivery === order.id}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+                              order.delivered
+                                ? 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                                : 'bg-emerald-500 text-white hover:bg-emerald-400'
+                            } disabled:opacity-60`}
+                          >
+                            {updatingDelivery === order.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : order.delivered ? (
+                              <Clock className="w-3.5 h-3.5" />
+                            ) : (
+                              <Truck className="w-3.5 h-3.5" />
+                            )}
+                            {order.delivered ? 'Mark as pending' : 'Mark as delivered'}
+                          </button>
+                        </div>
                       </div>
-                      <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                        <div><span className="text-xs text-stone-400">Customer</span><p className="font-medium text-stone-800">{order.customer_name}</p></div>
-                        <div><span className="text-xs text-stone-400">Phone</span><p className="font-medium text-stone-800">{order.customer_phone}</p></div>
-                        <div><span className="text-xs text-stone-400">Quantity</span><p className="font-medium text-stone-800">{order.quantity ?? 1}</p></div>
-                        <div><span className="text-xs text-stone-400">bKash Number</span><p className="font-medium text-stone-800">{order.bkash_number ?? '—'}</p></div>
-                        <div><span className="text-xs text-stone-400">Order Amount</span><p className="font-medium text-stone-800">৳{pricing.subtotal.toFixed(0)}</p></div>
-                        <div><span className="text-xs text-stone-400">Delivery Fee</span><p className="font-medium text-stone-800">৳{pricing.deliveryFee.toFixed(0)}</p></div>
-                        <div className="sm:col-span-2"><span className="text-xs text-stone-400">Total to Pay</span><p className="font-semibold text-stone-900">৳{pricing.total.toFixed(0)}</p></div>
-                        <div className="sm:col-span-2"><span className="text-xs text-stone-400">Address</span><p className="font-medium text-stone-800">{order.customer_address}</p></div>
-                        <div className="sm:col-span-2"><span className="text-xs text-stone-400">TrxID</span><p className="font-medium text-stone-800">{order.trx_id ?? '—'}</p></div>
-                      </div>
-                      <div className="mt-3 pt-3 border-t border-stone-100">
-                        <button
-                          onClick={() => toggleDelivered(order.id, order.delivered)}
-                          disabled={updatingDelivery === order.id}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                            order.delivered
-                              ? 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-                              : 'bg-emerald-500 text-white hover:bg-emerald-400 hover:shadow-md'
-                          } disabled:opacity-60`}
-                        >
-                          {updatingDelivery === order.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : order.delivered ? (
-                            <Clock className="w-4 h-4" />
-                          ) : (
-                            <Truck className="w-4 h-4" />
-                          )}
-                          {order.delivered ? 'Mark as Pending' : 'Mark as Delivered'}
-                        </button>
+                      <div className="mt-2 pt-2 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm">
+                        <div><span className="text-stone-400">Customer</span> <p className="font-medium text-stone-800 truncate">{order.customer_name}</p></div>
+                        <div><span className="text-stone-400">Phone</span> <p className="font-medium text-stone-800">{order.customer_phone}</p></div>
+                        <div><span className="text-stone-400">bKash</span> <p className="font-medium text-stone-800">{order.bkash_number ?? '—'}</p></div>
+                        <div><span className="text-stone-400">TrxID</span> <p className="font-medium text-stone-800">{order.trx_id ?? '—'}</p></div>
+                        <div className="col-span-2 sm:col-span-4"><span className="text-stone-400">Address</span> <p className="font-medium text-stone-800 truncate">{order.customer_address}</p></div>
                       </div>
                     </div>
                   );

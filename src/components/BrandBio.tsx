@@ -30,7 +30,7 @@ export default function BrandBio({ onNavigate }: BrandBioProps) {
 
         {/* Brand story */}
         <p className="text-white/70 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto mb-4 font-medium">
-          LEON OUTFITS was born in the streets of Bangladesh — built for those who
+          ORNIX was born in the streets of Bangladesh — built for those who
           move with purpose and dress with intent. We craft every piece using
           premium fabrics that hold their shape, color, and structure wash after
           wash.
