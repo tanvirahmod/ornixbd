@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash, ShieldCheck } from 'lucide-react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
+import { useNavigation } from '../lib/navigation';
+import { productParam } from '../lib/utils';
 
-interface CheckoutPageProps {
-  productId: string;
-  selectedSize: string | null;
-  selectedQuantity: number;
-  onNavigate: (page: string, productId?: string) => void;
-}
-
-export default function CheckoutPage({ productId, selectedSize, selectedQuantity, onNavigate }: CheckoutPageProps) {
+export default function CheckoutPage() {
   const { t } = useLanguage();
+  const { productId } = useParams<{ productId: string }>();
+  const [searchParams] = useSearchParams();
+  const selectedSize = searchParams.get('size');
+  const selectedQuantity = Number(searchParams.get('qty') ?? 1);
+  const onNavigate = useNavigation();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -170,7 +171,7 @@ export default function CheckoutPage({ productId, selectedSize, selectedQuantity
   return (
     <div className="min-h-screen bg-stone-50">
       <div className="max-w-3xl mx-auto px-4 pt-6 flex items-center gap-2 text-sm text-stone-500">
-        <button onClick={() => onNavigate('product', productId)} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
+        <button onClick={() => onNavigate('product', product ? productParam(product.title, product.product_code ?? product.id) : '')} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
           <ArrowLeft className="w-4 h-4" /> {t('backToProduct')}
         </button>
         <span className="text-stone-300">/</span>

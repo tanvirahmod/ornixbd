@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck } from 'lucide-react';
+import { useParams } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
+import { useNavigation } from '../lib/navigation';
+import { extractProductCode, productParam } from '../lib/utils';
 
-interface ProductPageProps {
-  productId: string;
-  onNavigate: (page: string, productId?: string) => void;
-}
-
-export default function ProductPage({ productId, onNavigate }: ProductPageProps) {
+export default function ProductPage() {
   const { t } = useLanguage();
+  const { productId: rawParam } = useParams<{ productId: string }>();
+  // Extract product_code from the end of the URL param (e.g. "drop-shoulder-tee-prd-00012")
+  const productCode = rawParam ? extractProductCode(rawParam) : null;
+  const onNavigate = useNavigation();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -19,10 +21,15 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
 
   useEffect(() => {
     async function fetchProduct() {
+      if (!productCode) {
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('products')
-        .select('*, product_images(id, image_url, display_order)')
-        .eq('id', productId)
+        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at)')
+        .eq('product_code', productCode)
         .maybeSingle();
 
       if (!error && data) {
@@ -37,7 +44,7 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
       setLoading(false);
     }
     fetchProduct();
-  }, [productId]);
+  }, [productCode]);
 
   const images =
     product?.product_images && product.product_images.length > 0
@@ -45,12 +52,13 @@ export default function ProductPage({ productId, onNavigate }: ProductPageProps)
       : [{ id: 'placeholder', image_url: 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=800', display_order: 0, product_id: '' }];
 
   const handleBuyNow = () => {
-    if (product?.sizes && product.sizes.length > 0 && !selectedSize) {
+    if (!product) return;
+    if (product.sizes && product.sizes.length > 0 && !selectedSize) {
       setSizeError(true);
       return;
     }
     const safeQuantity = Math.max(1, Math.min(quantity, Math.max(1, product?.stock_count ?? 1)));
-    onNavigate('checkout', `${productId}__${selectedSize ?? 'none'}__${safeQuantity}`);
+    onNavigate('checkout', `${product.id}__${selectedSize ?? 'none'}__${safeQuantity}`);
   };
 
   const prevImage = () => setCurrentImageIndex((i) => (i === 0 ? images.length - 1 : i - 1));

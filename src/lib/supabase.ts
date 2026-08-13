@@ -8,7 +8,27 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export type Category = {
   id: string;
   name: string;
+  background_image: string | null;
+  priority: number | null;
   created_at: string;
+};
+
+export type Announcement = {
+  id: string;
+  text: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SiteSetting = {
+  id: string;
+  key: string;
+  value: string | null;
+  label: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Product = {

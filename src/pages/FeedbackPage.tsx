@@ -2,12 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, MessageSquare, Send, Loader2, CheckCircle, RefreshCw, Mail, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
+import { useNavigation } from '../lib/navigation';
 
-interface FeedbackPageProps {
-  onNavigate: (page: string) => void;
-}
-
-export default function FeedbackPage({ onNavigate }: FeedbackPageProps) {
+export default function FeedbackPage() {
+  const onNavigate = useNavigation();
   const { t } = useLanguage();
   const [form, setForm] = useState({ name: '', email: '', message: '', captcha: '' });
   const [errors, setErrors] = useState({ name: '', email: '', message: '', captcha: '' });

@@ -1,17 +1,13 @@
 import { useState, useEffect } from 'react';
-import {
-  Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
-  Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-  Bell, CheckCheck, Truck, Clock, MessageSquare, Mail
-} from 'lucide-react';
-import { supabase, Product, Order, Category, Feedback } from '../lib/supabase';
+import { Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
+   Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
+   Bell, CheckCheck, Truck, Clock, MessageSquare, Mail, Settings
+ } from 'lucide-react';
+import { supabase, Product, Order, Category, Feedback, Announcement, SiteSetting } from '../lib/supabase';
 import { verifyAdmin } from '../lib/adminCredentials';
+import { useNavigation } from '../lib/navigation';
 
-interface AdminPageProps {
-  onNavigate: (page: string) => void;
-}
-
-type Tab = 'products' | 'categories' | 'orders' | 'feedback';
+type Tab = 'products' | 'categories' | 'orders' | 'feedback' | 'settings';
 type ModalMode = 'add' | 'edit';
 
 const EMPTY_FORM = {
@@ -24,7 +20,8 @@ const EMPTY_FORM = {
   category_id: '',
 };
 
-export default function AdminPage({ onNavigate }: AdminPageProps) {
+export default function AdminPage() {
+  const onNavigate = useNavigation();
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return sessionStorage.getItem('admin_auth') === 'true';
   });
@@ -50,6 +47,8 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const [catModalMode, setCatModalMode] = useState<ModalMode>('add');
   const [editingCat, setEditingCat] = useState<Category | null>(null);
   const [catName, setCatName] = useState('');
+  const [catBackgroundImage, setCatBackgroundImage] = useState('');
+  const [catPriority, setCatPriority] = useState('');
   const [catSaving, setCatSaving] = useState(false);
   const [catError, setCatError] = useState('');
 
@@ -64,6 +63,21 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const [feedbackSearch, setFeedbackSearch] = useState('');
   const [expandedFeedback, setExpandedFeedback] = useState<string | null>(null);
   const [deleteFeedbackConfirm, setDeleteFeedbackConfirm] = useState<string | null>(null);
+
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [annModalOpen, setAnnModalOpen] = useState(false);
+  const [annModalMode, setAnnModalMode] = useState<ModalMode>('add');
+  const [annEditing, setAnnEditing] = useState<Announcement | null>(null);
+  const [annText, setAnnText] = useState('');
+  const [annActive, setAnnActive] = useState(true);
+  const [annSaving, setAnnSaving] = useState(false);
+  const [annError, setAnnError] = useState('');
+  const [deleteAnnConfirm, setDeleteAnnConfirm] = useState<string | null>(null);
+
+  const [heroBgImage, setHeroBgImage] = useState('');
+  const [heroBgMobileImage, setHeroBgMobileImage] = useState('');
+  const [heroBgSaving, setHeroBgSaving] = useState(false);
+  const [heroBgError, setHeroBgError] = useState('');
 
   const filteredProducts = products.filter((p) => {
     const q = productSearch.trim().toLowerCase();
@@ -169,14 +183,16 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
 
   async function fetchAll() {
     setLoading(true);
-    const [prodRes, catRes, ordRes, feedRes] = await Promise.all([
+    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes] = await Promise.all([
       supabase
         .from('products')
         .select('*, product_images(id, image_url, display_order), categories(id, name, created_at)')
         .order('created_at', { ascending: false }),
-      supabase.from('categories').select('*').order('name'),
+       supabase.from('categories').select('*').order('priority', { ascending: true, nullsFirst: false }).order('name'),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
       supabase.from('feedback').select('*').order('created_at', { ascending: false }),
+      supabase.from('announcements').select('*').order('created_at', { ascending: false }),
+      supabase.from('site_settings').select('*'),
     ]);
     if (prodRes.data) {
       setProducts(
@@ -191,6 +207,14 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     if (catRes.data) setCategories(catRes.data);
     if (ordRes.data) setOrders(ordRes.data);
     if (feedRes.data) setFeedbackList(feedRes.data);
+    if (annRes.data) setAnnouncements(annRes.data);
+    if (settingsRes.data) {
+      const settings = settingsRes.data as SiteSetting[];
+      const heroSetting = settings.find((s) => s.key === 'hero_background_image');
+      if (heroSetting) setHeroBgImage(heroSetting.value ?? '');
+      const heroMobileSetting = settings.find((s) => s.key === 'hero_background_image_mobile');
+      if (heroMobileSetting) setHeroBgMobileImage(heroMobileSetting.value ?? '');
+    }
     setLoading(false);
   }
 
@@ -292,6 +316,8 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
 
   const openAddCatModal = () => {
     setCatName('');
+    setCatBackgroundImage('');
+    setCatPriority('');
     setEditingCat(null);
     setCatModalMode('add');
     setCatError('');
@@ -301,6 +327,8 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const openEditCatModal = (cat: Category) => {
     setEditingCat(cat);
     setCatName(cat.name);
+    setCatBackgroundImage(cat.background_image ?? '');
+    setCatPriority(cat.priority?.toString() ?? '');
     setCatModalMode('edit');
     setCatError('');
     setCatModalOpen(true);
@@ -310,11 +338,16 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     if (!catName.trim()) { setCatError('Category name is required.'); return; }
     setCatSaving(true);
     setCatError('');
+    const payload = {
+      name: catName.trim(),
+      background_image: catBackgroundImage.trim() || null,
+      priority: catPriority.trim() ? Number(catPriority.trim()) : null,
+    };
     if (catModalMode === 'add') {
-      const { error } = await supabase.from('categories').insert({ name: catName.trim() });
+      const { error } = await supabase.from('categories').insert(payload);
       if (error) { setCatError(error.message.includes('unique') ? 'Category already exists.' : 'Failed to save.'); setCatSaving(false); return; }
     } else if (editingCat) {
-      const { error } = await supabase.from('categories').update({ name: catName.trim() }).eq('id', editingCat.id);
+      const { error } = await supabase.from('categories').update(payload).eq('id', editingCat.id);
       if (error) { setCatError('Failed to update.'); setCatSaving(false); return; }
     }
     await fetchAll();
@@ -381,6 +414,113 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const unreadFeedback = feedbackList.filter((f) => !f.read).length;
 
   const unreadCount = notifications.length;
+
+  const openAddAnnouncement = () => {
+    setAnnText('');
+    setAnnActive(true);
+    setAnnEditing(null);
+    setAnnModalMode('add');
+    setAnnError('');
+    setAnnModalOpen(true);
+  };
+
+  const openEditAnnouncement = (ann: Announcement) => {
+    setAnnText(ann.text);
+    setAnnActive(ann.is_active);
+    setAnnEditing(ann);
+    setAnnModalMode('edit');
+    setAnnError('');
+    setAnnModalOpen(true);
+  };
+
+  const handleSaveAnnouncement = async () => {
+    if (!annText.trim()) { setAnnError('Announcement text is required.'); return; }
+    setAnnSaving(true);
+    setAnnError('');
+    const payload = {
+      text: annText.trim(),
+      is_active: annActive,
+      updated_at: new Date().toISOString(),
+    };
+    if (annModalMode === 'add') {
+      const { error } = await supabase.from('announcements').insert({ ...payload, created_at: new Date().toISOString() });
+      if (error) { setAnnError('Failed to add announcement.'); setAnnSaving(false); return; }
+    } else if (annEditing) {
+      const { error } = await supabase.from('announcements').update(payload).eq('id', annEditing.id);
+      if (error) { setAnnError('Failed to update announcement.'); setAnnSaving(false); return; }
+    }
+    await fetchAll();
+    setAnnSaving(false);
+    setAnnModalOpen(false);
+  };
+
+  const handleDeleteAnnouncement = async (id: string) => {
+    await supabase.from('announcements').delete().eq('id', id);
+    setDeleteAnnConfirm(null);
+    await fetchAll();
+  };
+
+  const upsertSiteSetting = async (
+    key: string,
+    value: string | null,
+    label: string,
+    description: string,
+  ) => {
+    const { data, error: fetchError } = await supabase
+      .from('site_settings')
+      .select('id')
+      .eq('key', key)
+      .maybeSingle();
+    if (fetchError) return fetchError;
+
+    if (data) {
+      const { error } = await supabase
+        .from('site_settings')
+        .update({ value, label, description, updated_at: new Date().toISOString() })
+        .eq('id', data.id);
+      return error ?? null;
+    } else {
+      const { error } = await supabase.from('site_settings').insert({
+        key,
+        value,
+        label,
+        description,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      return error ?? null;
+    }
+  };
+
+  const handleSaveHeroBg = async () => {
+    setHeroBgSaving(true);
+    setHeroBgError('');
+
+    const [desktopErr, mobileErr] = await Promise.all([
+      upsertSiteSetting(
+        'hero_background_image',
+        heroBgImage.trim() || null,
+        'Hero Background Image',
+        'Background image URL for the hero banner on the homepage (desktop/large screens)',
+      ),
+      upsertSiteSetting(
+        'hero_background_image_mobile',
+        heroBgMobileImage.trim() || null,
+        'Hero Background Image (Mobile)',
+        'Background image URL for the hero banner on mobile/small screens. Falls back to desktop image if not set.',
+      ),
+    ]);
+
+    if (desktopErr || mobileErr) {
+      setHeroBgError('Failed to save one or more settings. Please try again.');
+      setHeroBgSaving(false);
+      return;
+    }
+
+    setHeroBgError('');
+    setHeroBgSaving(false);
+    await fetchAll();
+  };
 
   // ── Login screen ──
   if (!isAuthenticated) {
@@ -514,23 +654,24 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
       {/* Tabs */}
       <div className="bg-white border-b border-stone-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
-          {(['products', 'categories', 'orders', 'feedback'] as Tab[]).map((t) => (
-            <button key={t} onClick={() => setTab(t)}
-              className={`flex items-center gap-2 px-5 py-4 text-sm font-semibold capitalize border-b-2 transition-all whitespace-nowrap ${
-                tab === t ? 'border-brand-500 text-brand-600' : 'border-transparent text-stone-500 hover:text-stone-800'
-              }`}>
-              {t === 'products' && <Package className="w-4 h-4" />}
-              {t === 'categories' && <Tag className="w-4 h-4" />}
-              {t === 'orders' && <ShoppingBag className="w-4 h-4" />}
-              {t === 'feedback' && <MessageSquare className="w-4 h-4" />}
-              {t}
-              {t === 'feedback' && unreadFeedback > 0 && (
-                <span className="bg-brand-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-                  {unreadFeedback > 9 ? '9+' : unreadFeedback}
-                </span>
-              )}
-            </button>
-          ))}
+          {(['products', 'categories', 'orders', 'feedback', 'settings'] as Tab[]).map((t) => (
+             <button key={t} onClick={() => setTab(t)}
+               className={`flex items-center gap-2 px-5 py-4 text-sm font-semibold capitalize border-b-2 transition-all whitespace-nowrap ${
+                 tab === t ? 'border-brand-500 text-brand-600' : 'border-transparent text-stone-500 hover:text-stone-800'
+               }`}>
+               {t === 'products' && <Package className="w-4 h-4" />}
+               {t === 'categories' && <Tag className="w-4 h-4" />}
+               {t === 'orders' && <ShoppingBag className="w-4 h-4" />}
+               {t === 'feedback' && <MessageSquare className="w-4 h-4" />}
+               {t === 'settings' && <Settings className="w-4 h-4" />}
+               {t}
+               {t === 'feedback' && unreadFeedback > 0 && (
+                 <span className="bg-brand-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                   {unreadFeedback > 9 ? '9+' : unreadFeedback}
+                 </span>
+               )}
+             </button>
+           ))}
         </div>
       </div>
 
@@ -650,6 +791,11 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
                           <p className="font-semibold text-stone-900">{cat.name}</p>
                           <p className="text-xs text-stone-400">{count} product{count !== 1 ? 's' : ''}</p>
                         </div>
+                        {cat.priority !== null && cat.priority !== undefined && (
+                          <span className="text-xs font-medium text-brand-600 bg-brand-100 px-1.5 py-0.5 rounded-full">
+                            Priority: {cat.priority}
+                          </span>
+                        )}
                       </div>
                       <div className="flex gap-1.5">
                         <button onClick={() => openEditCatModal(cat)}
@@ -856,10 +1002,151 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
                   </div>
                 ))}
               </div>
-            )}
-          </div>
-        )}
-      </div>
+                 )}
+           </div>
+         )}
+
+         {/* ── Settings tab ── */}
+         {tab === 'settings' && (
+           <div className="space-y-8">
+             {/* ── Announcement Bar section ── */}
+             <div>
+               <div className="flex items-center justify-between mb-4">
+                 <div>
+                   <h2 className="font-display text-xl font-bold text-stone-900">Top Announcement Bar</h2>
+                   <p className="text-sm text-stone-500 mt-1">Manage the text displayed in the scrolling announcement bar at the top of every page.</p>
+                 </div>
+                 <button onClick={openAddAnnouncement}
+                   className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5">
+                   <Plus className="w-4 h-4" /> Add Announcement
+                 </button>
+               </div>
+
+               {announcements.length === 0 ? (
+                 <div className="text-center py-12 text-stone-400 bg-white rounded-2xl border border-stone-100">
+                   <Bell className="w-12 h-12 mx-auto mb-3 text-stone-300" />
+                   <p>No announcements yet. Add one to display in the top bar.</p>
+                 </div>
+               ) : (
+                 <div className="space-y-3">
+                   {announcements.map((ann) => (
+                     <div key={ann.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-4 flex items-start justify-between gap-4 hover:shadow-md transition-shadow">
+                       <div className="flex-1 min-w-0">
+                         <div className="flex items-center gap-2 mb-1.5">
+                           <p className="font-medium text-stone-900 text-sm line-clamp-1">{ann.text}</p>
+                           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                             ann.is_active ? 'bg-emerald-100 text-emerald-600' : 'bg-stone-100 text-stone-500'
+                           }`}>
+                             {ann.is_active ? 'Active' : 'Inactive'}
+                           </span>
+                         </div>
+                         <p className="text-[11px] text-stone-400">
+                           {new Date(ann.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                         </p>
+                       </div>
+                       <div className="flex gap-1 flex-shrink-0">
+                         <button onClick={() => openEditAnnouncement(ann)}
+                           className="p-1.5 text-stone-500 hover:text-stone-800 bg-stone-100 hover:bg-stone-200 rounded-lg transition-all">
+                           <Pencil className="w-4 h-4" />
+                         </button>
+                         <button onClick={() => setDeleteAnnConfirm(ann.id)}
+                           className="p-1.5 text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-all">
+                           <Trash2 className="w-4 h-4" />
+                         </button>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               )}
+             </div>
+
+             {/* ── Hero Banner section ── */}
+             <div>
+               <h2 className="font-display text-xl font-bold text-stone-900">Hero Banner Background Images</h2>
+               <p className="text-sm text-stone-500 mt-1">Set separate background images for the hero banner — one for mobile screens, one for desktop/laptop screens.</p>
+
+               <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4 space-y-6">
+
+                 {/* Desktop image */}
+                 <div className="space-y-3">
+                   <div className="flex items-center gap-2">
+                     <div className="w-7 h-7 bg-brand-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                       <Image className="w-4 h-4 text-brand-600" />
+                     </div>
+                     <div>
+                       <p className="text-sm font-semibold text-stone-800">Desktop / Laptop Image</p>
+                       <p className="text-xs text-stone-400">Shown on screens wider than 768px</p>
+                     </div>
+                   </div>
+                   <input
+                     type="url"
+                     value={heroBgImage}
+                     onChange={(e) => { setHeroBgImage(e.target.value); setHeroBgError(''); }}
+                     placeholder="https://example.com/desktop-hero.jpg"
+                     className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                   />
+                   <p className="text-xs text-stone-400">Recommended: <span className="font-medium">1600×900px</span> (landscape)</p>
+                   {heroBgImage && (
+                     <div className="w-full h-40 rounded-xl overflow-hidden border border-stone-200 bg-stone-100">
+                       <img
+                         src={heroBgImage}
+                         alt="Desktop hero preview"
+                         className="w-full h-full object-cover"
+                         onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/1600x900/ddd/999?text=Invalid+Image+URL'; }}
+                       />
+                     </div>
+                   )}
+                 </div>
+
+                 <div className="border-t border-stone-100" />
+
+                 {/* Mobile image */}
+                 <div className="space-y-3">
+                   <div className="flex items-center gap-2">
+                     <div className="w-7 h-7 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                       <Image className="w-4 h-4 text-amber-600" />
+                     </div>
+                     <div>
+                       <p className="text-sm font-semibold text-stone-800">Mobile Image</p>
+                       <p className="text-xs text-stone-400">Shown on screens up to 768px wide. Falls back to desktop image if left blank.</p>
+                     </div>
+                   </div>
+                   <input
+                     type="url"
+                     value={heroBgMobileImage}
+                     onChange={(e) => { setHeroBgMobileImage(e.target.value); setHeroBgError(''); }}
+                     placeholder="https://example.com/mobile-hero.jpg"
+                     className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                   />
+                   <p className="text-xs text-stone-400">Recommended: <span className="font-medium">750×1000px</span> (portrait)</p>
+                   {heroBgMobileImage && (
+                     <div className="w-full max-w-[200px] h-48 rounded-xl overflow-hidden border border-stone-200 bg-stone-100">
+                       <img
+                         src={heroBgMobileImage}
+                         alt="Mobile hero preview"
+                         className="w-full h-full object-cover"
+                         onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/750x1000/ddd/999?text=Invalid+Image+URL'; }}
+                       />
+                     </div>
+                   )}
+                 </div>
+
+                 {heroBgError && (
+                   <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 rounded-2xl px-4 py-3">
+                     <AlertCircle className="w-4 h-4 flex-shrink-0" /> {heroBgError}
+                   </div>
+                 )}
+
+                 <button onClick={handleSaveHeroBg} disabled={heroBgSaving}
+                   className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
+                   {heroBgSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                   {heroBgSaving ? 'Saving...' : 'Save Hero Images'}
+                 </button>
+               </div>
+             </div>
+           </div>
+         )}
+       </div>
 
       {/* ── Product modal ── */}
       {modalOpen && (
@@ -1008,6 +1295,40 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
                   className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   placeholder="e.g. T-Shirt, Hoodie, Shirt" autoFocus />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                  Background Image URL
+                </label>
+                <input
+                  type="url"
+                  value={catBackgroundImage}
+                  onChange={(e) => setCatBackgroundImage(e.target.value)}
+                  className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  placeholder="https://example.com/image.jpg"
+                />
+                <p className="text-xs text-stone-500 mt-1.5">
+                  Recommended size: <span className="font-medium">800×1000px</span> (3:4 aspect ratio, portrait)
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                  Priority
+                </label>
+                <input
+                  type="number"
+                  value={catPriority}
+                  onChange={(e) => setCatPriority(e.target.value)}
+                  className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  placeholder="Lower number = higher priority (e.g. 1, 2, 3)"
+                  min="0"
+                />
+                <p className="text-xs text-stone-500 mt-1.5">
+                  Optional — categories with lower numbers appear first on the collections page.
+                </p>
+              </div>
+
               {catError && (
                 <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 rounded-2xl px-4 py-3">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" /> {catError}
@@ -1055,31 +1376,115 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
               </button>
             </div>
           </div>
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* ── Delete feedback confirm ── */}
-      {deleteFeedbackConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
-            <div className="flex items-center justify-center w-14 h-14 bg-red-100 rounded-full mx-auto mb-4">
-              <Trash2 className="w-7 h-7 text-red-500" />
-            </div>
-            <h3 className="font-display text-lg font-bold text-stone-900 mb-2">Delete Feedback?</h3>
-            <p className="text-stone-400 text-sm mb-6">This message will be permanently removed.</p>
-            <div className="flex gap-3">
-              <button onClick={() => setDeleteFeedbackConfirm(null)}
-                className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">
-                Cancel
-              </button>
-              <button onClick={() => handleDeleteFeedback(deleteFeedbackConfirm)}
-                className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
-                Delete
-              </button>
+        {/* ── Delete feedback confirm ── */}
+        {deleteFeedbackConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
+              <div className="flex items-center justify-center w-14 h-14 bg-red-100 rounded-full mx-auto mb-4">
+                <Trash2 className="w-7 h-7 text-red-500" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-stone-900 mb-2">Delete Feedback?</h3>
+              <p className="text-stone-400 text-sm mb-6">This message will be permanently removed.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeleteFeedbackConfirm(null)}
+                  className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                  Cancel
+                </button>
+                <button onClick={() => handleDeleteFeedback(deleteFeedbackConfirm)}
+                  className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* ── Announcement modal ── */}
+        {annModalOpen && (
+         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg animate-fade-in-up">
+             <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
+               <h3 className="font-display text-lg font-bold text-stone-900">
+                 {annModalMode === 'add' ? 'Add Announcement' : 'Edit Announcement'}
+               </h3>
+               <button onClick={() => setAnnModalOpen(false)} className="text-stone-400 hover:text-stone-600 transition-colors">
+                 <X className="w-5 h-5" />
+               </button>
+             </div>
+             <div className="px-6 py-5 space-y-4">
+               <div>
+                 <label className="block text-sm font-medium text-stone-700 mb-1.5">Announcement Text *</label>
+                 <textarea
+                   value={annText}
+                   onChange={(e) => { setAnnText(e.target.value); setAnnError(''); }}
+                   rows={3}
+                   placeholder="e.g. ⚡ FREE SHIPPING NATIONWIDE ⚡  •  NEW ARRIVALS EVERY WEEK  •"
+                   className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 resize-none"
+                 />
+                 <p className="text-xs text-stone-500 mt-1.5">
+                   This text will scroll continuously in the top announcement bar on all pages.
+                 </p>
+               </div>
+
+               <div className="flex items-center gap-3">
+                 <input
+                   type="checkbox"
+                   id="ann-active"
+                   checked={annActive}
+                   onChange={(e) => setAnnActive(e.target.checked)}
+                   className="w-4 h-4 rounded border-stone-300 text-brand-500 focus:ring-brand-400"
+                 />
+                 <label htmlFor="ann-active" className="text-sm font-medium text-stone-700 cursor-pointer">
+                   Active — show this announcement in the bar
+                 </label>
+               </div>
+
+               {annError && (
+                 <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 rounded-2xl px-4 py-3">
+                   <AlertCircle className="w-4 h-4 flex-shrink-0" /> {annError}
+                 </div>
+               )}
+             </div>
+             <div className="px-6 pb-6 pt-4 border-t border-stone-100 flex gap-3">
+               <button onClick={() => setAnnModalOpen(false)}
+                 className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-3 rounded-2xl transition-all text-sm">
+                 Cancel
+               </button>
+               <button onClick={handleSaveAnnouncement} disabled={annSaving}
+                 className="flex-1 flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold py-3 rounded-2xl transition-all text-sm">
+                 {annSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                 {annSaving ? 'Saving...' : 'Save Announcement'}
+               </button>
+             </div>
+           </div>
+         </div>
+       )}
+
+       {/* ── Delete announcement confirm ── */}
+       {deleteAnnConfirm && (
+         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+           <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
+             <div className="flex items-center justify-center w-14 h-14 bg-red-100 rounded-full mx-auto mb-4">
+               <Trash2 className="w-7 h-7 text-red-500" />
+             </div>
+             <h3 className="font-display text-lg font-bold text-stone-900 mb-2">Delete Announcement?</h3>
+             <p className="text-stone-400 text-sm mb-6">This announcement will be permanently removed from the bar.</p>
+             <div className="flex gap-3">
+               <button onClick={() => setDeleteAnnConfirm(null)}
+                 className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                 Cancel
+               </button>
+               <button onClick={() => handleDeleteAnnouncement(deleteAnnConfirm)}
+                 className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                 Delete
+               </button>
+             </div>
+           </div>
+         </div>
+       )}
+     </div>
   );
 }

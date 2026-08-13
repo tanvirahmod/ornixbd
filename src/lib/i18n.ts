@@ -13,8 +13,8 @@ export type TranslationKey =
   | 'freeDelivery'
   | 'qualityGuaranteed'
   | 'bkashPayment'
-  | 'allProducts'
-  | 'discountedProducts'
+   | 'allProducts'
+   | 'discountedProducts'
   | 'discountedProductsSubtitle'
   | 'newArrivals'
   | 'newArrivalsSubtitle'
@@ -93,9 +93,16 @@ export type TranslationKey =
   | 'productPageDescriptionTitle'
   | 'deliveryAcrossBd'
   | 'qualityAssuredShort'
-  | 'homeBreadcrumb'
-  | 'addToCart'
-  | 'backToProduct';
+   | 'homeBreadcrumb'
+   | 'addToCart'
+   | 'backToProduct'
+   | 'collections'
+   | 'newestArrivals'
+   | 'priceLowToHigh'
+   | 'priceHighToLow'
+   | 'categoryNotFound'
+   | 'backToCollections'
+   | 'seeAll';
 
 interface TranslationMap {
   [key: string]: string;
@@ -199,6 +206,13 @@ const en: TranslationMap = {
   qualityAssuredShort: 'Quality assured',
   homeBreadcrumb: 'Home',
   addToCart: 'Buy Now — ৳{{price}}',
+  collections: 'Collections',
+  newestArrivals: 'Newest Arrivals',
+  priceLowToHigh: 'Price: Low to High',
+  priceHighToLow: 'Price: High to Low',
+  categoryNotFound: 'Category not found',
+  backToCollections: 'Back to Collections',
+  seeAll: 'See All',
 };
 
 const bn: TranslationMap = {
@@ -299,6 +313,13 @@ const bn: TranslationMap = {
   qualityAssuredShort: 'গুণগত মান নিশ্চিত',
   homeBreadcrumb: 'হোম',
   addToCart: 'এখন কিনুন — ৳{{price}}',
+  collections: 'কালেকশন',
+  newestArrivals: 'নতুন আগমন',
+  priceLowToHigh: 'মূল্য: কম থেকে বেশি',
+  priceHighToLow: 'মূল্য: বেশি থেকে কম',
+  categoryNotFound: 'ক্যাটাগরি পাওয়া যায়নি',
+  backToCollections: 'কালেকশনে ফিরে যান',
+  seeAll: 'সব দেখুন',
 };
 
 export const translations: Record<Language, TranslationMap> = {
