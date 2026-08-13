@@ -28,7 +28,7 @@ export default function ProductPage() {
 
       const { data, error } = await supabase
         .from('products')
-        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at)')
+        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity)')
         .eq('product_code', productCode)
         .maybeSingle();
 
@@ -57,12 +57,23 @@ export default function ProductPage() {
       setSizeError(true);
       return;
     }
-    const safeQuantity = Math.max(1, Math.min(quantity, Math.max(1, product?.stock_count ?? 1)));
+    const limit = selectedSize ? selectedSizeStock : product.stock_count;
+    const safeQuantity = Math.max(1, Math.min(quantity, Math.max(1, limit)));
+    setQuantity(safeQuantity);
     onNavigate('checkout', `${product.id}__${selectedSize ?? 'none'}__${safeQuantity}`);
   };
 
   const prevImage = () => setCurrentImageIndex((i) => (i === 0 ? images.length - 1 : i - 1));
   const nextImage = () => setCurrentImageIndex((i) => (i === images.length - 1 ? 0 : i + 1));
+
+  const getSizeQuantity = (size: string): number => {
+    if (!product?.product_sizes) return product?.stock_count ?? 0;
+    const match = product.product_sizes.find((ps) => ps.size === size);
+    return match ? match.quantity : 0;
+  };
+
+  const selectedSizeStock = selectedSize ? getSizeQuantity(selectedSize) : (product?.stock_count ?? 0);
+  const maxQuantity = selectedSize ? Math.max(1, selectedSizeStock) : Math.max(1, product?.stock_count ?? 1);
 
   if (loading) {
     return (
@@ -231,20 +242,39 @@ export default function ProductPage() {
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2.5">
-                  {product.sizes.map((size) => (
-                    <button
-                      key={size}
-                      onClick={() => { setSelectedSize(size); setSizeError(false); }}
-                      className={`min-w-[3rem] px-5 py-2.5 rounded-2xl border-2 font-semibold text-sm transition-all duration-200 ${
-                        selectedSize === size
-                          ? 'border-stone-900 bg-stone-900 text-white shadow-md scale-105'
-                          : 'border-stone-200 text-stone-700 hover:border-stone-400 hover:bg-stone-50'
-                      }`}
-                    >
-                      {size}
-                    </button>
-                  ))}
+                  {product.sizes.map((size) => {
+                    const remaining = getSizeQuantity(size);
+                    const isSelected = selectedSize === size;
+                    return (
+                      <button
+                        key={size}
+                        onClick={() => { 
+                          setSelectedSize(size); 
+                          setSizeError(false); 
+                          const remaining = getSizeQuantity(size);
+                          setQuantity((q) => Math.min(q, Math.max(1, remaining)));
+                        }}
+                        className={`min-w-[3rem] px-5 py-2.5 rounded-2xl border-2 font-semibold text-sm transition-all duration-200 relative ${
+                          isSelected
+                            ? 'border-stone-900 bg-stone-900 text-white shadow-md scale-105'
+                            : 'border-stone-200 text-stone-700 hover:border-stone-400 hover:bg-stone-50'
+                        }`}
+                      >
+                        {size}
+                        <span className={`block text-[10px] font-normal mt-0.5 ${isSelected ? 'text-stone-300' : 'text-stone-400'}`}>
+                          {remaining > 0 ? `${remaining} left` : 'Out of stock'}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
+                {selectedSize && (
+                  <p className="mt-2 text-xs text-stone-500">
+                    {selectedSizeStock > 0
+                      ? `${selectedSizeStock} ${selectedSize} available`
+                      : `Selected size (${selectedSize}) is out of stock`}
+                  </p>
+                )}
               </div>
             )}
 
@@ -265,8 +295,8 @@ export default function ProductPage() {
                   <span className="min-w-[2rem] text-center font-semibold text-stone-900">{quantity}</span>
                   <button
                     type="button"
-                    onClick={() => setQuantity((q) => Math.min(product.stock_count, q + 1))}
-                    disabled={quantity >= product.stock_count}
+                    onClick={() => setQuantity((q) => Math.min(maxQuantity, q + 1))}
+                    disabled={quantity >= maxQuantity}
                     className="w-8 h-8 flex items-center justify-center rounded-full text-lg font-semibold text-stone-700 disabled:text-stone-300 disabled:cursor-not-allowed hover:bg-stone-100"
                     aria-label="Increase quantity"
                   >
@@ -275,7 +305,11 @@ export default function ProductPage() {
                 </div>
               </div>
               <p className="mt-2 text-xs text-stone-500">
-                {product.stock_count > 0 ? `${product.stock_count} available in stock` : 'Out of stock'}
+                {selectedSize
+                  ? `${selectedSizeStock} ${selectedSize} available`
+                  : product.stock_count > 0
+                    ? `${product.stock_count} available in stock`
+                    : 'Out of stock'}
               </p>
             </div>
 
@@ -283,11 +317,11 @@ export default function ProductPage() {
             <div className="mt-auto pt-2">
               <button
                 onClick={handleBuyNow}
-                disabled={product.stock_count === 0}
+                disabled={product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)}
                 className="w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl text-base transition-all duration-200 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0"
               >
                 <ShoppingCart className="w-5 h-5" />
-                {product.stock_count === 0
+                {product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
                   ? t('outOfStock')
                   : t('addToCart', {
                       price: (product.discount_price != null && product.discount_price < product.price

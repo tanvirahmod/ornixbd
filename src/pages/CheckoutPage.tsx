@@ -130,6 +130,27 @@ export default function CheckoutPage() {
       return;
     }
 
+    if (productId) {
+      const { data: currentProduct } = await supabase
+        .from('products')
+        .select('stock_count')
+        .eq('id', productId)
+        .maybeSingle();
+      const newStock = Math.max(0, (currentProduct?.stock_count ?? 0) - finalQuantity);
+      await supabase.from('products').update({ stock_count: newStock }).eq('id', productId);
+
+      if (selectedSize && selectedSize !== 'none') {
+        const { data: currentSize } = await supabase
+          .from('product_sizes')
+          .select('quantity')
+          .eq('product_id', productId)
+          .eq('size', selectedSize)
+          .maybeSingle();
+        const newSizeQty = Math.max(0, (currentSize?.quantity ?? 0) - finalQuantity);
+        await supabase.from('product_sizes').update({ quantity: newSizeQty }).eq('product_id', productId).eq('size', selectedSize);
+      }
+    }
+
     setSuccess(true);
     setSubmitting(false);
   };

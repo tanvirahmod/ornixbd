@@ -42,6 +42,7 @@ export default function AdminPage() {
   const [imageUrls, setImageUrls] = useState<string[]>(['']);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [sizeQuantities, setSizeQuantities] = useState<Record<string, string>>({});
 
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [catModalMode, setCatModalMode] = useState<ModalMode>('add');
@@ -186,7 +187,7 @@ export default function AdminPage() {
     const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes] = await Promise.all([
       supabase
         .from('products')
-        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at)')
+        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity)')
         .order('created_at', { ascending: false }),
        supabase.from('categories').select('*').order('priority', { ascending: true, nullsFirst: false }).order('name'),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
@@ -240,10 +241,11 @@ export default function AdminPage() {
     setEditingProduct(null);
     setModalMode('add');
     setFormError('');
+    setSizeQuantities({});
     setModalOpen(true);
   };
 
-  const openEditModal = (product: Product) => {
+  const openEditModal = async (product: Product) => {
     setEditingProduct(product);
     setForm({
       title: product.title,
@@ -258,6 +260,11 @@ export default function AdminPage() {
     setImageUrls(imgs.length > 0 ? imgs : ['']);
     setModalMode('edit');
     setFormError('');
+    const sq = product.product_sizes?.reduce((acc, ps) => {
+      acc[ps.size] = String(ps.quantity);
+      return acc;
+    }, {} as Record<string, string>) ?? {};
+    setSizeQuantities(sq);
     setModalOpen(true);
   };
 
@@ -278,26 +285,30 @@ export default function AdminPage() {
 
     const sizes = form.sizes.split(',').map((s) => s.trim()).filter(Boolean);
     const validImages = imageUrls.map((u) => u.trim()).filter(Boolean);
+    const totalStock = sizes.reduce((sum, size) => sum + (Number(sizeQuantities[size]) || 0), 0);
     const payload = {
       title: form.title.trim(),
       description: form.description.trim(),
       price: Number(form.price),
       discount_price: form.discount_price.trim() !== '' ? Number(form.discount_price) : null,
       sizes,
-      stock_count: Number(form.stock_count),
+      stock_count: totalStock,
       category_id: form.category_id || null,
     };
 
+    let productId: string;
     if (modalMode === 'add') {
       const { data: inserted, error: insertError } = await supabase
         .from('products').insert(payload).select().single();
       if (insertError || !inserted) { setFormError('Failed to save product.'); setSaving(false); return; }
+      productId = inserted.id;
       if (validImages.length > 0) {
         await supabase.from('product_images').insert(
           validImages.map((url, i) => ({ product_id: inserted.id, image_url: url, display_order: i }))
         );
       }
     } else if (editingProduct) {
+      productId = editingProduct.id;
       const { error: updateError } = await supabase
         .from('products').update(payload).eq('id', editingProduct.id);
       if (updateError) { setFormError('Failed to update product.'); setSaving(false); return; }
@@ -307,6 +318,20 @@ export default function AdminPage() {
           validImages.map((url, i) => ({ product_id: editingProduct.id, image_url: url, display_order: i }))
         );
       }
+    } else {
+      setSaving(false);
+      return;
+    }
+
+    await supabase.from('product_sizes').delete().eq('product_id', productId);
+    if (sizes.length > 0) {
+      await supabase.from('product_sizes').insert(
+        sizes.map((size) => ({
+          product_id: productId,
+          size,
+          quantity: Number(sizeQuantities[size]) || 0,
+        }))
+      );
     }
 
     await fetchAll();
@@ -736,7 +761,14 @@ export default function AdminPage() {
                         )}
                         <div className="flex items-center gap-3 text-xs text-stone-500 mb-3">
                           <span>{product.stock_count} in stock</span>
-                          {product.sizes.length > 0 && <span>{product.sizes.length} sizes</span>}
+                          {product.sizes.length > 0 && product.product_sizes && product.product_sizes.length > 0 && (
+                            <span className="truncate">
+                              {product.product_sizes.map((ps) => `${ps.size}: ${ps.quantity}`).join(' · ')}
+                            </span>
+                          )}
+                          {product.sizes.length > 0 && (!product.product_sizes || product.product_sizes.length === 0) && (
+                            <span>{product.sizes.length} sizes</span>
+                          )}
                           <span className="flex items-center gap-1"><Image className="w-3 h-3" />{product.product_images?.length ?? 0}</span>
                         </div>
                         <div className="flex gap-2">
@@ -1224,9 +1256,36 @@ export default function AdminPage() {
                 <label className="block text-sm font-medium text-stone-700 mb-1.5">
                   Sizes <span className="text-stone-400 font-normal">(comma-separated, e.g. S, M, L, XL)</span>
                 </label>
-                <input type="text" value={form.sizes} onChange={(e) => setForm({ ...form, sizes: e.target.value })}
+                <input type="text" value={form.sizes} onChange={(e) => {
+                  const val = e.target.value;
+                  setForm({ ...form, sizes: val });
+                  const parsed = val.split(',').map((s) => s.trim()).filter(Boolean);
+                  setSizeQuantities((prev) => {
+                    const next: Record<string, string> = {};
+                    parsed.forEach((size) => {
+                      next[size] = prev[size] ?? '0';
+                    });
+                    return next;
+                  });
+                }}
                   className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   placeholder="S, M, L, XL" />
+                {form.sizes.trim() && (() => {
+                  const parsed = form.sizes.split(',').map((s) => s.trim()).filter(Boolean);
+                  return parsed.length > 0 ? (
+                    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {parsed.map((size) => (
+                        <div key={size} className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2 border border-stone-100">
+                          <span className="text-xs font-semibold text-stone-600 uppercase w-8">{size}</span>
+                          <input type="number" min="0" value={sizeQuantities[size] ?? '0'}
+                            onChange={(e) => setSizeQuantities((prev) => ({ ...prev, [size]: e.target.value }))}
+                            className="w-full border border-stone-200 rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-brand-400"
+                            placeholder="Qty" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">

@@ -44,6 +44,7 @@ export type Product = {
   created_at: string;
   product_images?: ProductImage[];
   categories?: Category | null;
+  product_sizes?: ProductSize[];
 };
 
 export type ProductImage = {
@@ -51,6 +52,13 @@ export type ProductImage = {
   product_id: string;
   image_url: string;
   display_order: number;
+};
+
+export type ProductSize = {
+  id: string;
+  product_id: string;
+  size: string;
+  quantity: number;
 };
 
 export type Order = {
