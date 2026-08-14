@@ -36,7 +36,7 @@ async function getProductRoutes() {
     return [];
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/products?select=title,product_code&limit=1000`, {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/products?select=title,product_code,description,price,discount_price,product_images(image_url,display_order)&limit=1000`, {
     headers: {
       apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
@@ -49,12 +49,26 @@ async function getProductRoutes() {
   }
 
   const products = await response.json();
-  return products.map((p: { title: string; product_code: string | null }) => {
+  return products.map((p: { 
+    title: string; 
+    product_code: string | null; 
+    description: string;
+    price: number;
+    discount_price: number | null;
+    product_images: { image_url: string; display_order: number }[];
+  }) => {
     const code = p.product_code ?? `prd-${Math.random().toString(36).slice(2, 8)}`;
     const slug = productParam(p.title, code);
+    const image = p.product_images && p.product_images.length > 0 
+      ? p.product_images.sort((a, b) => a.display_order - b.display_order)[0].image_url
+      : 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
+    
     return {
       path: `/product/${slug}`,
       out: `product/${slug}/index.html`,
+      title: `${p.title} — ORNIX`,
+      description: p.description ? p.description.slice(0, 160) : `Buy ${p.title} at ORNIX. ৳${Number(p.price).toFixed(0)}. Modern streetwear from Bangladesh.`,
+      image,
     };
   });
 }
@@ -112,7 +126,12 @@ async function prerender() {
 
       try {
         await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
+
+        if ('image' in route) {
+          const ogImage = await page.$eval('meta[property="og:image"]', (el) => (el as HTMLMetaElement).content).catch(() => null);
+          console.log(`  OG image for ${route.path}: ${ogImage || 'not set'}`);
+        }
 
         const html = await page.content();
         const outPath = join(DIST_DIR, route.out);
