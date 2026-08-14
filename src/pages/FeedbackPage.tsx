@@ -3,10 +3,20 @@ import { ArrowLeft, MessageSquare, Send, Loader2, CheckCircle, RefreshCw, Mail, 
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
+import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 export default function FeedbackPage() {
   const onNavigate = useNavigation();
   const { t } = useLanguage();
+
+  useEffect(() => {
+    setSEO({
+      title: `Feedback — ${SITE_NAME}`,
+      description: DEFAULT_DESCRIPTION,
+      image: DEFAULT_OG_IMAGE,
+      url: '/feedback',
+    });
+  }, []);
   const [form, setForm] = useState({ name: '', email: '', message: '', captcha: '' });
   const [errors, setErrors] = useState({ name: '', email: '', message: '', captcha: '' });
   const [submitting, setSubmitting] = useState(false);

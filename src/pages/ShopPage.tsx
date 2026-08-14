@@ -3,12 +3,22 @@ import { supabase, Product, Category } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import CategoryGrid from '../components/CategoryGrid';
 import AllProductsSection from '../components/AllProductsSection';
+import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 export default function ShopPage() {
   const { t } = useLanguage();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setSEO({
+      title: `${t('shopCollection')} — ${SITE_NAME}`,
+      description: DEFAULT_DESCRIPTION,
+      image: DEFAULT_OG_IMAGE,
+      url: '/collections',
+    });
+  }, [t]);
 
   useEffect(() => {
     async function fetchData() {

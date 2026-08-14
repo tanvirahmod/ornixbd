@@ -5,6 +5,7 @@ import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { slugify } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
+import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 type SortOption = 'newest' | 'price-low-high' | 'price-high-low';
 
@@ -67,6 +68,22 @@ export default function SingleCollectionPage() {
 
     fetchCollection();
   }, [slug]);
+
+  useEffect(() => {
+    if (!categoryName) return;
+    setSEO({
+      title: `${categoryName} — ${SITE_NAME}`,
+      description: `Shop ${categoryName} at ${SITE_NAME}. ${DEFAULT_DESCRIPTION}`,
+      image: DEFAULT_OG_IMAGE,
+      url: `/collections/${slug}`,
+    });
+    setJsonLd({
+      '@context': 'https://schema.org',
+      '@type': 'CollectionPage',
+      name: categoryName,
+      url: `${SITE_URL}/collections/${slug}`,
+    });
+  }, [categoryName, slug]);
 
   const sortedProducts = [...products].sort((a, b) => {
     if (sortBy === 'price-low-high') {

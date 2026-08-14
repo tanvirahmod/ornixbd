@@ -121,9 +121,13 @@ export default function Navbar() {
             {/* Brand Logo — centered */}
             <button
               onClick={() => navigateTo('home')}
-              className="font-display text-2xl sm:text-3xl tracking-widest text-black hover:text-sale transition-colors duration-200 uppercase"
+              className="flex items-center hover:opacity-80 transition-opacity duration-200"
             >
-               ORNIX
+              <img
+                src="https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png"
+                alt="ORNIX"
+                className="h-12 sm:h-14 w-auto object-contain"
+              />
             </button>
           </div>
 

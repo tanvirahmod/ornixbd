@@ -5,6 +5,7 @@ import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { extractProductCode, productParam } from '../lib/utils';
+import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 export default function ProductPage() {
   const { t } = useLanguage();
@@ -45,6 +46,32 @@ export default function ProductPage() {
     }
     fetchProduct();
   }, [productCode]);
+
+  useEffect(() => {
+    if (!product) return;
+    const image = product.product_images?.[0]?.image_url || DEFAULT_OG_IMAGE;
+    const title = `${product.title} — ${SITE_NAME}`;
+    const description = product.description
+      ? `${product.description.slice(0, 160)}...`
+      : `Buy ${product.title} at ${SITE_NAME}. ৳${Number(product.price).toFixed(0)}. ${DEFAULT_DESCRIPTION}`;
+    const url = `/product/${productParam(product.title, product.product_code ?? product.id)}`;
+
+    setSEO({ title, description, image, url });
+    setJsonLd({
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: product.title,
+      description: product.description,
+      image: image,
+      brand: SITE_NAME,
+      offers: {
+        '@type': 'Offer',
+        price: Number(product.price).toFixed(2),
+        priceCurrency: 'BDT',
+        url: `${SITE_URL}${url}`,
+      },
+    });
+  }, [product]);
 
   const images =
     product?.product_images && product.product_images.length > 0

@@ -5,12 +5,30 @@ import TopCategories from '../components/TopCategories';
 import NewArrivals from '../components/NewArrivals';
 import BrandBio from '../components/BrandBio';
 import { useNavigation } from '../lib/navigation';
+import { setSEO, setJsonLd, DEFAULT_OG_IMAGE, SITE_NAME, DEFAULT_DESCRIPTION } from '../lib/seo';
 
 export default function HomePage() {
   const onNavigate = useNavigation();
   const [discountedProducts, setDiscountedProducts] = useState<Product[]>([]);
   const [newArrivals, setNewArrivals] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setSEO({
+      title: `${SITE_NAME} — Modern Fashion from Bangladesh`,
+      description: DEFAULT_DESCRIPTION,
+      image: DEFAULT_OG_IMAGE,
+      url: '/',
+    });
+    setJsonLd({
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      name: SITE_NAME,
+      url: 'https://ornixbd.com',
+      logo: DEFAULT_OG_IMAGE,
+      description: DEFAULT_DESCRIPTION,
+    });
+  }, []);
 
   useEffect(() => {
     async function fetchProducts() {

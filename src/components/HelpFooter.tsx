@@ -137,7 +137,11 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
               className="font-display text-2xl uppercase tracking-widest text-white mb-4"
               style={{ fontFamily: 'Anton, Impact, Arial Black, sans-serif' }}
             >
-               ORNIX
+              <img
+                src="https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png"
+                alt="ORNIX"
+                className="h-14 w-auto object-contain"
+              />
             </h3>
             <p className="text-white/50 text-sm leading-relaxed mb-6 font-medium">
               Bold streetwear crafted in Bangladesh. Quality you can feel, style

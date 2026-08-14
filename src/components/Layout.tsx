@@ -17,12 +17,6 @@ export default function Layout() {
   return (
     <>
       <Navbar />
-      <button
-        onClick={() => navigateTo('admin')}
-        className="fixed bottom-4 left-4 z-50 bg-stone-900 hover:bg-brand-500 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-lg transition-all hover:shadow-xl hover:-translate-y-0.5"
-      >
-        {t('admin')}
-      </button>
       <Outlet />
       <HelpFooter onNavigate={navigateTo} />
     </>
