@@ -137,7 +137,7 @@ export default function ProductPage() {
         <div className="grid md:grid-cols-2 gap-8 lg:gap-16">
           {/* Image Gallery */}
           <div className="space-y-4">
-            <div className="relative aspect-[4/5] sm:aspect-square bg-white rounded-3xl overflow-hidden shadow-md group">
+            <div className="relative aspect-[4/5] md:aspect-[4/5] bg-white rounded-3xl overflow-hidden shadow-md group">
               <img
                 src={images[currentImageIndex].image_url}
                 alt={product.title}
