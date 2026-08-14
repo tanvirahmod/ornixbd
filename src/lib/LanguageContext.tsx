@@ -25,7 +25,7 @@ function interpolate(value: string, vars?: Record<string, string | number>) {
 }
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [language, setLanguageState] = useState<Language>('bn');
+  const [language, setLanguageState] = useState<Language>('en');
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY) as Language | null;

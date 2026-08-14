@@ -1,13 +1,10 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, Category } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
-import { useNavigation } from '../lib/navigation';
 import CategoryGrid from '../components/CategoryGrid';
 import AllProductsSection from '../components/AllProductsSection';
-import HelpFooter from '../components/HelpFooter';
 
 export default function ShopPage() {
-  const onNavigate = useNavigation();
   const { t } = useLanguage();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -84,8 +81,6 @@ export default function ShopPage() {
           </>
         )}
       </section>
-
-      <HelpFooter onNavigate={onNavigate} />
     </div>
   );
 }

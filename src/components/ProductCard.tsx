@@ -27,9 +27,11 @@ export default function ProductCard({ product }: ProductCardProps) {
         </div>
       </Link>
       <div className="p-4">
-        <h3 className="text-sm font-semibold text-stone-900 leading-tight line-clamp-2 mb-3 h-10">
-          {product.title}
-        </h3>
+        <Link to={href} className="block mb-3">
+          <h3 className="text-sm font-semibold text-stone-900 leading-tight line-clamp-2 hover:text-sale transition-colors">
+            {product.title}
+          </h3>
+        </Link>
         <div className="flex items-center gap-3 mb-4">
           {hasDiscount ? (
             <>
@@ -50,7 +52,7 @@ export default function ProductCard({ product }: ProductCardProps) {
           to={href}
           className="w-full flex items-center justify-center bg-black text-white font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] hover:bg-stone-800 transition-colors"
         >
-          ADD TO CART
+          BUY NOW
         </Link>
       </div>
     </div>

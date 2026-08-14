@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Plus, Minus, Instagram, Facebook, MapPin, Phone, Clock } from 'lucide-react';
+import { useLanguage } from '../lib/LanguageContext';
 
 interface HelpFooterProps {
   onNavigate: (page: string) => void;
@@ -91,6 +92,13 @@ function TiktokIcon({ className }: { className?: string }) {
 }
 
 export default function HelpFooter({ onNavigate }: HelpFooterProps) {
+  const { language, setLanguage, availableLanguages } = useLanguage();
+
+  const toggleLanguage = () => {
+    const next = language === 'en' ? 'bn' : 'en';
+    setLanguage(next);
+  };
+
   return (
     <>
       {/* ── Help / FAQ Section ── */}
@@ -169,11 +177,11 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
             <ul className="space-y-4">
               <li className="flex gap-3 text-white/55 text-sm font-medium">
                 <MapPin className="w-4 h-4 text-[#D90429] flex-shrink-0 mt-0.5" />
-                <span>Dhaka, Bangladesh<br />Available for nationwide delivery</span>
+                <span>Baniachong, Habiganj, Sylhet<br />Available for nationwide delivery</span>
               </li>
               <li className="flex gap-3 text-white/55 text-sm font-medium">
                 <Phone className="w-4 h-4 text-[#D90429] flex-shrink-0 mt-0.5" />
-                <span>+880 1XXX-XXXXXX</span>
+                <span>+880 1305-827996</span>
               </li>
               <li className="flex gap-3 text-white/55 text-sm font-medium">
                 <Clock className="w-4 h-4 text-[#D90429] flex-shrink-0 mt-0.5" />
@@ -218,6 +226,14 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
                 BDT ৳
               </span>
             </div>
+
+            {/* Language toggle */}
+            <button
+              onClick={toggleLanguage}
+              className="text-white/40 text-xs font-bold uppercase tracking-wider hover:text-white transition-colors"
+            >
+              {availableLanguages[language]}
+            </button>
 
             {/* Copyright */}
             <p className="text-white/35 text-xs text-center">
