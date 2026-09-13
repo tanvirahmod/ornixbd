@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw
+   Bell, CheckCheck, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle
 } from 'lucide-react';
-import { supabase, Product, ProductSize, Order, Category, Feedback, Announcement, SiteSetting } from '../lib/supabase';
+import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting } from '../lib/supabase';
+import ImageUploader from '../components/ImageUploader';
 import { verifyAdmin } from '../lib/adminCredentials';
 import { useNavigation } from '../lib/navigation';
 
@@ -18,6 +19,7 @@ const EMPTY_FORM = {
   sizes: '',
   stock_count: '',
   category_id: '',
+  product_code: '',
 };
 
 export default function AdminPage() {
@@ -57,11 +59,16 @@ export default function AdminPage() {
 
   const [productSearch, setProductSearch] = useState('');
   const [stockSearch, setStockSearch] = useState('');
+  const [stockSelectedCategory, setStockSelectedCategory] = useState<string | null>(null);
+  const [stockCatPickerOpen, setStockCatPickerOpen] = useState(false);
+  const [stockCatSaving, setStockCatSaving] = useState<string | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Order[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [updatingDelivery, setUpdatingDelivery] = useState<string | null>(null);
+  const [orderStatusOpen, setOrderStatusOpen] = useState<string | null>(null);
+  const orderStatusRef = useRef<HTMLDivElement | null>(null);
   const [feedbackList, setFeedbackList] = useState<Feedback[]>([]);
   const [feedbackSearch, setFeedbackSearch] = useState('');
   const [expandedFeedback, setExpandedFeedback] = useState<string | null>(null);
@@ -125,6 +132,17 @@ export default function AdminPage() {
       fetchAll();
     }
   }, [isAuthenticated]);
+
+  // Close the order status dropdown when clicking outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (orderStatusRef.current && !orderStatusRef.current.contains(e.target as Node)) {
+        setOrderStatusOpen(null);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   // Real-time order notifications via Supabase subscriptions
   useEffect(() => {
@@ -244,6 +262,19 @@ export default function AdminPage() {
     setLoading(false);
   }
 
+  // Show/hide a category on the Stock page (does NOT delete the category)
+  const toggleStockCategory = async (cat: Category, show: boolean) => {
+    setStockCatSaving(cat.id);
+    // Optimistic update
+    setCategories((prev) => prev.map((c) => (c.id === cat.id ? { ...c, show_in_stock: show } : c)));
+    const { error } = await supabase.from('categories').update({ show_in_stock: show }).eq('id', cat.id);
+    if (error) {
+      setCategories((prev) => prev.map((c) => (c.id === cat.id ? { ...c, show_in_stock: !show } : c)));
+      window.alert(`Failed to update category: ${error.message}`);
+    }
+    setStockCatSaving(null);
+  };
+
   const handleRefreshStock = async () => {
     setRefreshing(true);
     await fetchAll();
@@ -286,6 +317,7 @@ export default function AdminPage() {
       sizes: product.sizes.join(', '),
       stock_count: String(product.stock_count),
       category_id: product.category_id ?? '',
+      product_code: product.product_code ?? '',
     });
     const imgs = product.product_images?.map((img) => img.image_url) ?? [];
     setImageUrls(imgs.length > 0 ? imgs : ['']);
@@ -303,8 +335,16 @@ export default function AdminPage() {
     if (!form.title.trim()) return 'Product title is required.';
     if (!form.price.trim() || isNaN(Number(form.price)) || Number(form.price) < 0)
       return 'Enter a valid price.';
-    if (!form.stock_count.trim() || isNaN(Number(form.stock_count)) || Number(form.stock_count) < 0)
-      return 'Enter a valid stock count.';
+    const parsedSizes = form.sizes.split(',').map((s) => s.trim()).filter(Boolean);
+    if (parsedSizes.length === 0 && (!form.stock_count.trim() || isNaN(Number(form.stock_count)) || Number(form.stock_count) < 0))
+      return 'Enter a valid stock count (or add sizes with quantities).';
+    const code = form.product_code.trim().toUpperCase();
+    if (code) {
+      const clash = products.some(
+        (p) => (p.product_code ?? '').toUpperCase() === code && p.id !== editingProduct?.id
+      );
+      if (clash) return `Product code "${code}" is already used by another product.`;
+    }
     return '';
   };
 
@@ -316,7 +356,11 @@ export default function AdminPage() {
 
     const sizes = form.sizes.split(',').map((s) => s.trim()).filter(Boolean);
     const validImages = imageUrls.map((u) => u.trim()).filter(Boolean);
-    const totalStock = sizes.reduce((sum, size) => sum + (Number(sizeQuantities[size]) || 0), 0);
+    // Stock is automatic for sized products (sum of size quantities); manual entry only for sizeless products
+    const totalStock =
+      sizes.length > 0
+        ? sizes.reduce((sum, size) => sum + (Number(sizeQuantities[size]) || 0), 0)
+        : Number(form.stock_count) || 0;
     const payload = {
       title: form.title.trim(),
       description: form.description.trim(),
@@ -325,13 +369,22 @@ export default function AdminPage() {
       sizes,
       stock_count: totalStock,
       category_id: form.category_id || null,
+      product_code: form.product_code.trim() !== '' ? form.product_code.trim().toUpperCase() : null,
     };
 
     let productId: string;
     if (modalMode === 'add') {
       const { data: inserted, error: insertError } = await supabase
         .from('products').insert(payload).select().single();
-      if (insertError || !inserted) { setFormError('Failed to save product.'); setSaving(false); return; }
+      if (insertError || !inserted) {
+        setFormError(
+          insertError?.message.includes('duplicate key')
+            ? 'Product code already exists. Please choose a different code.'
+            : 'Failed to save product.'
+        );
+        setSaving(false);
+        return;
+      }
       productId = inserted.id;
       if (validImages.length > 0) {
         await supabase.from('product_images').insert(
@@ -422,25 +475,27 @@ export default function AdminPage() {
     await fetchAll();
   };
 
-  const toggleDelivered = async (orderId: string, current: boolean) => {
-    const nextValue = !current;
+  const setOrderStatus = async (orderId: string, status: OrderStatus) => {
+    setOrderStatusOpen(null);
+    if (status === 'canceled' && !window.confirm('Cancel this order? This cannot be undone from the dropdown (you can set it back to pending though).')) {
+      return;
+    }
     setUpdatingDelivery(orderId);
 
+    const prevOrders = orders;
+    const prevNotifications = notifications;
     setOrders((prev) => prev.map((order) => (
-      order.id === orderId ? { ...order, delivered: nextValue } : order
+      order.id === orderId ? { ...order, status, delivered: status === 'delivered' } : order
     )));
     setNotifications((prev) => prev.map((notification) => (
-      notification.id === orderId ? { ...notification, delivered: nextValue } : notification
+      notification.id === orderId ? { ...notification, status, delivered: status === 'delivered' } : notification
     )));
 
-    const { error } = await supabase.from('orders').update({ delivered: nextValue }).eq('id', orderId);
+    const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
     if (error) {
-      setOrders((prev) => prev.map((order) => (
-        order.id === orderId ? { ...order, delivered: current } : order
-      )));
-      setNotifications((prev) => prev.map((notification) => (
-        notification.id === orderId ? { ...notification, delivered: current } : notification
-      )));
+      setOrders(prevOrders);
+      setNotifications(prevNotifications);
+      window.alert(`Failed to update order status: ${error.message}`);
     }
 
     setUpdatingDelivery(null);
@@ -875,19 +930,170 @@ export default function AdminPage() {
           <div>
             <div className="mb-6 flex items-center justify-between gap-4">
               <div>
-                <h2 className="font-display text-xl font-bold text-stone-900">Stock Management</h2>
-                <p className="text-sm text-stone-500">Sell products in-store. Updates sync across all admins instantly.</p>
+                {stockSelectedCategory === null ? (
+                  <>
+                    <h2 className="font-display text-xl font-bold text-stone-900">Stock Management</h2>
+                    <p className="text-sm text-stone-500">Pick a category to see its products. Updates sync across all admins instantly.</p>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => { setStockSelectedCategory(null); setStockSearch(''); }}
+                      className="flex items-center gap-1 text-sm font-medium text-stone-500 hover:text-stone-900 transition-colors mb-1"
+                    >
+                      ← All Categories
+                    </button>
+                    <h2 className="font-display text-xl font-bold text-stone-900">
+                      {stockSelectedCategory === '__uncategorized__'
+                        ? 'Uncategorized Products'
+                        : categories.find((c) => c.id === stockSelectedCategory)?.name ?? 'Products'}
+                    </h2>
+                  </>
+                )}
               </div>
-              <button
-                onClick={handleRefreshStock}
-                disabled={refreshing}
-                className="flex items-center gap-2 bg-white border border-stone-200 hover:border-stone-300 text-stone-700 hover:text-stone-900 font-semibold px-4 py-2 rounded-xl transition-all text-sm disabled:opacity-60"
-              >
-                {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                {refreshing ? 'Refreshing...' : 'Refresh'}
-              </button>
+              <div className="flex items-center gap-2">
+                {stockSelectedCategory === null && (
+                  <button onClick={() => setStockCatPickerOpen(true)}
+                    className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5 text-sm">
+                    <Plus className="w-4 h-4" /> Add / Remove Categories
+                  </button>
+                )}
+                <button
+                  onClick={handleRefreshStock}
+                  disabled={refreshing}
+                  className="flex items-center gap-2 bg-white border border-stone-200 hover:border-stone-300 text-stone-700 hover:text-stone-900 font-semibold px-4 py-2 rounded-xl transition-all text-sm disabled:opacity-60"
+                >
+                  {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {refreshing ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
             </div>
 
+            {/* ── Stock page category picker modal ── */}
+            {stockCatPickerOpen && (
+              <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setStockCatPickerOpen(false)}>
+                <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-fade-in-up" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
+                    <div>
+                      <h3 className="font-display text-lg font-bold text-stone-900">Manage Stock Categories</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">Pick which categories appear on the Stock page. Removing one here does not delete it.</p>
+                    </div>
+                    <button onClick={() => setStockCatPickerOpen(false)} className="text-stone-400 hover:text-stone-600 transition-colors">
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <div className="px-6 py-4 max-h-[60vh] overflow-y-auto space-y-2">
+                    {categories.length === 0 ? (
+                      <div className="text-center py-8 text-stone-400">
+                        <Tag className="w-10 h-10 mx-auto mb-2 text-stone-300" />
+                        <p className="text-sm">No categories yet. Create them in the Categories tab first.</p>
+                      </div>
+                    ) : (
+                      categories.map((cat) => {
+                        const visible = cat.show_in_stock !== false;
+                        return (
+                          <div key={cat.id} className="flex items-center justify-between bg-stone-50 rounded-xl px-4 py-3 border border-stone-100">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-8 h-8 bg-brand-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                                <Tag className="w-4 h-4 text-brand-600" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-semibold text-stone-900 text-sm truncate">{cat.name}</p>
+                                <p className="text-xs text-stone-400">
+                                  {visible ? 'Shown on Stock page' : 'Hidden from Stock page'}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex gap-1.5 flex-shrink-0">
+                              {visible ? (
+                                <button
+                                  onClick={() => toggleStockCategory(cat, false)}
+                                  disabled={stockCatSaving === cat.id}
+                                  className="flex items-center gap-1 text-xs font-semibold text-red-500 hover:text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
+                                >
+                                  {stockCatSaving === cat.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                                  Remove
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => toggleStockCategory(cat, true)}
+                                  disabled={stockCatSaving === cat.id}
+                                  className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
+                                >
+                                  {stockCatSaving === cat.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                                  Add
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div className="px-6 pb-6 pt-3 border-t border-stone-100">
+                    <button
+                      onClick={() => setStockCatPickerOpen(false)}
+                      className="w-full bg-stone-900 hover:bg-stone-800 text-white font-semibold py-3 rounded-2xl transition-all text-sm"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Category list view */}
+            {stockSelectedCategory === null ? (
+              categories.length === 0 && products.every((p) => p.category_id) ? (
+                <div className="text-center py-20 text-stone-400">
+                  <Tag className="w-12 h-12 mx-auto mb-3 text-stone-300" />
+                  <p>No categories yet. Add your first one to organize stock!</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                  {categories.filter((cat) => cat.show_in_stock !== false).map((cat) => {
+                    const count = products.filter((p) => p.category_id === cat.id).length;
+                    return (
+                      <button
+                        key={cat.id}
+                        onClick={() => { setStockSelectedCategory(cat.id); setStockSearch(''); }}
+                        className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5 flex items-center justify-between hover:shadow-md hover:border-brand-200 transition-all text-left"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-brand-100 rounded-xl flex items-center justify-center">
+                            <Tag className="w-5 h-5 text-brand-600" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-stone-900">{cat.name}</p>
+                            <p className="text-xs text-stone-400">{count} product{count !== 1 ? 's' : ''}</p>
+                          </div>
+                        </div>
+                        <ChevronDown className="w-5 h-5 text-stone-300 -rotate-90" />
+                      </button>
+                    );
+                  })}
+                  {products.some((p) => !p.category_id) && (
+                    <button
+                      onClick={() => { setStockSelectedCategory('__uncategorized__'); setStockSearch(''); }}
+                      className="bg-white rounded-2xl shadow-sm border border-dashed border-stone-200 p-5 flex items-center justify-between hover:shadow-md hover:border-brand-200 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-stone-100 rounded-xl flex items-center justify-center">
+                          <Package className="w-5 h-5 text-stone-400" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-stone-900">Uncategorized</p>
+                          <p className="text-xs text-stone-400">{products.filter((p) => !p.category_id).length} product{products.filter((p) => !p.category_id).length !== 1 ? 's' : ''}</p>
+                        </div>
+                      </div>
+                      <ChevronDown className="w-5 h-5 text-stone-300 -rotate-90" />
+                    </button>
+                  )}
+                </div>
+              )
+            ) : (
+            <>
+            {/* Products-in-category view */}
             <div className="relative mb-6">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
               <input
@@ -899,14 +1105,18 @@ export default function AdminPage() {
               />
             </div>
 
-            {products.length === 0 ? (
-              <div className="text-center py-20 text-stone-400">
-                <Package className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                <p>No products yet.</p>
-              </div>
-            ) : (
+            {(() => {
+              const categoryProducts = products.filter((p) =>
+                stockSelectedCategory === '__uncategorized__' ? !p.category_id : p.category_id === stockSelectedCategory
+              );
+              return categoryProducts.length === 0 ? (
+                <div className="text-center py-20 text-stone-400">
+                  <Package className="w-12 h-12 mx-auto mb-3 text-stone-300" />
+                  <p>No products in this category yet.</p>
+                </div>
+              ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {products.filter((p) => {
+                {categoryProducts.filter((p) => {
                   const q = stockSearch.trim().toLowerCase();
                   if (!q) return true;
                   return p.title.toLowerCase().includes(q) || (p.product_code ?? '').toLowerCase().includes(q);
@@ -960,6 +1170,9 @@ export default function AdminPage() {
                   );
                 })}
               </div>
+              );
+            })()}
+            </>
             )}
           </div>
         )}
@@ -1046,7 +1259,7 @@ export default function AdminPage() {
                 <p>{orderSearch ? 'No orders match your search.' : 'No orders yet.'}</p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2" ref={orderStatusRef}>
                 {filteredOrders.map((order) => {
                   const pricing = getOrderPricing(order);
                   return (
@@ -1061,11 +1274,17 @@ export default function AdminPage() {
                               </span>
                             )}
                             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${
-                              order.delivered
+                              order.status === 'delivered'
                                 ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                                : 'bg-amber-50 text-amber-600 border border-amber-200'
+                                : order.status === 'canceled'
+                                  ? 'bg-red-50 text-red-600 border border-red-200'
+                                  : 'bg-amber-50 text-amber-600 border border-amber-200'
                             }`}>
-                              {order.delivered ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</> : <><Clock className="w-3.5 h-3.5" /> Pending</>}
+                              {order.status === 'delivered'
+                                ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
+                                : order.status === 'canceled'
+                                  ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
+                                  : <><Clock className="w-3.5 h-3.5" /> Pending</>}
                             </span>
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-sm text-stone-500 flex-wrap">
@@ -1080,24 +1299,52 @@ export default function AdminPage() {
                           <span className="text-xs text-stone-400 hidden sm:block">
                             {new Date(order.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </span>
-                          <button
-                            onClick={() => toggleDelivered(order.id, order.delivered)}
-                            disabled={updatingDelivery === order.id}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                              order.delivered
-                                ? 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-                                : 'bg-emerald-500 text-white hover:bg-emerald-400'
-                            } disabled:opacity-60`}
-                          >
-                            {updatingDelivery === order.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : order.delivered ? (
-                              <Clock className="w-3.5 h-3.5" />
-                            ) : (
-                              <Truck className="w-3.5 h-3.5" />
+                          <div className="relative">
+                            <button
+                              onClick={() => setOrderStatusOpen(orderStatusOpen === order.id ? null : order.id)}
+                              disabled={updatingDelivery === order.id}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-60 ${
+                                order.status === 'delivered'
+                                  ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                                  : order.status === 'canceled'
+                                    ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                              }`}
+                            >
+                              {updatingDelivery === order.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : order.status === 'delivered' ? (
+                                <Truck className="w-3.5 h-3.5" />
+                              ) : order.status === 'canceled' ? (
+                                <XCircle className="w-3.5 h-3.5" />
+                              ) : (
+                                <Clock className="w-3.5 h-3.5" />
+                              )}
+                              {order.status === 'delivered' ? 'Delivered' : order.status === 'canceled' ? 'Canceled' : 'Pending'}
+                              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${orderStatusOpen === order.id ? 'rotate-180' : ''}`} />
+                            </button>
+                            {orderStatusOpen === order.id && (
+                              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                                {([
+                                  { value: 'pending' as OrderStatus, label: 'Pending', icon: <Clock className="w-4 h-4" />, activeCls: 'bg-amber-50 text-amber-700' },
+                                  { value: 'delivered' as OrderStatus, label: 'Delivered', icon: <Truck className="w-4 h-4" />, activeCls: 'bg-emerald-50 text-emerald-700' },
+                                  { value: 'canceled' as OrderStatus, label: 'Canceled', icon: <XCircle className="w-4 h-4" />, activeCls: 'bg-red-50 text-red-700' },
+                                ]).map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => setOrderStatus(order.id, opt.value)}
+                                    className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
+                                      order.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                                    }`}
+                                  >
+                                    {opt.icon}
+                                    {opt.label}
+                                    {order.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
+                                  </button>
+                                ))}
+                              </div>
                             )}
-                            {order.delivered ? 'Mark as pending' : 'Mark as delivered'}
-                          </button>
+                          </div>
                         </div>
                       </div>
                       <div className="mt-2 pt-2 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm">
@@ -1283,24 +1530,14 @@ export default function AdminPage() {
                        <p className="text-xs text-stone-400">Shown on screens wider than 768px</p>
                      </div>
                    </div>
-                   <input
-                     type="url"
+                   <ImageUploader
                      value={heroBgImage}
-                     onChange={(e) => { setHeroBgImage(e.target.value); setHeroBgError(''); }}
-                     placeholder="https://example.com/desktop-hero.jpg"
-                     className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                     onChange={(url) => { setHeroBgImage(url); setHeroBgError(''); }}
+                     folder="hero"
+                     variant="block"
+                     label="Desktop / Laptop Image"
                    />
                    <p className="text-xs text-stone-400">Recommended: <span className="font-medium">1600×900px</span> (landscape)</p>
-                   {heroBgImage && (
-                     <div className="w-full h-40 rounded-xl overflow-hidden border border-stone-200 bg-stone-100">
-                       <img
-                         src={heroBgImage}
-                         alt="Desktop hero preview"
-                         className="w-full h-full object-cover"
-                         onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/1600x900/ddd/999?text=Invalid+Image+URL'; }}
-                       />
-                     </div>
-                   )}
                  </div>
 
                  <div className="border-t border-stone-100" />
@@ -1316,24 +1553,14 @@ export default function AdminPage() {
                        <p className="text-xs text-stone-400">Shown on screens up to 768px wide. Falls back to desktop image if left blank.</p>
                      </div>
                    </div>
-                   <input
-                     type="url"
+                   <ImageUploader
                      value={heroBgMobileImage}
-                     onChange={(e) => { setHeroBgMobileImage(e.target.value); setHeroBgError(''); }}
-                     placeholder="https://example.com/mobile-hero.jpg"
-                     className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                     onChange={(url) => { setHeroBgMobileImage(url); setHeroBgError(''); }}
+                     folder="hero"
+                     variant="block"
+                     label="Mobile Image"
                    />
                    <p className="text-xs text-stone-400">Recommended: <span className="font-medium">750×1000px</span> (portrait)</p>
-                   {heroBgMobileImage && (
-                     <div className="w-full max-w-[200px] h-48 rounded-xl overflow-hidden border border-stone-200 bg-stone-100">
-                       <img
-                         src={heroBgMobileImage}
-                         alt="Mobile hero preview"
-                         className="w-full h-full object-cover"
-                         onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/750x1000/ddd/999?text=Invalid+Image+URL'; }}
-                       />
-                     </div>
-                   )}
                  </div>
 
                  {heroBgError && (
@@ -1373,6 +1600,14 @@ export default function AdminPage() {
                   placeholder="Product name" />
               </div>
               <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                  Product Code <span className="text-stone-400 font-normal">(optional — auto-generated if left blank, e.g. PRD-00001)</span>
+                </label>
+                <input type="text" value={form.product_code} onChange={(e) => setForm({ ...form, product_code: e.target.value })}
+                  className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  placeholder="e.g. PRD-00001" />
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1.5">Description</label>
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={3} placeholder="Describe your product..."
@@ -1387,11 +1622,28 @@ export default function AdminPage() {
                     placeholder="0" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Stock *</label>
-                  <input type="number" min="0" value={form.stock_count}
-                    onChange={(e) => setForm({ ...form, stock_count: e.target.value })}
-                    className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                    placeholder="0" />
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                    Stock <span className="text-stone-400 font-normal">(optional)</span>
+                  </label>
+                  {(() => {
+                    const parsedSizes = form.sizes.split(',').map((s) => s.trim()).filter(Boolean);
+                    const computed = parsedSizes.reduce((sum, size) => sum + (Number(sizeQuantities[size]) || 0), 0);
+                    const isSized = parsedSizes.length > 0;
+                    return (
+                      <>
+                        <input type="number" min="0" value={isSized ? String(computed) : form.stock_count}
+                          onChange={(e) => setForm({ ...form, stock_count: e.target.value })}
+                          disabled={isSized}
+                          className={`w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 ${isSized ? 'bg-stone-100 text-stone-500' : ''}`}
+                          placeholder="0" />
+                        <p className="text-xs text-stone-400 mt-1">
+                          {isSized
+                            ? 'Auto-calculated from size quantities above'
+                            : 'Only for products without sizes — sized products calculate this automatically'}
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
               <div>
@@ -1472,14 +1724,19 @@ export default function AdminPage() {
                 </div>
                 <div className="space-y-2">
                   {imageUrls.map((url, i) => (
-                    <div key={i} className="flex gap-2">
-                      <input type="url" value={url}
-                        onChange={(e) => { const next = [...imageUrls]; next[i] = e.target.value; setImageUrls(next); }}
-                        className="flex-1 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                        placeholder="https://example.com/photo.jpg" />
+                    <div key={i} className="flex items-center gap-2">
+                      <ImageUploader
+                        value={url}
+                        onChange={(newUrl) => {
+                          const next = [...imageUrls];
+                          next[i] = newUrl;
+                          setImageUrls(next);
+                        }}
+                        folder="products"
+                      />
                       {imageUrls.length > 1 && (
                         <button onClick={() => setImageUrls(imageUrls.filter((_, j) => j !== i))}
-                          className="text-stone-400 hover:text-red-500 transition-colors">
+                          className="text-stone-400 hover:text-red-500 transition-colors flex-shrink-0">
                           <X className="w-4 h-4" />
                         </button>
                       )}
@@ -1529,15 +1786,12 @@ export default function AdminPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-stone-700 mb-1.5">
-                  Background Image URL
-                </label>
-                <input
-                  type="url"
+                <ImageUploader
                   value={catBackgroundImage}
-                  onChange={(e) => setCatBackgroundImage(e.target.value)}
-                  className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                  placeholder="https://example.com/image.jpg"
+                  onChange={setCatBackgroundImage}
+                  folder="categories"
+                  variant="block"
+                  label="Background Image"
                 />
                 <p className="text-xs text-stone-500 mt-1.5">
                   Recommended size: <span className="font-medium">800×1000px</span> (3:4 aspect ratio, portrait)

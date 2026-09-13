@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck, Check, Sparkles, BellRing } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
+import { useCart } from '../lib/CartContext';
 import { extractProductCode, productParam } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
@@ -13,12 +14,14 @@ export default function ProductPage() {
   // Extract product_code from the end of the URL param (e.g. "drop-shoulder-tee-prd-00012")
   const productCode = rawParam ? extractProductCode(rawParam) : null;
   const onNavigate = useNavigation();
+  const { addItem } = useCart();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [sizeError, setSizeError] = useState(false);
+  const [justAdded, setJustAdded] = useState(false);
 
   useEffect(() => {
     async function fetchProduct() {
@@ -78,6 +81,24 @@ export default function ProductPage() {
       ? product.product_images
       : [{ id: 'placeholder', image_url: 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=800', display_order: 0, product_id: '' }];
 
+  const handleAddToCart = () => {
+    if (!product) return;
+    if (product.sizes && product.sizes.length > 0 && !selectedSize) {
+      setSizeError(true);
+      return;
+    }
+    const limit = selectedSize ? selectedSizeStock : product.stock_count;
+    const safeQuantity = Math.max(1, Math.min(quantity, Math.max(1, limit)));
+    setQuantity(safeQuantity);
+    addItem(product, {
+      size: selectedSize,
+      quantity: safeQuantity,
+      imageUrl: images[0]?.image_url ?? null,
+    });
+    setJustAdded(true);
+    window.setTimeout(() => setJustAdded(false), 2000);
+  };
+
   const handleBuyNow = () => {
     if (!product) return;
     if (product.sizes && product.sizes.length > 0 && !selectedSize) {
@@ -101,6 +122,12 @@ export default function ProductPage() {
 
   const selectedSizeStock = selectedSize ? getSizeQuantity(selectedSize) : (product?.stock_count ?? 0);
   const maxQuantity = selectedSize ? Math.max(1, selectedSizeStock) : Math.max(1, product?.stock_count ?? 1);
+  // Fully out of stock = no total stock (or every size has 0 for sized products)
+  const isFullyOutOfStock =
+    !!product &&
+    (product.sizes && product.sizes.length > 0
+      ? (product.product_sizes ?? []).reduce((sum, ps) => sum + ps.quantity, 0) === 0
+      : product.stock_count === 0);
 
   if (loading) {
     return (
@@ -305,7 +332,8 @@ export default function ProductPage() {
               </div>
             )}
 
-            {/* Quantity */}
+            {/* Quantity — hidden when the product is fully out of stock */}
+            {!isFullyOutOfStock && (
             <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold text-stone-700">Quantity</span>
@@ -339,28 +367,72 @@ export default function ProductPage() {
                     : 'Out of stock'}
               </p>
             </div>
+            )}
 
-            {/* Buy Now */}
+            {/* Fully out of stock notice */}
+            {isFullyOutOfStock ? (
+              <div className="relative overflow-hidden rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 p-6 text-center">
+                <div className="absolute -top-8 -right-8 w-28 h-28 bg-amber-200/40 rounded-full blur-2xl" />
+                <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-rose-200/40 rounded-full blur-2xl" />
+                <div className="relative">
+                  <div className="w-14 h-14 mx-auto mb-4 bg-white shadow-md rounded-full flex items-center justify-center">
+                    <Sparkles className="w-7 h-7 text-amber-500" />
+                  </div>
+                  <h3 className="font-display text-xl font-bold text-stone-900 mb-2">
+                    {t('productUnavailableTitle')}
+                  </h3>
+                  <p className="text-sm text-stone-600 leading-relaxed max-w-md mx-auto mb-3">
+                    {t('productUnavailableBody')}
+                  </p>
+                  <p className="text-sm font-semibold text-brand-600 flex items-center justify-center gap-1.5">
+                    <BellRing className="w-4 h-4" />
+                    {t('productUnavailableThanks')}
+                  </p>
+                </div>
+              </div>
+            ) : (
+            <>
+            {/* Add to Cart / Buy Now */}
             <div className="mt-auto pt-2">
-              <button
-                onClick={handleBuyNow}
-                disabled={product.stock_count === 0 || (selectedSize !== null && selectedSizeStock === 0)}
-                className="w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl text-base transition-all duration-200 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0"
-              >
-                <ShoppingCart className="w-5 h-5" />
-                {product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
-                  ? t('outOfStock')
-                  : t('addToCart', {
-                      price: (product.discount_price != null && product.discount_price < product.price
-                        ? Number(product.discount_price) * quantity
-                        : Number(product.price) * quantity).toFixed(0),
-                    })}
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={handleAddToCart}
+                  disabled={product.stock_count === 0 || (selectedSize !== null && selectedSizeStock === 0)}
+                  className={`flex items-center justify-center gap-2 border-2 font-bold py-4 rounded-2xl text-base transition-all duration-200 disabled:border-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed ${
+                    justAdded
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                      : 'border-stone-900 text-stone-900 hover:bg-stone-900 hover:text-white'
+                  }`}
+                >
+                  {justAdded ? <Check className="w-5 h-5" /> : <ShoppingCart className="w-5 h-5" />}
+                  {justAdded
+                    ? t('addedToCart')
+                    : product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
+                      ? t('outOfStock')
+                      : t('addToCartButton')}
+                </button>
+                <button
+                  onClick={handleBuyNow}
+                  disabled={product.stock_count === 0 || (selectedSize !== null && selectedSizeStock === 0)}
+                  className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl text-base transition-all duration-200 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  <ShoppingCart className="w-5 h-5" />
+                  {product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
+                    ? t('outOfStock')
+                    : t('addToCart', {
+                        price: (product.discount_price != null && product.discount_price < product.price
+                          ? Number(product.discount_price) * quantity
+                          : Number(product.price) * quantity).toFixed(0),
+                      })}
+                </button>
+              </div>
               <div className="flex items-center justify-center gap-6 mt-4 text-xs text-stone-400">
                 <span className="flex items-center gap-1.5"><Truck className="w-4 h-4" /> {t('deliveryAcrossBd')}</span>
                 <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4" /> {t('qualityAssuredShort')}</span>
               </div>
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>

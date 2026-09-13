@@ -1,23 +1,27 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash, ShieldCheck, ShoppingBag } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
-import { productParam } from '../lib/utils';
+import { useCart, CartItem } from '../lib/CartContext';
+import { productParam, COVER_FALLBACK } from '../lib/utils';
 
 export default function CheckoutPage() {
   const { t } = useLanguage();
   const { productId } = useParams<{ productId: string }>();
   const [searchParams] = useSearchParams();
+  const isCartCheckout = productId === 'cart';
   const selectedSize = searchParams.get('size');
   const selectedQuantity = Number(searchParams.get('qty') ?? 1);
   const onNavigate = useNavigation();
+  const { items: cartItems, clearCart } = useCart();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [placedItems, setPlacedItems] = useState<CartItem[]>([]);
 
   const [form, setForm] = useState({
     name: '',
@@ -32,12 +36,17 @@ export default function CheckoutPage() {
   const unitPrice = product
     ? (product.discount_price != null && product.discount_price < product.price ? Number(product.discount_price) : Number(product.price))
     : 0;
-  const subtotal = unitPrice * safeQuantity;
+  const cartSubtotal = cartItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const subtotal = isCartCheckout ? cartSubtotal : unitPrice * safeQuantity;
   const deliveryFee = 150;
   const total = subtotal + deliveryFee;
 
   useEffect(() => {
     async function fetchProduct() {
+      if (isCartCheckout) {
+        setLoading(false);
+        return;
+      }
       const { data, error } = await supabase
         .from('products')
         .select('*, product_images(id, image_url, display_order)')
@@ -47,7 +56,7 @@ export default function CheckoutPage() {
       setLoading(false);
     }
     fetchProduct();
-  }, [productId]);
+  }, [productId, isCartCheckout]);
 
   const validate = () => {
     const next = { name: '', phone: '', address: '', bkashNumber: '', trxId: '' };
@@ -72,56 +81,88 @@ export default function CheckoutPage() {
     setError('');
 
     const finalQuantity = Math.max(1, Math.min(Number(selectedQuantity) || 1, Math.max(1, product?.stock_count ?? 1)));
-    const requiredPayload = {
-      product_id: productId,
-      product_title: product?.title ?? '',
-      selected_size: selectedSize,
+
+    // Build one order row per line item (cart checkout inserts all items; single-product inserts one)
+    const lineItems: Array<{
+      productId: string;
+      title: string;
+      code: string | null;
+      size: string | null;
+      quantity: number;
+    }> = isCartCheckout
+      ? cartItems.map((item) => ({
+          productId: item.productId,
+          title: item.title,
+          code: item.productCode,
+          size: item.size,
+          quantity: item.quantity,
+        }))
+      : [
+          {
+            productId: productId!,
+            title: product?.title ?? '',
+            code: product?.product_code ?? null,
+            size: selectedSize && selectedSize !== 'none' ? selectedSize : null,
+            quantity: finalQuantity,
+          },
+        ];
+
+    const customer = {
       customer_name: form.name.trim(),
       customer_phone: form.phone.trim(),
       customer_address: form.address.trim(),
+      bkash_number: form.bkashNumber.trim(),
+      trx_id: form.trxId.trim(),
     };
-    const payloadCandidates = [
-      {
-        ...requiredPayload,
-        product_code: product?.product_code ?? null,
-        bkash_number: form.bkashNumber.trim(),
-        trx_id: form.trxId.trim(),
-        quantity: finalQuantity,
-      },
-      {
-        ...requiredPayload,
-        product_code: product?.product_code ?? null,
-        bkash_number: form.bkashNumber.trim(),
-        trx_id: form.trxId.trim(),
-      },
-      {
-        ...requiredPayload,
-        product_code: product?.product_code ?? null,
-        bkash_number: form.bkashNumber.trim(),
-      },
-      {
-        ...requiredPayload,
-        product_code: product?.product_code ?? null,
-      },
-      {
-        ...requiredPayload,
-        quantity: finalQuantity,
-      },
-      requiredPayload,
-    ];
 
-    let submitError = null;
-    for (const payload of payloadCandidates) {
-      const response = await supabase.from('orders').insert(payload);
-      if (!response.error) {
-        submitError = null;
+    // Fall back to progressively fewer columns for older schemas
+    const payloadCandidates = lineItems.map((item) => [
+      {
+        product_id: item.productId,
+        product_title: item.title,
+        product_code: item.code,
+        selected_size: item.size,
+        quantity: item.quantity,
+        ...customer,
+      },
+      {
+        product_id: item.productId,
+        product_title: item.title,
+        product_code: item.code,
+        selected_size: item.size,
+        ...customer,
+      },
+      {
+        product_id: item.productId,
+        product_title: item.title,
+        selected_size: item.size,
+        ...customer,
+      },
+      {
+        product_id: item.productId,
+        product_title: item.title,
+        ...customer,
+      },
+    ]);
+
+    let submitError: { message: string } | null = null;
+    for (let i = 0; i < lineItems.length; i++) {
+      let itemError: { message: string } | null = null;
+      for (const payload of payloadCandidates[i]) {
+        const response = await supabase.from('orders').insert(payload);
+        if (!response.error) {
+          itemError = null;
+          break;
+        }
+        itemError = response.error;
+        const message = response.error.message.toLowerCase();
+        const isSchemaMismatch = message.includes('does not exist') || message.includes('column') || message.includes('not found') || message.includes('unknown');
+        if (!isSchemaMismatch) break;
+      }
+      if (itemError) {
+        submitError = itemError;
         break;
       }
-
-      submitError = response.error;
-      const message = response.error.message.toLowerCase();
-      const isSchemaMismatch = message.includes('does not exist') || message.includes('column') || message.includes('not found') || message.includes('unknown');
-      if (!isSchemaMismatch) break;
     }
 
     if (submitError) {
@@ -130,27 +171,30 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (productId) {
+    // Decrement stock for each ordered line item
+    for (const item of lineItems) {
       const { data: currentProduct } = await supabase
         .from('products')
         .select('stock_count')
-        .eq('id', productId)
+        .eq('id', item.productId)
         .maybeSingle();
-      const newStock = Math.max(0, (currentProduct?.stock_count ?? 0) - finalQuantity);
-      await supabase.from('products').update({ stock_count: newStock }).eq('id', productId);
+      const newStock = Math.max(0, (currentProduct?.stock_count ?? 0) - item.quantity);
+      await supabase.from('products').update({ stock_count: newStock }).eq('id', item.productId);
 
-      if (selectedSize && selectedSize !== 'none') {
+      if (item.size) {
         const { data: currentSize } = await supabase
           .from('product_sizes')
           .select('quantity')
-          .eq('product_id', productId)
-          .eq('size', selectedSize)
+          .eq('product_id', item.productId)
+          .eq('size', item.size)
           .maybeSingle();
-        const newSizeQty = Math.max(0, (currentSize?.quantity ?? 0) - finalQuantity);
-        await supabase.from('product_sizes').update({ quantity: newSizeQty }).eq('product_id', productId).eq('size', selectedSize);
+        const newSizeQty = Math.max(0, (currentSize?.quantity ?? 0) - item.quantity);
+        await supabase.from('product_sizes').update({ quantity: newSizeQty }).eq('product_id', item.productId).eq('size', item.size);
       }
     }
 
+    setPlacedItems(isCartCheckout ? [...cartItems] : []);
+    if (isCartCheckout) clearCart();
     setSuccess(true);
     setSubmitting(false);
   };
@@ -159,6 +203,29 @@ export default function CheckoutPage() {
     product?.product_images && product.product_images.length > 0
       ? product.product_images.sort((a, b) => a.display_order - b.display_order)[0].image_url
       : 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400';
+
+  const summaryLines: Array<{ key: string; title: string; code: string | null; size: string | null; quantity: number; imageUrl: string | null }> =
+    isCartCheckout
+      ? cartItems.map((item) => ({
+          key: `${item.productId}__${item.size ?? 'none'}`,
+          title: item.title,
+          code: item.productCode,
+          size: item.size,
+          quantity: item.quantity,
+          imageUrl: item.imageUrl,
+        }))
+      : product
+        ? [
+            {
+              key: product.id,
+              title: product.title,
+              code: product.product_code ?? null,
+              size: selectedSize && selectedSize !== 'none' ? selectedSize : null,
+              quantity: safeQuantity,
+              imageUrl: coverImage,
+            },
+          ]
+        : [];
 
   if (loading) {
     return (
@@ -176,6 +243,11 @@ export default function CheckoutPage() {
             <CheckCircle className="w-10 h-10 text-emerald-500" />
           </div>
           <h2 className="font-display text-2xl font-bold text-stone-900 mb-2">{t('orderPlaced')}</h2>
+          {placedItems.length > 0 && (
+            <p className="text-stone-500 text-sm mb-2">
+              {t('itemsCountMany', { count: placedItems.reduce((sum, item) => sum + item.quantity, 0) })} {t('orderPlacedSuffix')}
+            </p>
+          )}
           <p className="text-stone-500 mb-2">{t('thankYou', { name: form.name })}</p>
           <p className="text-stone-400 text-sm mb-8">{t('weWillContact', { phone: form.phone })}</p>
           <button
@@ -207,23 +279,32 @@ export default function CheckoutPage() {
           <div className="md:col-span-2">
             <div className="bg-white rounded-3xl shadow-sm border border-stone-100 p-5 sticky top-20">
               <h2 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-4">{t('orderSummary')}</h2>
-              {product && (
-                <div className="flex gap-3">
-                  <div className="w-16 h-16 rounded-2xl overflow-hidden bg-stone-100 flex-shrink-0">
-                    <img src={coverImage} alt={product.title} className="w-full h-full object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400'; }}
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-stone-900 text-sm leading-snug line-clamp-2">{product.title}</p>
-                    {product.product_code && (
-                      <p className="text-[11px] font-mono text-stone-400 mt-0.5">{product.product_code}</p>
-                    )}
-                    {selectedSize && (
-                      <p className="text-xs text-stone-500 mt-1">Size: <span className="font-medium text-stone-700">{selectedSize}</span></p>
-                    )}
-                    <p className="text-xs text-stone-500 mt-1">Qty: <span className="font-medium text-stone-700">{safeQuantity}</span></p>
-                  </div>
+              {isCartCheckout && summaryLines.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-8 text-stone-400">
+                  <ShoppingBag className="w-8 h-8" />
+                  <p className="text-sm">{t('cartEmpty')}</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {summaryLines.map((line) => (
+                    <div key={line.key} className="flex gap-3">
+                      <div className="w-16 h-16 rounded-2xl overflow-hidden bg-stone-100 flex-shrink-0">
+                        <img src={line.imageUrl ?? COVER_FALLBACK} alt={line.title} className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).src = COVER_FALLBACK; }}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-stone-900 text-sm leading-snug line-clamp-2">{line.title}</p>
+                        {line.code && (
+                          <p className="text-[11px] font-mono text-stone-400 mt-0.5">{line.code}</p>
+                        )}
+                        {line.size && (
+                          <p className="text-xs text-stone-500 mt-1">{t('sizeLabel')}: <span className="font-medium text-stone-700">{line.size}</span></p>
+                        )}
+                        <p className="text-xs text-stone-500 mt-1">{t('qtyLabel')}: <span className="font-medium text-stone-700">{line.quantity}</span></p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}              <div className="border-t border-stone-100 mt-5 pt-4 space-y-2">
                 <div className="flex justify-between text-sm">

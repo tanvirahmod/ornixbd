@@ -202,10 +202,13 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
             <ul className="space-y-3">
               {[
                 { label: 'Home', page: 'home' },
+                { label: 'Our Story', page: 'story' },
                 { label: 'Shop All', page: 'shop' },
+                { label: 'Shop by Size', page: 'shop-by-size' },
                 { label: 'New Arrivals', page: 'new-arrivals' },
                 { label: 'Hot Deals', page: 'hot-deals' },
                 { label: 'Feedback', page: 'feedback' },
+                { label: 'Policies', page: 'policies' },
               ].map((link) => (
                 <li key={link.page + link.label}>
                   <button

@@ -1,16 +1,19 @@
 import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
-import { Search, Menu, X, ChevronDown } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Search, Menu, X, ChevronDown, ShoppingBag } from 'lucide-react';
 import { useNavigation, getPageFromPathname } from '../lib/navigation';
 import { slugify } from '../lib/utils';
 import { useAnnouncements, useCategories, getAnnouncementText } from '../lib/siteConfig';
+import { useCart } from '../lib/CartContext';
 
 export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
   const navigateTo = useNavigation();
+  const navigate = useNavigate();
   const { pathname } = useLocation();
   const currentPage = getPageFromPathname(pathname);
+  const { itemCount } = useCart();
   const { announcements, loading: annLoading } = useAnnouncements();
   const announcementText = getAnnouncementText(announcements, annLoading);
   const { categories } = useCategories();
@@ -139,6 +142,18 @@ export default function Navbar() {
               className="p-2 text-black hover:text-sale transition-colors duration-150"
             >
               <Search className="w-5 h-5" strokeWidth={2} />
+            </button>
+            <button
+              onClick={() => navigate('/cart')}
+              aria-label="Cart"
+              className="relative p-2 text-black hover:text-sale transition-colors duration-150"
+            >
+              <ShoppingBag className="w-5 h-5" strokeWidth={2} />
+              {itemCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[1.15rem] h-[1.15rem] px-1 flex items-center justify-center rounded-full bg-sale text-white text-[10px] font-bold">
+                  {itemCount > 99 ? '99+' : itemCount}
+                </span>
+              )}
             </button>
           </div>
         </div>

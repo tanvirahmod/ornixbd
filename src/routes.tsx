@@ -4,6 +4,10 @@ import HomePage from './pages/HomePage';
 import ShopPage from './pages/ShopPage';
 import ProductPage from './pages/ProductPage';
 import CheckoutPage from './pages/CheckoutPage';
+import CartPage from './pages/CartPage';
+import ShopBySizePage from './pages/ShopBySizePage';
+import StoryPage from './pages/StoryPage';
+import PolicyPage from './pages/PolicyPage';
 import AdminPage from './pages/AdminPage';
 import FeedbackPage from './pages/FeedbackPage';
 import SingleCollectionPage from './pages/SingleCollectionPage';
@@ -21,6 +25,11 @@ const router = createBrowserRouter([
       { path: 'new-arrivals', element: <NewArrivalsPage /> },
       { path: 'hot-deals', element: <HotDealsPage /> },
       { path: 'product/:productId', element: <ProductPage /> },
+      { path: 'cart', element: <CartPage /> },
+      { path: 'shop-by-size', element: <ShopBySizePage /> },
+      { path: 'shop-by-size/:size', element: <ShopBySizePage /> },
+      { path: 'story', element: <StoryPage /> },
+      { path: 'policies', element: <PolicyPage /> },
       { path: 'checkout/:productId', element: <CheckoutPage /> },
       { path: 'feedback', element: <FeedbackPage /> },
     ],

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 
-type Target = 'home' | 'shop' | 'collections' | 'product' | 'checkout' | 'admin' | 'feedback' | 'new-arrivals' | 'hot-deals';
+type Target = 'home' | 'shop' | 'collections' | 'product' | 'checkout' | 'admin' | 'feedback' | 'new-arrivals' | 'hot-deals' | 'shop-by-size' | 'story' | 'policies';
 
 export function useNavigation() {
   const navigate = useNavigate();
@@ -16,6 +16,12 @@ export function useNavigation() {
       navigate('/new-arrivals');
     } else if (target === 'hot-deals') {
       navigate('/hot-deals');
+    } else if (target === 'shop-by-size') {
+      navigate(param ? `/shop-by-size/${param}` : '/shop-by-size');
+    } else if (target === 'story') {
+      navigate('/story');
+    } else if (target === 'policies') {
+      navigate('/policies');
     } else if (target === 'product' && param) {
       navigate(`/product/${param}`);
     } else if (target === 'checkout' && param) {

@@ -102,7 +102,25 @@ export type TranslationKey =
    | 'priceHighToLow'
    | 'categoryNotFound'
    | 'backToCollections'
-   | 'seeAll';
+   | 'seeAll'
+   | 'addToCartButton'
+   | 'addedToCart'
+   | 'cartTitle'
+   | 'cartEmpty'
+   | 'cartEmptySubtitle'
+   | 'clearCart'
+   | 'removeItem'
+   | 'subtotal'
+   | 'freeDeliveryShort'
+   | 'proceedToCheckout'
+   | 'sizeLabel'
+   | 'qtyLabel'
+   | 'increaseQuantity'
+   | 'decreaseQuantity'
+   | 'orderPlacedSuffix'
+   | 'productUnavailableTitle'
+   | 'productUnavailableBody'
+   | 'productUnavailableThanks';
 
 interface TranslationMap {
   [key: string]: string;
@@ -213,6 +231,25 @@ const en: TranslationMap = {
   categoryNotFound: 'Category not found',
   backToCollections: 'Back to Collections',
   seeAll: 'See All',
+  addToCartButton: 'Add to Cart',
+  addedToCart: 'Added to Cart ✓',
+  cartTitle: 'Your Cart',
+  cartEmpty: 'Your cart is empty',
+  cartEmptySubtitle: 'Browse our collections and add something you love.',
+  clearCart: 'Clear cart',
+  removeItem: 'Remove item',
+  subtotal: 'Subtotal',
+  freeDeliveryShort: 'Free',
+  proceedToCheckout: 'Proceed to Checkout',
+  sizeLabel: 'Size',
+  qtyLabel: 'Qty',
+  increaseQuantity: 'Increase quantity',
+  decreaseQuantity: 'Decrease quantity',
+  orderPlacedSuffix: 'ordered successfully',
+  productUnavailableTitle: 'Sold Out — Back Soon!',
+  productUnavailableBody:
+    "This piece is fully stocked out right now, but it's not gone for good. Once we bring it back, you'll be able to order it right here — first come, first served.",
+  productUnavailableThanks: 'Thank you for staying with Ornix 💛',
 };
 
 const bn: TranslationMap = {
@@ -320,6 +357,25 @@ const bn: TranslationMap = {
   categoryNotFound: 'ক্যাটাগরি পাওয়া যায়নি',
   backToCollections: 'কালেকশনে ফিরে যান',
   seeAll: 'সব দেখুন',
+  addToCartButton: 'কার্টে যোগ করুন',
+  addedToCart: 'কার্টে যোগ হয়েছে ✓',
+  cartTitle: 'আপনার কার্ট',
+  cartEmpty: 'আপনার কার্ট খালি',
+  cartEmptySubtitle: 'আমাদের কালেকশন দেখুন এবং পছন্দের পণ্য যোগ করুন।',
+  clearCart: 'কার্ট খালি করুন',
+  removeItem: 'পণ্য সরান',
+  subtotal: 'সাবটোটাল',
+  freeDeliveryShort: 'ফ্রি',
+  proceedToCheckout: 'চেকআউট করুন',
+  sizeLabel: 'সাইজ',
+  qtyLabel: 'পরিমাণ',
+  increaseQuantity: 'পরিমাণ বাড়ান',
+  decreaseQuantity: 'পরিমাণ কমান',
+  orderPlacedSuffix: 'সফলভাবে অর্ডার হয়েছে',
+  productUnavailableTitle: 'স্টক শেষ — খুব শীঘ্রই আসছে!',
+  productUnavailableBody:
+    'এই পণ্যটির স্টক এই মুহূর্তে শেষ, তবে এটি আর ফিরে আসবে না ভাববেন না। আমরা যেই মুহূর্তে এটি ফিরিয়ে আনব, সেই মুহূর্তেই আপনি এখান থেকে অর্ডার করতে পারবেন — আগে এলে আগে পাবেন।',
+  productUnavailableThanks: 'Ornix-এর সাথে থাকার জন্য ধন্যবাদ 💛',
 };
 
 export const translations: Record<Language, TranslationMap> = {

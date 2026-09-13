@@ -10,6 +10,7 @@ export type Category = {
   name: string;
   background_image: string | null;
   priority: number | null;
+  show_in_stock: boolean;
   created_at: string;
 };
 
@@ -61,6 +62,8 @@ export type ProductSize = {
   quantity: number;
 };
 
+export type OrderStatus = 'pending' | 'delivered' | 'canceled';
+
 export type Order = {
   id: string;
   product_id: string | null;
@@ -74,6 +77,7 @@ export type Order = {
   bkash_number: string | null;
   trx_id: string | null;
   delivered: boolean;
+  status: OrderStatus;
   created_at: string;
 };
 
