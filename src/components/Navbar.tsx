@@ -177,6 +177,7 @@ export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const navigateTo = useNavigation();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -185,6 +186,13 @@ export default function Navbar() {
   const { announcements, loading: annLoading } = useAnnouncements();
   const announcementText = getAnnouncementText(announcements, annLoading);
   const { categories } = useCategories();
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 0);
+    onScroll();
+    window.addEventListener('scroll', onScroll);
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   useEffect(() => {
     const style = document.createElement('style');
@@ -225,7 +233,7 @@ export default function Navbar() {
       )}
 
       {/* ── Main Navbar ── */}
-      <header className="sticky top-0 z-50 bg-white border-b border-black/10 shadow-sm">
+      <header className={`sticky top-0 z-50 bg-white shadow-sm transition-colors duration-200 ${scrolled ? 'border-b border-black/10' : ''}`}>
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
 
           {/* ── Left: Mobile hamburger ── */}

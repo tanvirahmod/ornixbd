@@ -40,9 +40,6 @@ export default function HeroBanner({ onNavigate }: HeroBannerProps) {
         />
       )}
 
-      {/* Subtle dark overlay */}
-      <div className="absolute inset-0 bg-black/30" />
-
       {/* Giant background outline text */}
       <div
         className="absolute inset-0 flex items-center justify-end overflow-hidden select-none pointer-events-none"
