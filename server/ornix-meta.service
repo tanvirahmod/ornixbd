@@ -1,0 +1,26 @@
+[Unit]
+Description=ORNIX SEO meta server (social crawler prerender)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── EDIT THESE ──────────────────────────────────────────────────────────
+# Same values as the frontend .env (without the VITE_ prefix)
+Environment=SUPABASE_URL=https://uzuzffvnukhdckaqqvfa.supabase.co
+Environment=SUPABASE_ANON_KEY=PASTE_YOUR_ANON_KEY_HERE
+Environment=PORT=3001
+# ────────────────────────────────────────────────────────────────────────
+WorkingDirectory=/var/www/ornix
+ExecStart=/usr/bin/node server/meta-server.mjs
+Restart=always
+RestartSec=3
+User=www-data
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

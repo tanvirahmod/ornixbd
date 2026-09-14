@@ -226,7 +226,7 @@ export default function Navbar() {
 
       {/* ── Main Navbar ── */}
       <header className="sticky top-0 z-50 bg-white border-b border-black/10 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
 
           {/* ── Left: Mobile hamburger ── */}
           <button
@@ -289,10 +289,11 @@ export default function Navbar() {
               </div>
             </nav>
 
-            {/* Brand Logo — centered */}
+            {/* Brand Logo — centered (absolutely centered on mobile since the left
+                hamburger and right icons have different widths) */}
             <button
               onClick={() => navigateTo('home')}
-              className="flex items-center hover:opacity-80 transition-opacity duration-200"
+              className="absolute left-1/2 -translate-x-1/2 flex items-center hover:opacity-80 transition-opacity duration-200 lg:static lg:translate-x-0"
             >
               <img
                 src="https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png"
