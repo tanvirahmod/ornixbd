@@ -476,6 +476,20 @@ export default function ProductPage() {
             <div className="mt-auto pt-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
+                  onClick={handleBuyNow}
+                  disabled={product.stock_count === 0 || (selectedSize !== null && selectedSizeStock === 0)}
+                  className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl text-base transition-all duration-200 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  <ShoppingCart className="w-5 h-5" />
+                  {product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
+                    ? t('outOfStock')
+                    : t('addToCart', {
+                        price: (product.discount_price != null && product.discount_price < product.price
+                          ? Number(product.discount_price) * quantity
+                          : Number(product.price) * quantity).toFixed(0),
+                      })}
+                </button>
+                <button
                   onClick={handleAddToCart}
                   disabled={product.stock_count === 0 || (selectedSize !== null && selectedSizeStock === 0)}
                   className={`flex items-center justify-center gap-2 border-2 font-bold py-4 rounded-2xl text-base transition-all duration-200 disabled:border-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed ${
@@ -490,20 +504,6 @@ export default function ProductPage() {
                     : product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
                       ? t('outOfStock')
                       : t('addToCartButton')}
-                </button>
-                <button
-                  onClick={handleBuyNow}
-                  disabled={product.stock_count === 0 || (selectedSize !== null && selectedSizeStock === 0)}
-                  className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl text-base transition-all duration-200 hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <ShoppingCart className="w-5 h-5" />
-                  {product.stock_count === 0 || (selectedSize && selectedSizeStock === 0)
-                    ? t('outOfStock')
-                    : t('addToCart', {
-                        price: (product.discount_price != null && product.discount_price < product.price
-                          ? Number(product.discount_price) * quantity
-                          : Number(product.price) * quantity).toFixed(0),
-                      })}
                 </button>
               </div>
               <button
