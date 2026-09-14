@@ -5,7 +5,7 @@ import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { slugify } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
-import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
+import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 type SortOption = 'newest' | 'price-low-high' | 'price-high-low';
 
@@ -45,6 +45,11 @@ export default function SingleCollectionPage() {
         return;
       }
 
+      if (!matchedCategory) {
+        setLoading(false);
+        return;
+      }
+
       setCategoryName(matchedCategory.name);
 
       const { data, error } = await supabase
@@ -71,10 +76,12 @@ export default function SingleCollectionPage() {
 
   useEffect(() => {
     if (!categoryName) return;
+    // Use the category's cover image (first product image) as the social preview
+    const cover = products[0]?.product_images?.[0]?.image_url || DEFAULT_OG_IMAGE;
     setSEO({
       title: `${categoryName} — ${SITE_NAME}`,
-      description: `Shop ${categoryName} at ${SITE_NAME}. ${DEFAULT_DESCRIPTION}`,
-      image: DEFAULT_OG_IMAGE,
+      description: `Shop ${categoryName} at ${SITE_NAME}. Premium quality, nationwide delivery across Bangladesh. ${products.length} product${products.length !== 1 ? 's' : ''} available.`,
+      image: cover,
       url: `/collections/${slug}`,
     });
     setJsonLd({
@@ -83,7 +90,16 @@ export default function SingleCollectionPage() {
       name: categoryName,
       url: `${SITE_URL}/collections/${slug}`,
     });
-  }, [categoryName, slug]);
+    setJsonLd({
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_URL },
+        { '@type': 'ListItem', position: 2, name: 'Collections', item: `${SITE_URL}/collections` },
+        { '@type': 'ListItem', position: 3, name: categoryName, item: `${SITE_URL}/collections/${slug}` },
+      ],
+    }, 'page-breadcrumb-jsonld');
+  }, [categoryName, slug, products]);
 
   const sortedProducts = [...products].sort((a, b) => {
     if (sortBy === 'price-low-high') {

@@ -52,12 +52,16 @@ export default function ShopBySizePage() {
     });
   }, [selectedSize]);
 
+  // Normalize sizes so "s", "s " and "S" are treated as the same size
+  const normSize = (s: string) => s.trim().toUpperCase();
+
   // All sizes offered across in-stock products, most common first
   const allSizes = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of products) {
       for (const size of p.sizes ?? []) {
-        counts.set(size, (counts.get(size) ?? 0) + 1);
+        const key = normSize(size);
+        if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
       }
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([size]) => size);
@@ -67,13 +71,13 @@ export default function ShopBySizePage() {
     if (!selectedSize) return [];
     return products.filter((p) =>
       (selectedCategory === '' || p.category_id === selectedCategory) &&
-      (p.product_sizes ?? []).some((ps) => ps.size === selectedSize && ps.quantity > 0)
+      (p.product_sizes ?? []).some((ps) => normSize(ps.size) === selectedSize && ps.quantity > 0)
     );
   }, [products, selectedSize, selectedCategory]);
 
   const totalUnits = useMemo(
     () => matching.reduce((sum, p) => {
-      const ps = (p.product_sizes ?? []).find((s) => s.size === selectedSize);
+      const ps = (p.product_sizes ?? []).find((s) => normSize(s.size) === selectedSize);
       return sum + (ps?.quantity ?? 0);
     }, 0),
     [matching, selectedSize]
@@ -125,11 +129,11 @@ export default function ShopBySizePage() {
             {/* Results */}
             {selectedSize && (
               <>
-                <div className="flex items-baseline justify-between mb-5 flex-wrap gap-3">
-                  <h2 className="font-display text-xl font-bold text-stone-900">
+                <div className="flex flex-wrap items-center justify-between mb-5 gap-3">
+                  <h2 className="font-display text-lg sm:text-xl font-bold text-stone-900 min-w-0">
                     Size {selectedSize} — {matching.length} product{matching.length !== 1 ? 's' : ''} available
                   </h2>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <span className="text-xs text-stone-400">{totalUnits} unit{totalUnits !== 1 ? 's' : ''} in stock</span>
                     <select
                       value={selectedCategory}
@@ -152,7 +156,7 @@ export default function ShopBySizePage() {
                 ) : (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {matching.map((product) => {
-                      const ps = (product.product_sizes ?? []).find((s) => s.size === selectedSize);
+                      const ps = (product.product_sizes ?? []).find((s) => normSize(s.size) === selectedSize);
                       const hasDiscount =
                         product.discount_price != null && Number(product.discount_price) < Number(product.price);
                       return (

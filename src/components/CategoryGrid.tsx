@@ -9,7 +9,7 @@ interface CategoryGridProps {
 
 export default function CategoryGrid({ categories }: CategoryGridProps) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-12">
       {categories.map((cat) => (
         <div key={cat.id} className="group">
           <Link
@@ -39,11 +39,11 @@ export default function CategoryGrid({ categories }: CategoryGridProps) {
               </div>
             </div>
           </Link>
-          <div className="flex items-center gap-2 mt-4 group-hover:text-sale transition-colors">
-            <span className="font-bold text-stone-900 text-sm uppercase tracking-wider">
+          <div className="flex items-center gap-2 mt-3 sm:mt-4 group-hover:text-sale transition-colors">
+            <span className="font-bold text-stone-900 text-xs sm:text-sm uppercase tracking-wider truncate">
               {cat.name}
             </span>
-            <ChevronRight className="w-4 h-4 text-stone-400 group-hover:text-sale transition-colors" />
+            <ChevronRight className="w-4 h-4 text-stone-400 group-hover:text-sale transition-colors flex-shrink-0" />
           </div>
         </div>
       ))}

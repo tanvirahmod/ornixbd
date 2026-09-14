@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Package } from 'lucide-react';
 import { supabase, Product } from '../lib/supabase';
 import ProductCard from '../components/ProductCard';
+import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 const PAGE_SIZE = 12;
 
@@ -13,6 +14,15 @@ export default function NewArrivalsPage() {
   const [loading, setLoading] = useState(true);
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+
+  useEffect(() => {
+    setSEO({
+      title: `New Arrivals — ${SITE_NAME}`,
+      description: `Shop the latest streetwear drops at ${SITE_NAME}. Fresh designs added weekly — premium cotton tees, shirts and more. ${DEFAULT_DESCRIPTION}`,
+      image: DEFAULT_OG_IMAGE,
+      url: '/new-arrivals',
+    });
+  }, []);
 
   useEffect(() => {
     async function fetchPage() {
@@ -58,7 +68,7 @@ export default function NewArrivalsPage() {
         {/* Header */}
         <div className="mb-10">
           <p className="text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
-            Just dropped
+            Just Dropped
           </p>
           <h1 className="font-display text-4xl sm:text-5xl md:text-6xl text-black uppercase tracking-wide leading-none">
             NEW ARRIVALS

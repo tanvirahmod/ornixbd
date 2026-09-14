@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { ArrowLeft, Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
 import { COVER_FALLBACK, productParam } from '../lib/utils';
+import { setSEO, SITE_NAME } from '../lib/seo';
 
 const DELIVERY_FEE = 150;
 const FREE_DELIVERY_THRESHOLD = 1000;
@@ -13,6 +15,14 @@ export default function CartPage() {
   const onNavigate = useNavigation();
   const navigate = useNavigate();
   const { items, itemCount, subtotal, updateQuantity, removeItem, clearCart } = useCart();
+
+  useEffect(() => {
+    setSEO({
+      title: `Your Cart — ${SITE_NAME}`,
+      url: '/cart',
+      description: 'Review your selected items and proceed to secure checkout.',
+    });
+  }, []);
 
   const deliveryFee = subtotal >= FREE_DELIVERY_THRESHOLD || subtotal === 0 ? 0 : DELIVERY_FEE;
   const total = subtotal + deliveryFee;
@@ -46,14 +56,14 @@ export default function CartPage() {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 py-6 md:py-10">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="font-display text-2xl md:text-3xl font-bold text-stone-900 tracking-tight">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-6">
+          <h1 className="font-display text-xl sm:text-2xl md:text-3xl font-bold text-stone-900 tracking-tight min-w-0">
             {t('cartTitle')}
-            <span className="text-stone-400 text-lg font-semibold ml-2">({t('itemsCountMany', { count: itemCount })})</span>
+            <span className="text-stone-400 text-base sm:text-lg font-semibold ml-2">({t('itemsCountMany', { count: itemCount })})</span>
           </h1>
           <button
             onClick={clearCart}
-            className="text-xs font-semibold text-red-500 hover:text-red-600 transition-colors"
+            className="text-xs font-semibold text-red-500 hover:text-red-600 transition-colors flex-shrink-0"
           >
             {t('clearCart')}
           </button>

@@ -6,6 +6,7 @@ import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart, CartItem } from '../lib/CartContext';
 import { productParam, COVER_FALLBACK } from '../lib/utils';
+import { setSEO, SITE_NAME } from '../lib/seo';
 
 export default function CheckoutPage() {
   const { t } = useLanguage();
@@ -31,6 +32,14 @@ export default function CheckoutPage() {
     trxId: '',
   });
   const [errors, setErrors] = useState({ name: '', phone: '', address: '', bkashNumber: '', trxId: '' });
+
+  useEffect(() => {
+    setSEO({
+      title: `Checkout — ${SITE_NAME}`,
+      url: productId ? `/checkout/${productId}` : '/checkout',
+      description: 'Complete your order — cash on delivery available, nationwide shipping across Bangladesh.',
+    });
+  }, [productId]);
 
   const safeQuantity = Math.max(1, Math.min(Number(selectedQuantity) || 1, Math.max(1, product?.stock_count ?? 1)));
   const unitPrice = product

@@ -11,6 +11,21 @@ import { useNavigation } from '../lib/navigation';
 type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'feedback' | 'settings';
 type ModalMode = 'add' | 'edit';
 
+// Compact page list for pagination: 1 … 4 5 6 … 12
+function pageNumbers(current: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  let prev = 0;
+  for (const n of sorted) {
+    if (n - prev > 1) out.push('…');
+    out.push(n);
+    prev = n;
+  }
+  return out;
+}
+
 const EMPTY_FORM = {
   title: '',
   description: '',
@@ -58,11 +73,16 @@ export default function AdminPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'product' | 'category'; id: string } | null>(null);
 
   const [productSearch, setProductSearch] = useState('');
+  const [productCategoryFilter, setProductCategoryFilter] = useState('');
+  const [productPage, setProductPage] = useState(1);
+  const PRODUCT_PAGE_SIZE = 12;
   const [stockSearch, setStockSearch] = useState('');
   const [stockSelectedCategory, setStockSelectedCategory] = useState<string | null>(null);
   const [stockCatPickerOpen, setStockCatPickerOpen] = useState(false);
   const [stockCatSaving, setStockCatSaving] = useState<string | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
+  const [orderPage, setOrderPage] = useState(1);
+  const ORDER_PAGE_SIZE = 15;
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Order[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
@@ -90,6 +110,7 @@ export default function AdminPage() {
   const [heroBgError, setHeroBgError] = useState('');
 
   const filteredProducts = products.filter((p) => {
+    if (productCategoryFilter && p.category_id !== productCategoryFilter) return false;
     const q = productSearch.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -98,6 +119,13 @@ export default function AdminPage() {
       (p.categories?.name ?? '').toLowerCase().includes(q)
     );
   });
+
+  const productTotalPages = Math.max(1, Math.ceil(filteredProducts.length / PRODUCT_PAGE_SIZE));
+  const productSafePage = Math.min(productPage, productTotalPages);
+  const pagedProducts = filteredProducts.slice(
+    (productSafePage - 1) * PRODUCT_PAGE_SIZE,
+    productSafePage * PRODUCT_PAGE_SIZE
+  );
 
   const filteredOrders = orders.filter((o) => {
     const q = orderSearch.trim().toLowerCase();
@@ -111,6 +139,13 @@ export default function AdminPage() {
       (o.trx_id ?? '').toLowerCase().includes(q)
     );
   });
+
+  const orderTotalPages = Math.max(1, Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE));
+  const orderSafePage = Math.min(orderPage, orderTotalPages);
+  const pagedOrders = filteredOrders.slice(
+    (orderSafePage - 1) * ORDER_PAGE_SIZE,
+    orderSafePage * ORDER_PAGE_SIZE
+  );
 
   const getOrderPricing = (order: Order) => {
     const matchingProduct = products.find((product) => product.id === order.product_id);
@@ -851,15 +886,27 @@ export default function AdminPage() {
               </button>
             </div>
 
-            <div className="relative mb-6">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-              <input
-                type="text"
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Search by product name, code, or category..."
-                className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
-              />
+            <div className="flex flex-col sm:flex-row gap-3 mb-6">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <input
+                  type="text"
+                  value={productSearch}
+                  onChange={(e) => { setProductSearch(e.target.value); setProductPage(1); }}
+                  placeholder="Search by product name, code, or category..."
+                  className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                />
+              </div>
+              <select
+                value={productCategoryFilter}
+                onChange={(e) => { setProductCategoryFilter(e.target.value); setProductPage(1); }}
+                className="border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white text-stone-700 focus:outline-none focus:ring-2 focus:ring-brand-400 sm:w-56"
+              >
+                <option value="">All Categories</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                ))}
+              </select>
             </div>
 
             {loading ? (
@@ -867,11 +914,12 @@ export default function AdminPage() {
             ) : filteredProducts.length === 0 ? (
               <div className="text-center py-20 text-stone-400">
                 <Package className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                <p>{productSearch ? 'No products match your search.' : 'No products yet. Add your first product!'}</p>
+                <p>{productSearch || productCategoryFilter ? 'No products match your search or filter.' : 'No products yet. Add your first product!'}</p>
               </div>
             ) : (
+              <>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredProducts.map((product) => {
+                {pagedProducts.map((product) => {
                   const cover = product.product_images?.[0]?.image_url
                     ?? 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400';
                   return (
@@ -921,6 +969,44 @@ export default function AdminPage() {
                   );
                 })}
               </div>
+
+              {/* Pagination */}
+              {productTotalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-8 flex-wrap">
+                  <button
+                    onClick={() => setProductPage((p) => Math.max(1, p - 1))}
+                    disabled={productSafePage === 1}
+                    className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    Prev
+                  </button>
+                  {pageNumbers(productSafePage, productTotalPages).map((n, i) =>
+                    n === '…' ? (
+                      <span key={`dots-${i}`} className="px-1 text-stone-400 text-sm">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setProductPage(n as number)}
+                        className={`min-w-[2.5rem] px-2 py-2 rounded-lg text-sm font-semibold transition-all ${
+                          n === productSafePage
+                            ? 'bg-stone-900 text-white shadow-md'
+                            : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+                  <button
+                    onClick={() => setProductPage((p) => Math.min(productTotalPages, p + 1))}
+                    disabled={productSafePage === productTotalPages}
+                    className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+              </>
             )}
           </div>
         )}
@@ -1247,7 +1333,7 @@ export default function AdminPage() {
               <input
                 type="text"
                 value={orderSearch}
-                onChange={(e) => setOrderSearch(e.target.value)}
+                onChange={(e) => { setOrderSearch(e.target.value); setOrderPage(1); }}
                 placeholder="Search by customer name, phone, product code, or TrxID..."
                 className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
               />
@@ -1259,8 +1345,9 @@ export default function AdminPage() {
                 <p>{orderSearch ? 'No orders match your search.' : 'No orders yet.'}</p>
               </div>
             ) : (
+              <>
               <div className="space-y-2" ref={orderStatusRef}>
-                {filteredOrders.map((order) => {
+                {pagedOrders.map((order) => {
                   const pricing = getOrderPricing(order);
                   return (
                     <div key={order.id} className="bg-white rounded-xl border border-stone-100 p-4">
@@ -1358,6 +1445,44 @@ export default function AdminPage() {
                   );
                 })}
               </div>
+
+              {/* Pagination */}
+              {orderTotalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-8 flex-wrap">
+                  <button
+                    onClick={() => setOrderPage((p) => Math.max(1, p - 1))}
+                    disabled={orderSafePage === 1}
+                    className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    Prev
+                  </button>
+                  {pageNumbers(orderSafePage, orderTotalPages).map((n, i) =>
+                    n === '…' ? (
+                      <span key={`dots-${i}`} className="px-1 text-stone-400 text-sm">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setOrderPage(n as number)}
+                        className={`min-w-[2.5rem] px-2 py-2 rounded-lg text-sm font-semibold transition-all ${
+                          n === orderSafePage
+                            ? 'bg-stone-900 text-white shadow-md'
+                            : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+                  <button
+                    onClick={() => setOrderPage((p) => Math.min(orderTotalPages, p + 1))}
+                    disabled={orderSafePage === orderTotalPages}
+                    className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+              </>
             )}
           </div>
         )}
@@ -1582,7 +1707,7 @@ export default function AdminPage() {
 
       {/* ── Product modal ── */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg my-4 animate-fade-in-up">
             <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
               <h3 className="font-display text-lg font-bold text-stone-900">

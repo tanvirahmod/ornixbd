@@ -1,4 +1,4 @@
-export const SITE_URL = 'https://ornixbd.com';
+export const SITE_URL = 'https://ornix.com.bd';
 export const SITE_NAME = 'ORNIX';
 export const DEFAULT_OG_IMAGE = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
 export const DEFAULT_DESCRIPTION = 'ORNIX — Modern streetwear from Bangladesh. Bold fashion, quality fabrics, nationwide delivery. Shop the latest collections online.';
@@ -36,6 +36,9 @@ export function setSEO({
 }) {
   document.title = title;
 
+  // Social crawlers require an absolute image URL
+  const absImage = image && image.startsWith('http') ? image : image ? `${SITE_URL}${image}` : DEFAULT_OG_IMAGE;
+
   if (description) {
     updateMetaTag('name', 'description', description);
   }
@@ -45,7 +48,7 @@ export function setSEO({
 
   updateMetaTag('property', 'og:title', title);
   updateMetaTag('property', 'og:description', description || DEFAULT_DESCRIPTION);
-  updateMetaTag('property', 'og:image', image || DEFAULT_OG_IMAGE);
+  updateMetaTag('property', 'og:image', absImage);
   updateMetaTag('property', 'og:url', fullUrl);
   updateMetaTag('property', 'og:type', 'website');
   updateMetaTag('property', 'og:site_name', SITE_NAME);
@@ -53,17 +56,20 @@ export function setSEO({
   updateMetaTag('name', 'twitter:card', 'summary_large_image');
   updateMetaTag('name', 'twitter:title', title);
   updateMetaTag('name', 'twitter:description', description || DEFAULT_DESCRIPTION);
-  updateMetaTag('name', 'twitter:image', image || DEFAULT_OG_IMAGE);
+  updateMetaTag('name', 'twitter:image', absImage);
 }
 
-export function setJsonLd(data: Record<string, unknown>) {
-  const existing = document.querySelector('script[type="application/ld+json"]');
-  if (existing) {
-    existing.textContent = JSON.stringify(data);
-  } else {
-    const script = document.createElement('script');
+export function setJsonLd(data: Record<string, unknown>, id = 'page-jsonld') {
+  let script = document.getElementById(id) as HTMLScriptElement | null;
+  if (!script) {
+    script = document.createElement('script');
     script.type = 'application/ld+json';
-    script.textContent = JSON.stringify(data);
+    script.id = id;
     document.head.appendChild(script);
   }
+  script.textContent = JSON.stringify(data);
+}
+
+export function removeJsonLd(id = 'page-jsonld') {
+  document.getElementById(id)?.remove();
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck, Check, Sparkles, BellRing } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck, Check, Sparkles, BellRing, Download, Loader2, MessageCircle } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
@@ -7,6 +7,8 @@ import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
 import { extractProductCode, productParam } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
+
+const WHATSAPP_NUMBER = '8801410423299'; // 01410423299 without leading 0, with country code
 
 export default function ProductPage() {
   const { t } = useLanguage();
@@ -22,6 +24,7 @@ export default function ProductPage() {
   const [quantity, setQuantity] = useState(1);
   const [sizeError, setSizeError] = useState(false);
   const [justAdded, setJustAdded] = useState(false);
+  const [savingImage, setSavingImage] = useState(false);
 
   useEffect(() => {
     async function fetchProduct() {
@@ -53,7 +56,7 @@ export default function ProductPage() {
   useEffect(() => {
     if (!product) return;
     const image = product.product_images?.[0]?.image_url || DEFAULT_OG_IMAGE;
-    const title = `${product.title} — ${SITE_NAME}`;
+    const title = `${product.title} — Buy Online at ${SITE_NAME}`;
     const description = product.description
       ? `${product.description.slice(0, 160)}...`
       : `Buy ${product.title} at ${SITE_NAME}. ৳${Number(product.price).toFixed(0)}. ${DEFAULT_DESCRIPTION}`;
@@ -64,16 +67,39 @@ export default function ProductPage() {
       '@context': 'https://schema.org',
       '@type': 'Product',
       name: product.title,
-      description: product.description,
-      image: image,
-      brand: SITE_NAME,
+      description: product.description || `Buy ${product.title} at ${SITE_NAME}.`,
+      image: product.product_images?.map((img) => img.image_url) ?? [DEFAULT_OG_IMAGE],
+      sku: product.product_code ?? product.id,
+      brand: { '@type': 'Brand', name: SITE_NAME },
       offers: {
         '@type': 'Offer',
-        price: Number(product.price).toFixed(2),
+        price: Number(product.discount_price != null && product.discount_price < product.price
+          ? product.discount_price
+          : product.price).toFixed(2),
         priceCurrency: 'BDT',
         url: `${SITE_URL}${url}`,
+        availability: (product.sizes?.length ?? 0) > 0
+          ? (product.product_sizes ?? []).some((ps) => ps.quantity > 0)
+            ? 'https://schema.org/InStock'
+            : 'https://schema.org/OutOfStock'
+          : product.stock_count > 0
+            ? 'https://schema.org/InStock'
+            : 'https://schema.org/OutOfStock',
+        itemCondition: 'https://schema.org/NewCondition',
       },
     });
+    setJsonLd({
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_URL },
+        ...(product.categories ? [{
+          '@type': 'ListItem', position: 2, name: product.categories.name,
+          item: `${SITE_URL}/collections/${product.categories.name.toLowerCase().replace(/\s+/g, '-')}`,
+        }] : []),
+        { '@type': 'ListItem', position: product.categories ? 3 : 2, name: product.title, item: `${SITE_URL}${url}` },
+      ],
+    }, 'page-breadcrumb-jsonld');
   }, [product]);
 
   const images =
@@ -99,6 +125,23 @@ export default function ProductPage() {
     window.setTimeout(() => setJustAdded(false), 2000);
   };
 
+  // Pre-filled WhatsApp order message with product name, code, size and direct link
+  const handleWhatsAppOrder = () => {
+    if (!product) return;
+    const link = `${SITE_URL}/product/${productParam(product.title, product.product_code ?? product.id)}`;
+    const lines = [
+      `Hi ${SITE_NAME}! 👋 I want to order this product:`,
+      ``,
+      `📦 ${product.title}`,
+      product.product_code ? `🔖 Code: ${product.product_code}` : '',
+      selectedSize ? `📏 Size: ${selectedSize}` : '',
+      `🔢 Quantity: ${quantity}`,
+      `🔗 ${link}`,
+    ].filter(Boolean);
+    const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(lines.join('\n'))}`;
+    window.open(url, '_blank', 'noopener');
+  };
+
   const handleBuyNow = () => {
     if (!product) return;
     if (product.sizes && product.sizes.length > 0 && !selectedSize) {
@@ -109,6 +152,33 @@ export default function ProductPage() {
     const safeQuantity = Math.max(1, Math.min(quantity, Math.max(1, limit)));
     setQuantity(safeQuantity);
     onNavigate('checkout', `${product.id}__${selectedSize ?? 'none'}__${safeQuantity}`);
+  };
+
+  // Download the currently displayed product image to the customer's device
+  const handleSaveImage = async () => {
+    const url = images[currentImageIndex]?.image_url;
+    if (!url || savingImage) return;
+    setSavingImage(true);
+    const filename = `${product?.product_code || product?.id || 'ornix-product'}-${currentImageIndex + 1}.${(url.split('?')[0].split('.').pop() || 'jpg').toLowerCase().slice(0, 5)}`;
+    try {
+      // Fetch as blob so the browser downloads the file instead of navigating
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error('fetch failed');
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      // CDN without CORS headers — open in a new tab so the user can save manually
+      window.open(url, '_blank', 'noopener');
+    } finally {
+      setSavingImage(false);
+    }
   };
 
   const prevImage = () => setCurrentImageIndex((i) => (i === 0 ? images.length - 1 : i - 1));
@@ -179,6 +249,16 @@ export default function ProductPage() {
                   {product.product_code}
                 </span>
               )}
+              <button
+                onClick={handleSaveImage}
+                title="Save this image to your device"
+                className="absolute top-4 right-4 flex items-center gap-1.5 bg-white/90 hover:bg-white backdrop-blur-sm shadow-md rounded-full px-3.5 py-2 text-xs font-semibold text-stone-700 hover:text-stone-900 transition-all duration-200 hover:scale-105"
+              >
+                {savingImage
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <Download className="w-4 h-4" />}
+                {savingImage ? 'Saving...' : 'Save Image'}
+              </button>
               {images.length > 1 && (
                 <>
                   <button
@@ -240,7 +320,7 @@ export default function ProductPage() {
               <h1 className="font-display text-2xl md:text-4xl font-bold text-stone-900 leading-tight mb-4 tracking-tight">
                 {product.title}
               </h1>
-              <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
                 {product.discount_price != null && product.discount_price < product.price ? (
                   <>
                     <span className="font-display text-2xl md:text-3xl font-bold text-brand-600">
@@ -426,6 +506,13 @@ export default function ProductPage() {
                       })}
                 </button>
               </div>
+              <button
+                onClick={handleWhatsAppOrder}
+                className="mt-3 w-full flex items-center justify-center gap-2 border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-600 hover:text-white font-bold py-3.5 rounded-2xl text-base transition-all duration-200 hover:shadow-lg hover:shadow-emerald-500/25"
+              >
+                <MessageCircle className="w-5 h-5" />
+                {t('orderOnWhatsApp')}
+              </button>
               <div className="flex items-center justify-center gap-6 mt-4 text-xs text-stone-400">
                 <span className="flex items-center gap-1.5"><Truck className="w-4 h-4" /> {t('deliveryAcrossBd')}</span>
                 <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4" /> {t('qualityAssuredShort')}</span>

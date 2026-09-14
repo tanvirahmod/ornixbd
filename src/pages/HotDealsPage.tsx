@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Tag } from 'lucide-react';
 import { supabase, Product } from '../lib/supabase';
 import ProductCard from '../components/ProductCard';
+import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 const PAGE_SIZE = 12;
 
@@ -13,6 +14,15 @@ export default function HotDealsPage() {
   const [loading, setLoading] = useState(true);
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+
+  useEffect(() => {
+    setSEO({
+      title: `Hot Deals — ${SITE_NAME}`,
+      description: `Limited-time discounts on premium streetwear at ${SITE_NAME}. Shop discounted tees, shirts and more before the offers end. ${DEFAULT_DESCRIPTION}`,
+      image: DEFAULT_OG_IMAGE,
+      url: '/hot-deals',
+    });
+  }, []);
 
   useEffect(() => {
     async function fetchPage() {

@@ -120,7 +120,8 @@ export type TranslationKey =
    | 'orderPlacedSuffix'
    | 'productUnavailableTitle'
    | 'productUnavailableBody'
-   | 'productUnavailableThanks';
+   | 'productUnavailableThanks'
+   | 'orderOnWhatsApp';
 
 interface TranslationMap {
   [key: string]: string;
@@ -250,6 +251,7 @@ const en: TranslationMap = {
   productUnavailableBody:
     "This piece is fully stocked out right now, but it's not gone for good. Once we bring it back, you'll be able to order it right here — first come, first served.",
   productUnavailableThanks: 'Thank you for staying with Ornix 💛',
+  orderOnWhatsApp: 'Order on WhatsApp',
 };
 
 const bn: TranslationMap = {
@@ -376,6 +378,7 @@ const bn: TranslationMap = {
   productUnavailableBody:
     'এই পণ্যটির স্টক এই মুহূর্তে শেষ, তবে এটি আর ফিরে আসবে না ভাববেন না। আমরা যেই মুহূর্তে এটি ফিরিয়ে আনব, সেই মুহূর্তেই আপনি এখান থেকে অর্ডার করতে পারবেন — আগে এলে আগে পাবেন।',
   productUnavailableThanks: 'Ornix-এর সাথে থাকার জন্য ধন্যবাদ 💛',
+  orderOnWhatsApp: 'WhatsApp-এ অর্ডার করুন',
 };
 
 export const translations: Record<Language, TranslationMap> = {
