@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin
+   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer
 } from 'lucide-react';
 import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon } from '../lib/supabase';
 import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
 import { zoneForDistrict, type DeliveryZone } from '../components/ZoneSelect';
+import { printLabels } from '../lib/parcelLabel';
 import { verifyAdmin } from '../lib/adminCredentials';
 import { useNavigation } from '../lib/navigation';
 
@@ -235,6 +236,10 @@ export default function AdminPage() {
 
   // ── Steadfast courier rates per delivery zone ──
   const [steadfastRates, setSteadfastRates] = useState({ dhaka_city: '60', dhaka_suburban: '110', outside_dhaka: '130' });
+  const [merchantId, setMerchantId] = useState('');
+  const [labelFrom, setLabelFrom] = useState('');
+  const [labelTo, setLabelTo] = useState('');
+  const [printingLabels, setPrintingLabels] = useState<string | null>(null); // 'bulk' | order id
   const [steadfastSaving, setSteadfastSaving] = useState(false);
 
   // ── Toasts ──
@@ -300,6 +305,55 @@ export default function AdminPage() {
       (o.trx_id ?? '').toLowerCase().includes(q)
     );
   });
+
+  // ── Parcel label printing (Steadfast-style stickers) ──
+  const ordersForLabels = () =>
+    orders
+      .filter((o) => o.tracking_code && o.status !== 'canceled')
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+
+  const labelCount = ordersForLabels().length;
+
+  const ordersInDateRange = (from: string, to: string) => {
+    const fromTs = from ? new Date(`${from}T00:00:00`).getTime() : null;
+    const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : null;
+    return ordersForLabels().filter((o) => {
+      const ts = new Date(o.created_at).getTime();
+      return (fromTs == null || ts >= fromTs) && (toTs == null || ts <= toTs);
+    });
+  };
+
+  const dayOffsetISO = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+
+  const handlePrintLabels = async (list: Order[], label: string) => {
+    if (list.length === 0) {
+      showToast('info', 'No booked parcels in that selection.');
+      return;
+    }
+    setPrintingLabels('bulk');
+    try {
+      await printLabels(list, merchantId.trim() || null);
+      showToast('success', `Sent ${list.length} label${list.length === 1 ? '' : 's'} to the print dialog (${label}).`);
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Printing failed.');
+    }
+    setPrintingLabels(null);
+  };
+
+  const handlePrintOrderLabel = async (order: Order) => {
+    setPrintingLabels(order.id);
+    try {
+      await printLabels([order], merchantId.trim() || null);
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Printing failed.');
+    }
+    setPrintingLabels(null);
+  };
 
   const orderTotalPages = Math.max(1, Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE));
   const orderSafePage = Math.min(orderPage, orderTotalPages);
@@ -516,6 +570,8 @@ export default function AdminPage() {
         }
         return next;
       });
+      const merchantSetting = settings.find((s) => s.key === 'steadfast_merchant_id');
+      setMerchantId(merchantSetting?.value ?? '');
     }
     setLoading(false);
   }
@@ -797,13 +853,19 @@ export default function AdminPage() {
     const total = order.total_amount != null ? Number(order.total_amount) : null;
     const codAmount = Math.max(0, due ?? total ?? 0);
 
+    // Maps onto the Steadfast app's "New consignment" form:
+    // required = phone, name, address, COD · optional = invoice, note.
+    // App-only fields (area, alt phone, email, weight, item description,
+    // exchange toggle) are unsupported by the API → ignored.
+    const sizePart = order.selected_size ? ` (Size ${order.selected_size})` : '';
+    const qtyPart = order.quantity > 1 ? ` × ${order.quantity}` : '';
     const result = await createSteadfastConsignment({
-      invoice: order.id.slice(0, 12),
+      invoice: order.order_code || order.id.slice(0, 12),
       recipient_name: order.customer_name || 'Customer',
       recipient_phone: order.customer_phone,
       recipient_address: order.customer_address,
       cod_amount: codAmount,
-      note: order.product_title,
+      note: `${order.product_title}${sizePart}${qtyPart}`,
     });
 
     if (result.ok && result.trackingCode) {
@@ -1142,6 +1204,7 @@ export default function AdminPage() {
       { key: 'steadfast_rate_dhaka_city', label: 'Steadfast Rate — Inside Dhaka', description: 'Courier charge (৳) for orders delivered inside Dhaka City.', value: steadfastRates.dhaka_city },
       { key: 'steadfast_rate_dhaka_suburban', label: 'Steadfast Rate — Dhaka Suburban', description: 'Courier charge (৳) for Dhaka Suburban areas (Gazipur, Narayanganj, Savar, etc.).', value: steadfastRates.dhaka_suburban },
       { key: 'steadfast_rate_outside_dhaka', label: 'Steadfast Rate — Outside Dhaka', description: 'Courier charge (৳) for deliveries outside Dhaka and its suburbs.', value: steadfastRates.outside_dhaka },
+      { key: 'steadfast_merchant_id', label: 'Steadfast Merchant ID', description: 'Shown on printed parcel labels (e.g. 8JFK3PPH). Find it in your Steadfast merchant dashboard.', value: merchantId.trim() },
     ];
     const errors: string[] = [];
     for (const entry of entries) {
@@ -1913,6 +1976,61 @@ export default function AdminPage() {
               </div>
             )}
 
+            {/* Bulk parcel label printing */}
+            {labelCount > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-4 mb-6">
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <Printer className="w-3.5 h-3.5" /> Print parcel labels ({labelCount} booked)
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() => void handlePrintLabels(ordersInDateRange(dayOffsetISO(0), dayOffsetISO(0)), 'today')}
+                      disabled={printingLabels === 'bulk'}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 border border-stone-200 px-3 py-1.5 rounded-full disabled:opacity-60 transition-all"
+                    >
+                      Today's labels
+                    </button>
+                    <button
+                      onClick={() => void handlePrintLabels(ordersInDateRange(dayOffsetISO(-1), dayOffsetISO(-1)), 'yesterday')}
+                      disabled={printingLabels === 'bulk'}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 border border-stone-200 px-3 py-1.5 rounded-full disabled:opacity-60 transition-all"
+                    >
+                      Yesterday's labels
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-end gap-2 flex-wrap">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-500 mb-1">From</label>
+                    <input
+                      type="date"
+                      value={labelFrom}
+                      onChange={(e) => setLabelFrom(e.target.value)}
+                      className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-500 mb-1">To</label>
+                    <input
+                      type="date"
+                      value={labelTo}
+                      onChange={(e) => setLabelTo(e.target.value)}
+                      className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <button
+                    onClick={() => void handlePrintLabels(ordersInDateRange(labelFrom, labelTo), `${labelFrom || 'start'} → ${labelTo || 'now'}`)}
+                    disabled={printingLabels === 'bulk'}
+                    className="flex items-center gap-1.5 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold text-sm px-4 py-2 rounded-xl transition-all shadow-sm"
+                  >
+                    {printingLabels === 'bulk' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                    Print range ({ordersInDateRange(labelFrom, labelTo).length})
+                  </button>
+                </div>
+              </div>
+            )}
+
             {filteredOrders.length === 0 ? (
               <EmptyState
                 icon={<ShoppingBag className="w-6 h-6" />}
@@ -2068,6 +2186,17 @@ export default function AdminPage() {
                             >
                               Track ↗
                             </a>
+                            <button
+                              onClick={() => void handlePrintOrderLabel(order)}
+                              disabled={printingLabels === order.id}
+                              title="Print the Steadfast parcel sticker for this order"
+                              className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                            >
+                              {printingLabels === order.id
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                : <Printer className="w-3.5 h-3.5" />}
+                              Print label
+                            </button>
                           </>
                         ) : order.status === 'canceled' ? (
                           <span className="text-xs text-stone-400">Not booked with Steadfast</span>
@@ -2578,6 +2707,17 @@ export default function AdminPage() {
                      <p className="text-xs text-stone-400 mt-1">{z.hint}{steadfastRates[z.key] === '' ? ` — defaults to ৳${z.fallback} if left blank` : ''}</p>
                    </div>
                  ))}
+                 <div>
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Merchant ID</label>
+                   <input
+                     type="text"
+                     value={merchantId}
+                     onChange={(e) => setMerchantId(e.target.value)}
+                     placeholder="e.g. 8JFK3PPH"
+                     className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-brand-400"
+                   />
+                   <p className="text-xs text-stone-400 mt-1">Printed on parcel labels ("Merchant ID: …"). Find it in your Steadfast merchant dashboard or on any old sticker.</p>
+                 </div>
                  <button onClick={handleSaveSteadfastRates} disabled={steadfastSaving}
                    className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
                    {steadfastSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}

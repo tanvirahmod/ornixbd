@@ -212,6 +212,7 @@ export default function Navbar() {
 
   const navLinks = [
     { label: 'HOME', page: 'home' as const },
+    { label: 'SHOP BY SIZE', page: 'shop-by-size' as const },
   ];
 
   // Static links that navigate outside the useNavigation() helper

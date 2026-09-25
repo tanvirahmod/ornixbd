@@ -4,9 +4,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'Plus Jakarta Sans', 'system-ui', 'sans-serif'],
-        display: ['Anton', 'Impact', 'Arial Black', 'sans-serif'],
-        body: ['Inter', 'Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+        sans: ['Inter', 'Plus Jakarta Sans', 'Noto Sans Bengali', 'system-ui', 'sans-serif'],
+        display: ['Anton', 'Impact', 'Arial Black', 'Noto Sans Bengali', 'sans-serif'],
+        body: ['Inter', 'Plus Jakarta Sans', 'Noto Sans Bengali', 'system-ui', 'sans-serif'],
       },
       colors: {
         brand: {

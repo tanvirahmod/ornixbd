@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import { LanguageScopeProvider } from './lib/LanguageContext';
 import HomePage from './pages/HomePage';
 import ShopPage from './pages/ShopPage';
 import ProductPage from './pages/ProductPage';
@@ -31,7 +32,11 @@ const router = createBrowserRouter([
       { path: 'shop-by-size/:size', element: <ShopBySizePage /> },
       { path: 'story', element: <StoryPage /> },
       { path: 'policies', element: <PolicyPage /> },
-      { path: 'checkout/:productId', element: <CheckoutPage /> },
+      { path: 'checkout/:productId', element: (
+        <LanguageScopeProvider scope="checkout">
+          <CheckoutPage />
+        </LanguageScopeProvider>
+      ) },
       { path: 'feedback', element: <FeedbackPage /> },
       { path: 'track', element: <TrackOrderPage /> },
     ],

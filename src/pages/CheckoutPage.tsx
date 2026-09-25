@@ -590,7 +590,7 @@ export default function CheckoutPage() {
           {/* Order code — the customer's tracking key */}
           {placedOrderCode && (
             <div className="bg-brand-50 border border-brand-200 rounded-2xl px-4 py-3.5 mb-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-600 mb-1">Your order code</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-600 mb-1">{t('orderCodeLabel')}</p>
               <div className="flex items-center justify-center gap-2">
                 <span className="font-mono font-bold text-xl text-stone-900 tracking-wider">{placedOrderCode}</span>
                 <button
@@ -606,7 +606,7 @@ export default function CheckoutPage() {
                   {codeCopied ? t('copiedShort') : t('copyShort')}
                 </button>
               </div>
-              <p className="text-[11px] text-brand-600/80 mt-1.5">Save this code — use it on the “Track Order” page anytime.</p>
+              <p className="text-[11px] text-brand-600/80 mt-1.5">{t('orderCodeSaveNote')}</p>
             </div>
           )}
           <div className="bg-stone-50 rounded-2xl px-4 py-3 mb-3 space-y-1.5 text-sm">
@@ -698,12 +698,18 @@ export default function CheckoutPage() {
     {
       id: 'advance' as PaymentChoice,
       icon: noAdvanceRequired ? <Banknote className="w-5 h-5" /> : <Wallet className="w-5 h-5" />,
-      title: noAdvanceRequired ? t('codOnlyTitle') : t('payDeliveryNowTitle'),
+      title: noAdvanceRequired
+        ? t('codOnlyTitle')
+        : deliveryChoice === 'pickup'
+          ? t('pickupPayTitle')
+          : t('payDeliveryNowTitle'),
       desc: noAdvanceRequired
         ? t('codOnlyDesc', { total: total.toFixed(0) })
-        : deliveryFee === 0
-          ? t('payNothingNowDesc', { due: total.toFixed(0) })
-          : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0) }),
+        : deliveryChoice === 'pickup'
+          ? t('pickupPayDesc', { amount: total.toFixed(0) })
+          : deliveryFee === 0
+            ? t('payNothingNowDesc', { due: total.toFixed(0) })
+            : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0) }),
       disabled: fullAdvanceRequired,
       advance: noAdvanceRequired ? 0 : deliveryFee,
       due: noAdvanceRequired ? total : round2(total - deliveryFee),
@@ -1177,6 +1183,10 @@ export default function CheckoutPage() {
                       </p>
                       <p className="text-sm text-emerald-700/90">{t('codOnlyDesc', { total: total.toFixed(0) })}</p>
                       <p className="text-xs text-emerald-600/80">{t('codNote')}</p>
+                    </div>
+                  ) : deliveryChoice === 'pickup' ? (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-sm text-emerald-700 font-medium">
+                      {t('pickupPayDesc', { amount: dueAmount.toFixed(0) })}
                     </div>
                   ) : (
                     <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-sm text-emerald-700 font-medium">
