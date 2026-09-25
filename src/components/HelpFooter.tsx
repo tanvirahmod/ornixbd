@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Plus, Minus, Instagram, Facebook, MapPin, Phone, Clock } from 'lucide-react';
-import { useLanguage } from '../lib/LanguageContext';
 
 interface HelpFooterProps {
   onNavigate: (page: string) => void;
@@ -113,13 +112,6 @@ const SOCIAL_LINKS = [
 ];
 
 export default function HelpFooter({ onNavigate }: HelpFooterProps) {
-  const { language, setLanguage, availableLanguages } = useLanguage();
-
-  const toggleLanguage = () => {
-    const next = language === 'en' ? 'bn' : 'en';
-    setLanguage(next);
-  };
-
   return (
     <>
       {/* ── Help / FAQ Section ── */}
@@ -246,14 +238,6 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
                 BDT ৳
               </span>
             </div>
-
-            {/* Language toggle */}
-            <button
-              onClick={toggleLanguage}
-              className="text-white/40 text-xs font-bold uppercase tracking-wider hover:text-white transition-colors"
-            >
-              {availableLanguages[language]}
-            </button>
 
             {/* Copyright */}
             <p className="text-white/35 text-xs text-center">

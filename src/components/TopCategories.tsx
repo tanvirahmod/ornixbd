@@ -1,6 +1,5 @@
 import { useCategories } from '../lib/siteConfig';
 import { slugify } from '../lib/utils';
-import { useNavigation } from '../lib/navigation';
 
 interface TopCategoriesProps {
   onNavigate: (page: string, param?: string) => void;
@@ -108,9 +107,9 @@ function CategoryCard({
       {/* Label */}
       <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-4">
         <span
-          className="block font-display text-white uppercase leading-tight"
+          className="block font-display text-white uppercase leading-tight break-words"
           style={{
-            fontSize: 'clamp(1.5rem, 5vw, 2.7rem)',
+            fontSize: 'clamp(1rem, 4.2vw, 2.7rem)',
             WebkitTextStroke: '1px #000000',
             paintOrder: 'stroke fill',
             textShadow: '0 1px 6px rgba(0,0,0,0.6)',

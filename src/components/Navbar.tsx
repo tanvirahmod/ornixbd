@@ -214,6 +214,11 @@ export default function Navbar() {
     { label: 'HOME', page: 'home' as const },
   ];
 
+  // Static links that navigate outside the useNavigation() helper
+  const extraLinks = [
+    { label: 'TRACK ORDER', onClick: () => { navigate('/track'); setMobileOpen(false); } },
+  ];
+
   return (
     <>
       {/* ── Announcement Bar — only rendered when there is active text ── */}
@@ -258,6 +263,16 @@ export default function Navbar() {
                       ? 'text-sale'
                       : 'text-black hover:text-sale'
                   }`}
+                >
+                  {link.label}
+                </button>
+              ))}
+
+              {extraLinks.map((link) => (
+                <button
+                  key={link.label}
+                  onClick={link.onClick}
+                  className="px-4 py-2 text-sm font-bold tracking-[0.15em] uppercase transition-colors duration-150 text-black hover:text-sale"
                 >
                   {link.label}
                 </button>
@@ -346,6 +361,15 @@ export default function Navbar() {
                   className={`w-full text-left px-6 py-4 text-sm font-bold tracking-[0.15em] uppercase border-b border-black/5 ${
                     currentPage === link.page ? 'text-sale' : 'text-black'
                   }`}
+                >
+                  {link.label}
+                </button>
+              ))}
+              {extraLinks.map((link) => (
+                <button
+                  key={link.label}
+                  onClick={link.onClick}
+                  className="w-full text-left px-6 py-4 text-sm font-bold tracking-[0.15em] uppercase border-b border-black/5 text-black"
                 >
                   {link.label}
                 </button>

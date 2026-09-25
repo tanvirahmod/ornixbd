@@ -85,7 +85,7 @@ export function useSiteSettings(keys: string[]) {
   return { values, loading };
 }
 
-/** Fetches all categories ordered by priority then name. */
+/** Fetches storefront-visible categories (hidden ones excluded) ordered by priority then name. */
 export function useCategories() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,6 +95,7 @@ export function useCategories() {
       const { data, error } = await supabase
         .from('categories')
         .select('*')
+        .eq('is_hidden', false)
         .order('priority', { ascending: true, nullsFirst: false })
         .order('name');
 

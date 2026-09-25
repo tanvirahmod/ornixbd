@@ -33,6 +33,8 @@ function ProductCard({
     ? Number(product.discount_price)
     : Number(product.price);
 
+  const soldOut = Number(product.stock_count) <= 0;
+
   const discountPct = hasDiscount
     ? Math.round((1 - Number(product.discount_price) / Number(product.price)) * 100)
     : 0;
@@ -58,6 +60,11 @@ function ProductCard({
         {hasDiscount && (
           <span className="absolute top-3 left-3 bg-[#D90429] text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1">
             {discountPct}% OFF
+          </span>
+        )}
+        {soldOut && (
+          <span className="absolute top-3 right-3 bg-stone-900/85 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full">
+            Sold Out
           </span>
         )}
       </button>
@@ -88,12 +95,21 @@ function ProductCard({
         </div>
 
         {/* ADD TO CART button */}
-        <button
-        onClick={() => onNavigate('product', productParam(product.title, product.product_code ?? product.id))}
-        className="mt-auto w-full flex items-center justify-center gap-2 bg-black text-white text-xs font-bold uppercase tracking-[0.18em] py-3.5 hover:bg-[#D90429] transition-all duration-200"
-        >
+        {soldOut ? (
+          <div
+            aria-disabled="true"
+            className="mt-auto w-full flex items-center justify-center gap-2 bg-stone-200 text-stone-500 text-xs font-bold uppercase tracking-[0.18em] py-3.5 cursor-not-allowed select-none"
+          >
+            Sold Out
+          </div>
+        ) : (
+          <button
+            onClick={() => onNavigate('product', productParam(product.title, product.product_code ?? product.id))}
+            className="mt-auto w-full flex items-center justify-center gap-2 bg-black text-white text-xs font-bold uppercase tracking-[0.18em] py-3.5 hover:bg-[#D90429] transition-all duration-200"
+          >
             BUY NOW
-        </button>
+          </button>
+        )}
       </div>
     </div>
   );

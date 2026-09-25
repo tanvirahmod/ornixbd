@@ -2,11 +2,10 @@ import { useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Navbar from './Navbar';
 import HelpFooter from './HelpFooter';
-import { useLanguage } from '../lib/LanguageContext';
+import WhatsAppFloat from './WhatsAppFloat';
 import { useNavigation } from '../lib/navigation';
 
 export default function Layout() {
-  const { t } = useLanguage();
   const navigateTo = useNavigation();
   const { pathname } = useLocation();
 
@@ -19,6 +18,7 @@ export default function Layout() {
       <Navbar />
       <Outlet />
       <HelpFooter onNavigate={navigateTo} />
+      <WhatsAppFloat />
     </>
   );
 }

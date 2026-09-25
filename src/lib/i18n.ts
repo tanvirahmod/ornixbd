@@ -1,5 +1,3 @@
-export type Language = 'en' | 'bn';
-
 export type TranslationKey =
   | 'brandName'
   | 'home'
@@ -84,7 +82,9 @@ export type TranslationKey =
   | 'fullNameRequired'
   | 'phoneRequired'
   | 'phoneInvalid'
+  | 'phoneInvalidBd'
   | 'addressRequired'
+  | 'addressTooShort'
   | 'bkashNumberRequired'
   | 'bkashNumberInvalid'
   | 'trxIdRequired'
@@ -120,8 +120,78 @@ export type TranslationKey =
    | 'orderPlacedSuffix'
    | 'productUnavailableTitle'
    | 'productUnavailableBody'
-   | 'productUnavailableThanks'
-   | 'orderOnWhatsApp';
+ | 'productUnavailableThanks'
+ | 'orderOnWhatsApp'
+ | 'checkoutSecure'
+ | 'stepAddress'
+ | 'stepDelivery'
+ | 'stepPayment'
+ | 'stepOf'
+ | 'addressHeading'
+ | 'addressSubtitle'
+ | 'enterYourFullName'
+ | 'phonePlaceholder'
+ | 'fullAddressPlaceholder'
+ | 'continueToDelivery'
+ | 'deliveryHeading'
+ | 'deliverySubtitle'
+ | 'recapAddress'
+ | 'recapDelivery'
+ | 'editRecap'
+ | 'homeDeliveryName'
+ | 'homeDeliveryDesc'
+ | 'courierEta'
+ | 'pickupName'
+ | 'pickupDesc'
+ | 'pickupEta'
+ | 'deliveryCallNote'
+ | 'back'
+ | 'continueToPayment'
+ | 'paymentHeading'
+ | 'payDeliveryNowTitle'
+ | 'payDeliveryNowDesc'
+ | 'payNothingNowDesc'
+ | 'payFullNowTitle'
+ | 'payFullNowDesc'
+ | 'fullAdvanceRequiredNote'
+ | 'paymentInstructionsTitle'
+ | 'sendMoneyInstruction'
+ | 'bkashPersonalLabel'
+ | 'advanceAmountLabel'
+ | 'dueOnDeliveryLabel'
+ | 'senderBkashLabel'
+ | 'senderBkashPlaceholder'
+ | 'senderBkashHint'
+ | 'codOnlyTitle'
+ | 'codOnlyDesc'
+ | 'codNote'
+ | 'codBadge'
+ | 'trustSecure'
+ | 'trustNationwide'
+ | 'trustBkashCod'
+ | 'copyShort'
+ | 'copiedShort'
+ | 'checkoutTitle'
+ | 'bdOnlyCaution'
+ | 'districtRequired'
+ | 'districtFeeHint'
+ | 'trxIdInvalid'
+ | 'agreePrefix'
+ | 'agreeTermsLink'
+ | 'agreeAnd'
+ | 'agreePrivacyLink'
+ | 'mustAgreeTerms'
+ | 'placeOrder'
+ | 'shippingRowLabel'
+ | 'couponCode'
+ | 'couponPlaceholder'
+ | 'couponApply'
+ | 'couponAppliedMsg'
+ | 'couponInvalid'
+ | 'couponExpired'
+ | 'couponMinOrder'
+ | 'couponProductsOnly'
+ | 'couponRemove';
 
 interface TranslationMap {
   [key: string]: string;
@@ -197,7 +267,9 @@ const en: TranslationMap = {
   fullNameRequired: 'Full name is required',
   phoneRequired: 'Phone number is required',
   phoneInvalid: 'Enter a valid phone number',
+  phoneInvalidBd: 'Enter a valid Bangladeshi mobile number (e.g. 01712345678)',
   addressRequired: 'Delivery address is required',
+  addressTooShort: 'Please write your full address (house, road, area, district)',
   bkashNumberRequired: 'Your bKash number is required',
   bkashNumberInvalid: 'Enter a valid bKash number',
   trxIdRequired: 'Transaction ID is required',
@@ -252,141 +324,77 @@ const en: TranslationMap = {
     "This piece is fully stocked out right now, but it's not gone for good. Once we bring it back, you'll be able to order it right here — first come, first served.",
   productUnavailableThanks: 'Thank you for staying with Ornix 💛',
   orderOnWhatsApp: 'Order on WhatsApp',
+  checkoutSecure: 'Secure checkout',
+  stepAddress: 'Address',
+  stepDelivery: 'Delivery',
+  stepPayment: 'Payment',
+  stepOf: 'Step {{current}} of {{total}}',
+  addressHeading: 'Delivery Address',
+  addressSubtitle: 'Where should we deliver your order?',
+  enterYourFullName: 'Enter your full name',
+  phonePlaceholder: '+8801721415263',
+  fullAddressPlaceholder: 'House, Road, Area, District — full delivery address',
+  continueToDelivery: 'Continue to Delivery',
+  deliveryHeading: 'Delivery Method',
+  deliverySubtitle: 'Choose how you want your order delivered.',
+  recapAddress: 'Deliver to',
+  recapDelivery: 'Delivery method',
+  editRecap: 'Edit',
+  homeDeliveryName: 'Home Delivery — Nationwide Courier',
+  homeDeliveryDesc: 'Delivered to your door anywhere in Bangladesh.',
+  courierEta: 'Inside Dhaka 1–2 days · Outside Dhaka 3–5 days',
+  pickupName: 'Store Pickup',
+  pickupDesc: 'Collect your order yourself from our pickup point.',
+  pickupEta: 'Ready within 24 hours of confirmation — no delivery fee',
+  deliveryCallNote: 'We confirm every order with a quick phone call before dispatch — please keep your phone reachable.',
+  back: 'Back',
+  continueToPayment: 'Continue to Payment',
+  paymentHeading: 'Payment',
+  payDeliveryNowTitle: 'Pay delivery fee now, rest on delivery',
+  payDeliveryNowDesc: 'Send ৳{{advance}} now via bKash, pay the remaining ৳{{due}} in cash when your parcel arrives.',
+  payNothingNowDesc: 'Nothing to pay now — just pay ৳{{due}} in cash when your parcel arrives.',
+  payFullNowTitle: 'Pay full amount in advance',
+  payFullNowDesc: 'Send the full ৳{{total}} now via bKash — nothing to pay on delivery.',
+  fullAdvanceRequiredNote: 'Orders of ৳{{threshold}} or more must be paid fully in advance.',
+  paymentInstructionsTitle: 'How to pay the advance',
+  sendMoneyInstruction: 'Send Money (not Cash Out) the advance amount to our personal bKash number below, then enter your bKash number and the TrxID from the confirmation SMS.',
+  bkashPersonalLabel: 'bKash (Personal)',
+  advanceAmountLabel: 'Send now',
+  dueOnDeliveryLabel: 'Pay on delivery',
+  senderBkashLabel: 'Your bKash number',
+  senderBkashPlaceholder: 'The number you sent money from',
+  senderBkashHint: 'Used only to verify your payment — never shared.',
+  codOnlyTitle: 'Cash on delivery — no advance',
+  codOnlyDesc: 'No bKash advance needed — just pay the full ৳{{total}} in cash when your parcel arrives.',
+  codNote: 'Payment is collected by the delivery agent at your door.',
+  codBadge: 'Cash on delivery',
+  trustSecure: 'Secure checkout',
+  trustNationwide: 'Nationwide delivery across Bangladesh',
+  trustBkashCod: 'bKash advance or cash on delivery',
+  copyShort: 'Copy',
+  copiedShort: 'Copied!',
+  checkoutTitle: 'Check Out',
+  bdOnlyCaution: 'We deliver inside Bangladesh only. Please make sure your delivery address is in Bangladesh — orders with Indian or other international addresses cannot be processed.',
+  districtRequired: 'Select your district so we can charge the correct courier fee.',
+  districtFeeHint: 'Please go back and select your district in the address step — the courier fee depends on it.',
+  trxIdInvalid: 'Enter the TrxID from your bKash confirmation SMS',
+  agreePrefix: 'I agree to the',
+  agreeTermsLink: 'Terms & Conditions',
+  agreeAnd: 'and',
+  agreePrivacyLink: 'Privacy Policy',
+  mustAgreeTerms: 'Please accept the terms to place your order',
+  placeOrder: 'Place Order',
+  shippingRowLabel: 'Shipping',
+  couponCode: 'Coupon code',
+  couponPlaceholder: 'Enter code',
+  couponApply: 'Apply',
+  couponAppliedMsg: '{{code}} applied — you saved ৳{{amount}}',
+  couponInvalid: 'This coupon code is not valid',
+  couponExpired: 'This coupon has expired',
+  couponMinOrder: 'This coupon needs a minimum order of ৳{{amount}}',
+  couponProductsOnly: 'Only valid for: {{codes}}',
+  couponRemove: 'Remove coupon',
 };
 
-const bn: TranslationMap = {
-  brandName: 'Ornix',
-  home: 'হোম',
-  shop: 'পণ্য',
-  feedback: 'ফিডব্যাক',
-  madeInBangladesh: 'বাংলাদেশে তৈরি',
-  wearYourStory: 'ফ্যাশনে আসুক আভিজাত্য, পোশাকে প্রকাশ পাক আপনার গল্প।',
-  premiumFashion:
-    'বাংলাদেশে তৈরি প্রিমিয়াম ফ্যাশন ব্র্যান্ড এখন আপনার হাতের মুঠোয়। আমরা বিশ্বাস করি ফ্যাশন মানে শুধু পোশাক নয়, ফ্যাশন হলো আপনার ব্যক্তিত্বের প্রকাশ।',
-  shopCollection: 'কালেকশন',
-  explore: 'ব্রাউজ করুন',
-  freeDelivery: '৳১০০০-এর বেশি অর্ডারে ফ্রি ডেলিভারি',
-  qualityGuaranteed: 'মান নিশ্চয়তা',
-  bkashPayment: 'bKash পেমেন্ট',
-  allProducts: 'সব পণ্য',
-  discountedProducts: 'ডিসকাউন্টেড পণ্য',
-  discountedProductsSubtitle: 'ডিসকাউন্ট দেওয়া পণ্যগুলো স্বয়ংক্রিয়ভাবে আপডেট হবে।',
-  newArrivals: 'নতুন আগমন',
-  newArrivalsSubtitle: 'নতুন পণ্য যোগ করলে এখানে স্বয়ংক্রিয়ভাবে দেখানো হবে।',
-  noDiscountedProducts: 'এই মুহূর্তে কোন ডিসকাউন্টেড পণ্য নেই।',
-  noNewArrivals: 'এখনও কোন নতুন আগমন নেই। দয়া করে পরে আবার দেখুন।',
-  itemsCountOne: '১ টি পণ্য',
-  itemsCountMany: '{{count}} টি পণ্য',
-  searchPlaceholder: 'পণ্যের নাম বা কোড দিয়ে সন্ধান করুন...',
-  all: 'সব',
-  noProductsFound: 'কোন পণ্য পাওয়া যায়নি',
-  noProductsMatchSearch: 'আপনার অনুসন্ধানে কোন পণ্য মেলে না। ভিন্ন কীওয়ার্ড ব্যবহার করুন।',
-  noProductsInCategory: 'এই ক্যাটাগরিতে এখনও কোন পণ্য নেই।',
-  checkBackSoon: 'শীঘ্রই নতুন আগমনের জন্য আবার দেখুন।',
-  viewAllProducts: 'সব পণ্য দেখুন',
-  productNotFound: 'পণ্য পাওয়া যায়নি।',
-  backToHome: 'হোমে ফিরে যান',
-  selectSize: 'সাইজ নির্বাচন করুন',
-  onlyLeft: 'শুধুমাত্র {{count}} টি বাকি!',
-  inStock: '{{count}} টি স্টকে আছে',
-  outOfStock: 'স্টকে নেই',
-  description: 'বর্ণনা',
-  deliveryAcrossBangladesh: 'সারা বাংলাদেশে ডেলিভারি',
-  qualityAssured: 'গুণগত মান নিশ্চিত',
-  buyNowPrice: 'এখন কিনুন — ৳{{price}}',
-  checkout: 'চেকআউট',
-  completeYourOrder: 'আপনি এর অর্ডার সম্পূর্ণ করুন',
-  orderSummary: 'অর্ডার সারসংক্ষেপ',
-  productPrice: 'পণ্যের মূল্য',
-  discount: 'ডিসকাউন্ট',
-  deliveryFee: 'ডেলিভারি ফি',
-  totalToPay: 'মোট পরিশোধ',
-  yourDetails: 'আপনার বিবরণ',
-  fullName: 'পুরো নাম',
-  phoneNumber: 'ফোন নম্বর',
-  deliveryAddress: 'ডেলিভারির ঠিকানা',
-  bkashPaymentHeading: 'bKash পেমেন্ট',
-  bkashPaymentInstruction:
-    'অনুগ্রহ করে আগাম Tk 150 আমাদের bKash পার্সোনাল নম্বরে {{bkashNumber}} পাঠিয়ে, নিচে আপনার bKash নম্বর এবং TrxID (ট্রানজেকশন আইডি) লিখে অর্ডার নিশ্চিত করুন।',
-  yourBkashNumber: 'আপনার bKash নম্বর',
-  transactionId: 'ট্রানজেকশন আইডি (TrxID)',
-  placingOrder: 'অর্ডার করা হচ্ছে...',
-  confirmOrder: 'অর্ডার নিশ্চিত করুন',
-  infoSecure: 'আপনার তথ্য নিরাপদ',
-  orderPlaced: 'অর্ডার সফল হয়েছে!',
-  thankYou: 'ধন্যবাদ, {{name}}!',
-  weWillContact: 'আপনার অর্ডার নিশ্চিত করতে আমরা {{phone}}-এ যোগাযোগ করব।',
-  continueShopping: 'কেনাকাটা চালিয়ে যান',
-  messageSent: 'বার্তা প্রেরিত!',
-  feedbackReceived: 'আমরা আপনার ফিডব্যাক পেয়েছি এবং শীঘ্রই আপনাকে জানাব।',
-  backToProduct: 'পণ্যের কাছে ফিরে যান',
-  admin: 'অ্যাডমিন',
-  fullNameRequired: 'পুরো নাম প্রয়োজন',
-  phoneRequired: 'ফোন নম্বর প্রয়োজন',
-  phoneInvalid: 'একটি বৈধ ফোন নম্বর লিখুন',
-  addressRequired: 'ডেলিভারির ঠিকানা প্রয়োজন',
-  bkashNumberRequired: 'আপনার bKash নম্বর প্রয়োজন',
-  bkashNumberInvalid: 'একটি বৈধ bKash নম্বর লিখুন',
-  trxIdRequired: 'ট্রানজেকশন আইডি প্রয়োজন',
-  sendUsFeedback: 'ফিডব্যাক পাঠান',
-  feedbackSubtitle: 'কোন প্রশ্ন, পরামর্শ বা অভিযোগ আছে? আপনার মতামত আমরা শুনতে চাই।',
-  yourName: 'আপনার নাম',
-  email: 'ই-মেইল',
-  message: 'বার্তা',
-  writeYourMessageHere: 'এখানে আপনার বার্তা লিখুন...',
-  securityCheck: 'সিকিউরিটি চেক',
-  newCaptcha: 'নতুন ক্যাপচা',
-  sendFeedback: 'ফিডব্যাক পাঠান',
-  sending: 'পাঠানো হচ্ছে...',
-  backToStore: 'দোকানে ফিরে যান',
-  nameRequired: 'আপনার নাম আবশ্যক',
-  emailRequired: 'ই-মেইল আবশ্যক',
-  enterValidEmail: 'সঠিক ই-মেইল লিখুন',
-  messageRequired: 'অনুগ্রহ করে বার্তা লিখুন',
-  messageTooShort: 'বার্তা খুব ছোট',
-  captchaRequired: 'অনুগ্রহ করে ক্যাপচা সমাধান করুন',
-  wrongCaptcha: 'ভুল উত্তর, আবার চেষ্টা করুন',
-  somethingWentWrong: 'কোথাও ত্রুটি হয়েছে। আবার চেষ্টা করুন।',
-  productPageDescriptionTitle: 'বর্ণনা',
-  deliveryAcrossBd: 'সারা বাংলাদেশে ডেলিভারি',
-  qualityAssuredShort: 'গুণগত মান নিশ্চিত',
-  homeBreadcrumb: 'হোম',
-  addToCart: 'এখন কিনুন — ৳{{price}}',
-  collections: 'কালেকশন',
-  newestArrivals: 'নতুন আগমন',
-  priceLowToHigh: 'মূল্য: কম থেকে বেশি',
-  priceHighToLow: 'মূল্য: বেশি থেকে কম',
-  categoryNotFound: 'ক্যাটাগরি পাওয়া যায়নি',
-  backToCollections: 'কালেকশনে ফিরে যান',
-  seeAll: 'সব দেখুন',
-  addToCartButton: 'কার্টে যোগ করুন',
-  addedToCart: 'কার্টে যোগ হয়েছে ✓',
-  cartTitle: 'আপনার কার্ট',
-  cartEmpty: 'আপনার কার্ট খালি',
-  cartEmptySubtitle: 'আমাদের কালেকশন দেখুন এবং পছন্দের পণ্য যোগ করুন।',
-  clearCart: 'কার্ট খালি করুন',
-  removeItem: 'পণ্য সরান',
-  subtotal: 'সাবটোটাল',
-  freeDeliveryShort: 'ফ্রি',
-  proceedToCheckout: 'চেকআউট করুন',
-  sizeLabel: 'সাইজ',
-  qtyLabel: 'পরিমাণ',
-  increaseQuantity: 'পরিমাণ বাড়ান',
-  decreaseQuantity: 'পরিমাণ কমান',
-  orderPlacedSuffix: 'সফলভাবে অর্ডার হয়েছে',
-  productUnavailableTitle: 'স্টক শেষ — খুব শীঘ্রই আসছে!',
-  productUnavailableBody:
-    'এই পণ্যটির স্টক এই মুহূর্তে শেষ, তবে এটি আর ফিরে আসবে না ভাববেন না। আমরা যেই মুহূর্তে এটি ফিরিয়ে আনব, সেই মুহূর্তেই আপনি এখান থেকে অর্ডার করতে পারবেন — আগে এলে আগে পাবেন।',
-  productUnavailableThanks: 'Ornix-এর সাথে থাকার জন্য ধন্যবাদ 💛',
-  orderOnWhatsApp: 'WhatsApp-এ অর্ডার করুন',
-};
-
-export const translations: Record<Language, TranslationMap> = {
-  en,
-  bn,
-};
-
-export const supportedLanguages: Record<Language, string> = {
-  en: 'English',
-  bn: 'বাংলা',
-};
+// Single-language site: English only.
+export const translations: TranslationMap = en;

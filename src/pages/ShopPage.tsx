@@ -28,7 +28,7 @@ export default function ShopPage() {
           .select('*, product_images(id, image_url, display_order), categories(id, name, created_at)')
           .order('created_at', { ascending: false })
           .limit(48),
-        supabase.from('categories').select('*').order('priority', { ascending: true, nullsFirst: false }).order('name'),
+        supabase.from('categories').select('*').eq('is_hidden', false).order('priority', { ascending: true, nullsFirst: false }).order('name'),
       ]);
 
       if (prodRes.data) {

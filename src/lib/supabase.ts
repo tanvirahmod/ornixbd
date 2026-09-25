@@ -11,6 +11,7 @@ export type Category = {
   background_image: string | null;
   priority: number | null;
   show_in_stock: boolean;
+  is_hidden: boolean;
   created_at: string;
 };
 
@@ -42,6 +43,7 @@ export type Product = {
   sizes: string[];
   stock_count: number;
   category_id: string | null;
+  advance_optional: boolean;
   created_at: string;
   product_images?: ProductImage[];
   categories?: Category | null;
@@ -66,6 +68,7 @@ export type OrderStatus = 'pending' | 'delivered' | 'canceled';
 
 export type Order = {
   id: string;
+  order_code: string | null;
   product_id: string | null;
   product_title: string;
   product_code: string | null;
@@ -76,8 +79,35 @@ export type Order = {
   customer_address: string;
   bkash_number: string | null;
   trx_id: string | null;
+  subtotal: number | null;
+  delivery_fee: number | null;
+  discount_amount: number | null;
+  total_amount: number | null;
+  coupon_code: string | null;
+  payment_method: string | null;
+  advance_amount: number | null;
+  due_amount: number | null;
+  courier_name: string | null;
+  delivery_zone: string | null;
+  tracking_code: string | null;
+  /** Latest Steadfast delivery status fetched on the fly (not persisted). */
+  steadfast_status?: string | null;
   delivered: boolean;
   status: OrderStatus;
+  created_at: string;
+};
+
+export type Coupon = {
+  id: string;
+  code: string;
+  discount_type: 'percent' | 'fixed';
+  value: number;
+  min_order_amount: number | null;
+  max_uses: number | null;
+  times_used: number | null;
+  is_active: boolean;
+  product_codes: string[] | null;
+  expires_at: string | null;
   created_at: string;
 };
 

@@ -9,21 +9,27 @@ interface ProductCardProps {
 export default function ProductCard({ product }: ProductCardProps) {
   const hasDiscount = product.discount_price != null && Number(product.discount_price) < Number(product.price);
   const price = hasDiscount ? Number(product.discount_price) : Number(product.price);
+  const soldOut = Number(product.stock_count) <= 0;
   const href = `/product/${productParam(product.title, product.product_code ?? product.id)}`;
 
   return (
     <div className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden">
       <Link to={href} className="block">
-        <div className="aspect-[3/4] bg-stone-100 overflow-hidden">
+        <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
           <img
             src={getCoverImage(product)}
             alt={product.title}
-            className="w-full h-full object-cover hover:scale-105 transition-transform duration-500"
+            className={`w-full h-full object-cover hover:scale-105 transition-transform duration-500 ${soldOut ? 'opacity-60' : ''}`}
             loading="lazy"
             onError={(e) => {
               (e.target as HTMLImageElement).src = COVER_FALLBACK;
             }}
           />
+          {soldOut && (
+            <span className="absolute top-3 left-3 bg-stone-900/85 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full">
+              Sold Out
+            </span>
+          )}
         </div>
       </Link>
       <div className="p-4">
@@ -48,12 +54,21 @@ export default function ProductCard({ product }: ProductCardProps) {
             </span>
           )}
         </div>
-        <Link
-          to={href}
-          className="w-full flex items-center justify-center bg-black text-white font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] hover:bg-stone-800 transition-colors"
-        >
-          BUY NOW
-        </Link>
+        {soldOut ? (
+          <div
+            aria-disabled="true"
+            className="w-full flex items-center justify-center bg-stone-200 text-stone-500 font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] cursor-not-allowed select-none"
+          >
+            Sold Out
+          </div>
+        ) : (
+          <Link
+            to={href}
+            className="w-full flex items-center justify-center bg-black text-white font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] hover:bg-stone-800 transition-colors"
+          >
+            BUY NOW
+          </Link>
+        )}
       </div>
     </div>
   );

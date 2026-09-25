@@ -50,10 +50,11 @@ export default function BrandBio({ onNavigate }: BrandBioProps) {
         </button>
 
         {/* Stats row */}
-        <div className="mt-16 grid grid-cols-3 gap-6 border-t border-white/10 pt-12">
+        <div className="mt-16 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-6 border-t border-white/10 pt-12">
           {[
-            { value: '500+', label: 'Products Delivered' },
+            { value: '10K+', label: 'Products Delivered' },
             { value: '100%', label: 'Quality Assured' },
+            { value: '3–4 Days', label: 'Delivery Time' },
             { value: 'BD', label: 'Made in Bangladesh' },
           ].map((stat) => (
             <div key={stat.label} className="text-center">
@@ -63,7 +64,7 @@ export default function BrandBio({ onNavigate }: BrandBioProps) {
               >
                 {stat.value}
               </p>
-              <p className="text-white/40 text-xs font-semibold tracking-[0.2em] uppercase mt-1">
+              <p className="text-white/40 text-[10px] sm:text-xs font-semibold tracking-[0.2em] uppercase mt-1 break-words">
                 {stat.label}
               </p>
             </div>

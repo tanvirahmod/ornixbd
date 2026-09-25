@@ -13,6 +13,7 @@ import FeedbackPage from './pages/FeedbackPage';
 import SingleCollectionPage from './pages/SingleCollectionPage';
 import NewArrivalsPage from './pages/NewArrivalsPage';
 import HotDealsPage from './pages/HotDealsPage';
+import TrackOrderPage from './pages/TrackOrderPage';
 
 const router = createBrowserRouter([
   {
@@ -32,6 +33,7 @@ const router = createBrowserRouter([
       { path: 'policies', element: <PolicyPage /> },
       { path: 'checkout/:productId', element: <CheckoutPage /> },
       { path: 'feedback', element: <FeedbackPage /> },
+      { path: 'track', element: <TrackOrderPage /> },
     ],
   },
   {

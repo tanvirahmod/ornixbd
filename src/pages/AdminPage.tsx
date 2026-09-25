@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle
+   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin
 } from 'lucide-react';
-import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting } from '../lib/supabase';
+import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon } from '../lib/supabase';
+import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
+import { zoneForDistrict, type DeliveryZone } from '../components/ZoneSelect';
 import { verifyAdmin } from '../lib/adminCredentials';
 import { useNavigation } from '../lib/navigation';
 
-type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'feedback' | 'settings';
+type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'coupons' | 'feedback' | 'settings';
 type ModalMode = 'add' | 'edit';
 
 // Compact page list for pagination: 1 … 4 5 6 … 12
@@ -35,7 +37,96 @@ const EMPTY_FORM = {
   stock_count: '',
   category_id: '',
   product_code: '',
+  advance_optional: false,
 };
+
+// True when every ordered line item is a no-advance (pure cash on delivery) product
+const allNoAdvance = (codes: Array<string | null>, products: Product[]) => {
+  const set = new Set(products.filter((p) => p.advance_optional).map((p) => (p.product_code ?? '').toUpperCase()));
+  return codes.length > 0 && codes.every((c) => c && set.has(c.toUpperCase()));
+};
+
+// Pill colors per order status (used on order cards)
+const ORDER_STATUS_PILL: Record<OrderStatus, string> = {
+  pending: 'bg-amber-50 text-amber-600 border border-amber-200',
+  delivered: 'bg-emerald-50 text-emerald-600 border border-emerald-200',
+  canceled: 'bg-red-50 text-red-600 border border-red-200',
+};
+
+// Small uppercase field label used inside order detail cards
+const ORD_LBL = 'text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-0.5';
+
+// Steadfast pipeline stages shown on order cards (must match steadfast.ts)
+const STEADFAST_STAGE_ORDER: SteadfastStage[] = ['booked', 'in_review', 'picked_up', 'in_transit', 'delivered'];
+const STEADFAST_STAGE_LABELS: Record<SteadfastStage, string> = {
+  booked: 'Booked',
+  in_review: 'In review',
+  picked_up: 'Picked up',
+  in_transit: 'In transit',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+};
+
+// ── Toast system (replaces window.alert) ──
+type Toast = { id: number; kind: 'success' | 'error' | 'info'; text: string };
+let toastSeq = 0;
+
+function ToastStack({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
+  return (
+    <div className="fixed bottom-5 right-5 z-[60] flex flex-col gap-2 items-end pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          role="status"
+          className={`pointer-events-auto flex items-start gap-2.5 max-w-sm w-full sm:w-96 bg-white rounded-xl shadow-lg border px-4 py-3 animate-fade-in-up ${
+            t.kind === 'success'
+              ? 'border-emerald-200'
+              : t.kind === 'error'
+                ? 'border-red-200'
+                : 'border-stone-200'
+          }`}
+        >
+          <span
+            className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5 ${
+              t.kind === 'success'
+                ? 'bg-emerald-100 text-emerald-600'
+                : t.kind === 'error'
+                  ? 'bg-red-100 text-red-500'
+                  : 'bg-stone-100 text-stone-500'
+            }`}
+          >
+            {t.kind === 'success' ? (
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            ) : t.kind === 'error' ? (
+              <AlertCircle className="w-3.5 h-3.5" />
+            ) : (
+              <AlertTriangle className="w-3.5 h-3.5" />
+            )}
+          </span>
+          <p className="flex-1 text-sm text-stone-700 leading-snug break-words">{t.text}</p>
+          <button
+            onClick={() => onDismiss(t.id)}
+            className="flex-shrink-0 text-stone-300 hover:text-stone-500 transition-colors"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Consistent empty state used across tabs
+function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
+  return (
+    <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-stone-200">
+      <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-stone-50 text-stone-300 flex items-center justify-center">{icon}</div>
+      <p className="text-stone-500 font-medium">{title}</p>
+      {hint && <p className="text-stone-400 text-sm mt-1">{hint}</p>}
+    </div>
+  );
+}
 
 export default function AdminPage() {
   const onNavigate = useNavigation();
@@ -61,6 +152,7 @@ export default function AdminPage() {
   const [formError, setFormError] = useState('');
   const [sizeQuantities, setSizeQuantities] = useState<Record<string, string>>({});
 
+  const [catHidden, setCatHidden] = useState(false);
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [catModalMode, setCatModalMode] = useState<ModalMode>('add');
   const [editingCat, setEditingCat] = useState<Category | null>(null);
@@ -82,6 +174,8 @@ export default function AdminPage() {
   const [stockCatSaving, setStockCatSaving] = useState<string | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [orderPage, setOrderPage] = useState(1);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [deliveryStageFilter, setDeliveryStageFilter] = useState<'all' | SteadfastStage | 'not_booked'>('all');
   const ORDER_PAGE_SIZE = 15;
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Order[]>([]);
@@ -93,6 +187,36 @@ export default function AdminPage() {
   const [feedbackSearch, setFeedbackSearch] = useState('');
   const [expandedFeedback, setExpandedFeedback] = useState<string | null>(null);
   const [deleteFeedbackConfirm, setDeleteFeedbackConfirm] = useState<string | null>(null);
+  const [cancelOrderConfirm, setCancelOrderConfirm] = useState<string | null>(null);
+  const [deleteOrderConfirm, setDeleteOrderConfirm] = useState<string | null>(null);
+  const [deletingOrder, setDeletingOrder] = useState<string | null>(null);
+
+  // ── Steadfast courier booking ──
+  const [sendingToSteadfast, setSendingToSteadfast] = useState<string | null>(null);
+  const [checkingSteadfast, setCheckingSteadfast] = useState<string | null>(null);
+  const [bulkChecking, setBulkChecking] = useState(false);
+
+  // ── Coupons ──
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [couponsUnavailable, setCouponsUnavailable] = useState(false);
+  const [couponSearch, setCouponSearch] = useState('');
+  const [couponModalOpen, setCouponModalOpen] = useState(false);
+  const [couponModalMode, setCouponModalMode] = useState<ModalMode>('add');
+  const [editingCoupon, setEditingCoupon] = useState<Coupon | null>(null);
+  const [couponForm, setCouponForm] = useState({
+    code: '',
+    discount_type: 'percent' as 'percent' | 'fixed',
+    value: '',
+    min_order_amount: '',
+    max_uses: '',
+    expires_at: '',
+    is_active: true,
+  });
+  const [couponSaving, setCouponSaving] = useState(false);
+  const [couponError, setCouponError] = useState('');
+  const [deleteCouponConfirm, setDeleteCouponConfirm] = useState<string | null>(null);
+  const [couponProductCodes, setCouponProductCodes] = useState<string[]>([]);
+  const [couponCodeInput, setCouponCodeInput] = useState('');
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [annModalOpen, setAnnModalOpen] = useState(false);
@@ -108,6 +232,27 @@ export default function AdminPage() {
   const [heroBgMobileImage, setHeroBgMobileImage] = useState('');
   const [heroBgSaving, setHeroBgSaving] = useState(false);
   const [heroBgError, setHeroBgError] = useState('');
+
+  // ── Steadfast courier rates per delivery zone ──
+  const [steadfastRates, setSteadfastRates] = useState({ dhaka_city: '60', dhaka_suburban: '110', outside_dhaka: '130' });
+  const [steadfastSaving, setSteadfastSaving] = useState(false);
+
+  // ── Toasts ──
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const showToast = (kind: Toast['kind'], text: string) => {
+    const id = ++toastSeq;
+    setToasts((prev) => [...prev.slice(-3), { id, kind, text }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  };
+  const dismissToast = (id: number) => setToasts((prev) => prev.filter((t) => t.id !== id));
+
+  // ── Dashboard at-a-glance stats ──
+  const pendingOrders = orders.filter((o) => o.status === 'pending').length;
+  const deliveredOrders = orders.filter((o) => o.status === 'delivered').length;
+  const canceledOrders = orders.filter((o) => o.status === 'canceled').length;
+  const lowStockCount = products.filter((p) => p.stock_count <= 5).length;
 
   const filteredProducts = products.filter((p) => {
     if (productCategoryFilter && p.category_id !== productCategoryFilter) return false;
@@ -127,7 +272,23 @@ export default function AdminPage() {
     productSafePage * PRODUCT_PAGE_SIZE
   );
 
+  // ── Steadfast delivery pipeline counts (booked → in review → picked up → in transit → delivered) ──
+  const stageOfOrder = (o: Order): SteadfastStage | 'not_booked' => {
+    if (o.tracking_code) {
+      const b = steadfastStageBadge(o.steadfast_status);
+      return b ? b.stage : 'booked';
+    }
+    return o.status === 'canceled' ? 'cancelled' : 'not_booked';
+    };
+  const stageCounts: Record<SteadfastStage | 'not_booked', number> = {
+    not_booked: 0, booked: 0, in_review: 0, picked_up: 0, in_transit: 0, delivered: 0, cancelled: 0,
+  };
+  for (const o of orders) stageCounts[stageOfOrder(o)] += 1;
+  const trackedCount = orders.filter((o) => o.tracking_code).length;
+
   const filteredOrders = orders.filter((o) => {
+    if (orderStatusFilter !== 'all' && o.status !== orderStatusFilter) return false;
+    if (deliveryStageFilter !== 'all' && stageOfOrder(o) !== deliveryStageFilter) return false;
     const q = orderSearch.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -156,7 +317,10 @@ export default function AdminPage() {
       : 0;
     const qty = Number(order.quantity ?? 1) || 1;
     const subtotal = unitPrice * qty;
-    const deliveryFee = 150;
+    // Fallback fee: the order's stored fee if present, else its zone rate, else flat 150
+    const zone = order.delivery_zone ? zoneForDistrict(order.delivery_zone) : null;
+    const zoneRate = zone ? Number(steadfastRates[zone as DeliveryZone]) : NaN;
+    const deliveryFee = Number(order.delivery_fee ?? NaN) || (isNaN(zoneRate) ? 150 : zoneRate);
     const total = subtotal + deliveryFee;
 
     return { unitPrice, qty, subtotal, deliveryFee, total };
@@ -168,6 +332,14 @@ export default function AdminPage() {
     }
   }, [isAuthenticated]);
 
+  // Auto-refresh Steadfast statuses shortly after the orders load
+  useEffect(() => {
+    if (isAuthenticated && !loading && orders.some((o) => o.tracking_code)) {
+      void refreshAllSteadfastStatuses(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, loading]);
+
   // Close the order status dropdown when clicking outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -178,6 +350,41 @@ export default function AdminPage() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Refresh Steadfast delivery statuses for every tracked order (bounded concurrency)
+  const refreshAllSteadfastStatuses = async (silent = false) => {
+    const tracked = orders.filter((o) => o.tracking_code);
+    if (tracked.length === 0) return;
+    setBulkChecking(true);
+    const updates = new Map<string, string>();
+    const CONCURRENCY = 4;
+    let failed = 0;
+    const queue = [...tracked];
+    const worker = async () => {
+      const [o] = queue.splice(0, 1);      if (!o.tracking_code) return;
+      const res = await checkSteadfastStatus(o.tracking_code);
+      if (res.ok && res.status) updates.set(o.id, res.status);
+      else failed += 1;
+    };
+    while (queue.length > 0) {
+      const batch = queue.splice(0, CONCURRENCY);
+      await Promise.all(batch.map(worker));
+    }
+    if (updates.size > 0) {
+      setOrders((prev) => prev.map((o) => (updates.has(o.id) ? { ...o, steadfast_status: updates.get(o.id)! } : o)));
+      // Flip orders the courier confirms as delivered
+      const nowDelivered = [...updates.entries()].filter(([, s]) => s === 'delivered');
+      for (const [orderId] of nowDelivered) {
+        const o = orders.find((x) => x.id === orderId);
+        if (o && o.status !== 'delivered') await applyOrderStatus(orderId, 'delivered');
+      }
+    }
+    setBulkChecking(false);
+    if (!silent) {
+      if (failed > 0) showToast('error', `${failed} status check${failed > 1 ? 's' : ''} failed — Steadfast may be unreachable.`);
+      else showToast('success', `Updated ${updates.size} Steadfast status${updates.size === 1 ? '' : 'es'}.`);
+    }
+  };
 
   // Real-time order notifications via Supabase subscriptions
   useEffect(() => {
@@ -262,7 +469,7 @@ export default function AdminPage() {
 
   async function fetchAll() {
     setLoading(true);
-    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes] = await Promise.all([
+    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes, couponRes] = await Promise.all([
       supabase
         .from('products')
         .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity)')
@@ -272,6 +479,7 @@ export default function AdminPage() {
       supabase.from('feedback').select('*').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*').order('created_at', { ascending: false }),
       supabase.from('site_settings').select('*'),
+      supabase.from('coupons').select('*').order('created_at', { ascending: false }),
     ]);
     if (prodRes.data) {
       setProducts(
@@ -287,12 +495,27 @@ export default function AdminPage() {
     if (ordRes.data) setOrders(ordRes.data);
     if (feedRes.data) setFeedbackList(feedRes.data);
     if (annRes.data) setAnnouncements(annRes.data);
+    if (couponRes.error) setCouponsUnavailable(true);
+    else if (couponRes.data) setCoupons(couponRes.data);
     if (settingsRes.data) {
       const settings = settingsRes.data as SiteSetting[];
       const heroSetting = settings.find((s) => s.key === 'hero_background_image');
       if (heroSetting) setHeroBgImage(heroSetting.value ?? '');
       const heroMobileSetting = settings.find((s) => s.key === 'hero_background_image_mobile');
       if (heroMobileSetting) setHeroBgMobileImage(heroMobileSetting.value ?? '');
+      const rateKeys: Array<[string, keyof typeof steadfastRates]> = [
+        ['steadfast_rate_dhaka_city', 'dhaka_city'],
+        ['steadfast_rate_dhaka_suburban', 'dhaka_suburban'],
+        ['steadfast_rate_outside_dhaka', 'outside_dhaka'],
+      ];
+      setSteadfastRates((prev) => {
+        const next = { ...prev };
+        for (const [key, field] of rateKeys) {
+          const row = settings.find((s) => s.key === key);
+          if (row?.value != null && row.value !== '') next[field] = row.value;
+        }
+        return next;
+      });
     }
     setLoading(false);
   }
@@ -305,7 +528,7 @@ export default function AdminPage() {
     const { error } = await supabase.from('categories').update({ show_in_stock: show }).eq('id', cat.id);
     if (error) {
       setCategories((prev) => prev.map((c) => (c.id === cat.id ? { ...c, show_in_stock: !show } : c)));
-      window.alert(`Failed to update category: ${error.message}`);
+      showToast('error', `Failed to update category: ${error.message}`);
     }
     setStockCatSaving(null);
   };
@@ -353,6 +576,7 @@ export default function AdminPage() {
       stock_count: String(product.stock_count),
       category_id: product.category_id ?? '',
       product_code: product.product_code ?? '',
+      advance_optional: product.advance_optional ?? false,
     });
     const imgs = product.product_images?.map((img) => img.image_url) ?? [];
     setImageUrls(imgs.length > 0 ? imgs : ['']);
@@ -405,6 +629,7 @@ export default function AdminPage() {
       stock_count: totalStock,
       category_id: form.category_id || null,
       product_code: form.product_code.trim() !== '' ? form.product_code.trim().toUpperCase() : null,
+      advance_optional: form.advance_optional,
     };
 
     let productId: string;
@@ -456,12 +681,14 @@ export default function AdminPage() {
     await fetchAll();
     setSaving(false);
     setModalOpen(false);
+    showToast('success', modalMode === 'add' ? 'Product created.' : 'Product updated.');
   };
 
   const openAddCatModal = () => {
     setCatName('');
     setCatBackgroundImage('');
     setCatPriority('');
+    setCatHidden(false);
     setEditingCat(null);
     setCatModalMode('add');
     setCatError('');
@@ -473,6 +700,7 @@ export default function AdminPage() {
     setCatName(cat.name);
     setCatBackgroundImage(cat.background_image ?? '');
     setCatPriority(cat.priority?.toString() ?? '');
+    setCatHidden(cat.is_hidden ?? false);
     setCatModalMode('edit');
     setCatError('');
     setCatModalOpen(true);
@@ -486,6 +714,7 @@ export default function AdminPage() {
       name: catName.trim(),
       background_image: catBackgroundImage.trim() || null,
       priority: catPriority.trim() ? Number(catPriority.trim()) : null,
+      is_hidden: catHidden,
     };
     if (catModalMode === 'add') {
       const { error } = await supabase.from('categories').insert(payload);
@@ -497,6 +726,7 @@ export default function AdminPage() {
     await fetchAll();
     setCatSaving(false);
     setCatModalOpen(false);
+    showToast('success', catModalMode === 'add' ? 'Category created.' : 'Category updated.');
   };
 
   const handleDelete = async () => {
@@ -510,11 +740,17 @@ export default function AdminPage() {
     await fetchAll();
   };
 
-  const setOrderStatus = async (orderId: string, status: OrderStatus) => {
+  const setOrderStatus = (orderId: string, status: OrderStatus) => {
     setOrderStatusOpen(null);
-    if (status === 'canceled' && !window.confirm('Cancel this order? This cannot be undone from the dropdown (you can set it back to pending though).')) {
+    if (status === 'canceled') {
+      // Destructive action — confirm in-app instead of window.confirm
+      setCancelOrderConfirm(orderId);
       return;
     }
+    void applyOrderStatus(orderId, status);
+  };
+
+  const applyOrderStatus = async (orderId: string, status: OrderStatus) => {
     setUpdatingDelivery(orderId);
 
     const prevOrders = orders;
@@ -530,10 +766,80 @@ export default function AdminPage() {
     if (error) {
       setOrders(prevOrders);
       setNotifications(prevNotifications);
-      window.alert(`Failed to update order status: ${error.message}`);
+      showToast('error', `Failed to update order status: ${error.message}`);
+    } else {
+      showToast('success', `Order marked as ${status}.`);
     }
 
     setUpdatingDelivery(null);
+  };
+
+  const handleDeleteOrder = async (orderId: string) => {
+    setDeletingOrder(orderId);
+    const { error } = await supabase.from('orders').delete().eq('id', orderId);
+    if (error) {
+      showToast('error', `Failed to delete order: ${error.message}`);
+      setDeletingOrder(null);
+      return;
+    }
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    setNotifications((prev) => prev.filter((n) => n.id !== orderId));
+    setDeleteOrderConfirm(null);
+    setDeletingOrder(null);
+    showToast('success', 'Order deleted.');
+  };
+
+  // Book the parcel with Steadfast and store the tracking code on the order
+  const handleSendToSteadfast = async (order: Order) => {
+    if (order.tracking_code) return;
+    setSendingToSteadfast(order.id);
+    const due = order.due_amount != null ? Number(order.due_amount) : null;
+    const total = order.total_amount != null ? Number(order.total_amount) : null;
+    const codAmount = Math.max(0, due ?? total ?? 0);
+
+    const result = await createSteadfastConsignment({
+      invoice: order.id.slice(0, 12),
+      recipient_name: order.customer_name || 'Customer',
+      recipient_phone: order.customer_phone,
+      recipient_address: order.customer_address,
+      cod_amount: codAmount,
+      note: order.product_title,
+    });
+
+    if (result.ok && result.trackingCode) {
+      const { error } = await supabase
+        .from('orders')
+        .update({ tracking_code: result.trackingCode })
+        .eq('id', order.id);
+      if (error) {
+        showToast('error', `Booked with Steadfast (${result.trackingCode}) but saving to the order failed: ${error.message}`);
+      } else {
+        setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, tracking_code: result.trackingCode } : o)));
+        showToast('success', `Booked with Steadfast — tracking code ${result.trackingCode}`);
+      }
+    } else {
+      showToast('error', result.message);
+    }
+    setSendingToSteadfast(null);
+  };
+
+  // Pull the latest delivery status for one order's tracking code
+  const handleCheckSteadfastStatus = async (order: Order) => {
+    if (!order.tracking_code) return;
+    setCheckingSteadfast(order.id);
+    const result = await checkSteadfastStatus(order.tracking_code);
+    if (result.ok && result.status) {
+      // Keep in memory only — re-fetchable from Steadfast anytime via the refresh button
+      setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, steadfast_status: result.status } : o)));
+      showToast('success', `Steadfast status: ${steadfastStatusMeta(result.status)?.label ?? result.status}`);
+      // Convenience: a confirmed Steadfast delivery can flip the local order too
+      if (result.status === 'delivered' && order.status !== 'delivered') {
+        await applyOrderStatus(order.id, 'delivered');
+      }
+    } else {
+      showToast('error', result.message);
+    }
+    setCheckingSteadfast(null);
   };
 
   const handleSellProduct = async (productId: string, size: string | null, currentQty: number) => {
@@ -654,6 +960,113 @@ export default function AdminPage() {
     await fetchAll();
   };
 
+  // ── Coupon CRUD ──
+  const openAddCoupon = () => {
+    setCouponForm({ code: '', discount_type: 'percent', value: '', min_order_amount: '', max_uses: '', expires_at: '', is_active: true });
+    setCouponProductCodes([]);
+    setCouponCodeInput('');
+    setEditingCoupon(null);
+    setCouponModalMode('add');
+    setCouponError('');
+    setCouponModalOpen(true);
+  };
+
+  const openEditCoupon = (coupon: Coupon) => {
+    setCouponForm({
+      code: coupon.code,
+      discount_type: coupon.discount_type,
+      value: String(coupon.value),
+      min_order_amount: coupon.min_order_amount != null ? String(coupon.min_order_amount) : '',
+      max_uses: coupon.max_uses != null ? String(coupon.max_uses) : '',
+      expires_at: coupon.expires_at ? coupon.expires_at.slice(0, 10) : '',
+      is_active: coupon.is_active,
+    });
+    setCouponProductCodes(coupon.product_codes ?? []);
+    setCouponCodeInput('');
+    setEditingCoupon(coupon);
+    setCouponModalMode('edit');
+    setCouponError('');
+    setCouponModalOpen(true);
+  };
+
+  const validateCouponForm = (): string => {
+    const code = couponForm.code.trim().toUpperCase();
+    if (!code) return 'Coupon code is required.';
+    if (!/^[A-Z0-9_-]{3,24}$/.test(code)) return 'Use 3–24 letters, numbers, hyphens or underscores (no spaces).';
+    if (!couponForm.value.trim() || isNaN(Number(couponForm.value)) || Number(couponForm.value) <= 0) return 'Enter a valid discount value.';
+    if (couponForm.discount_type === 'percent' && Number(couponForm.value) > 100) return 'Percent discount cannot exceed 100.';
+    if (couponForm.min_order_amount && (isNaN(Number(couponForm.min_order_amount)) || Number(couponForm.min_order_amount) < 0)) return 'Enter a valid minimum order amount.';
+    if (couponForm.max_uses && (isNaN(Number(couponForm.max_uses)) || Number(couponForm.max_uses) < 1)) return 'Max uses must be at least 1.';
+    const clash = coupons.some((c) => c.code.toUpperCase() === code && c.id !== editingCoupon?.id);
+    if (clash) return `Coupon code "${code}" already exists.`;
+    const badProductCode = couponProductCodes.find((c) => !/^[A-Z0-9_-]{2,24}$/.test(c));
+    if (badProductCode) return `"${badProductCode}" is not a valid product code.`;
+    return '';
+  };
+
+  const handleSaveCoupon = async () => {
+    const err = validateCouponForm();
+    if (err) { setCouponError(err); return; }
+    setCouponSaving(true);
+    setCouponError('');
+    const payload = {
+      code: couponForm.code.trim().toUpperCase(),
+      discount_type: couponForm.discount_type,
+      value: Number(couponForm.value),
+      min_order_amount: couponForm.min_order_amount.trim() ? Number(couponForm.min_order_amount) : null,
+      max_uses: couponForm.max_uses.trim() ? Number(couponForm.max_uses) : null,
+      expires_at: couponForm.expires_at ? new Date(couponForm.expires_at + 'T23:59:59').toISOString() : null,
+      is_active: couponForm.is_active,
+      product_codes: couponProductCodes.map((c) => c.trim().toUpperCase()).filter(Boolean),
+    };
+    const { error } = couponModalMode === 'add'
+      ? await supabase.from('coupons').insert(payload)
+      : await supabase.from('coupons').update(payload).eq('id', editingCoupon!.id);
+    if (error) {
+      setCouponError(error.message.includes('duplicate') ? 'A coupon with this code already exists.' : 'Failed to save coupon.');
+      setCouponSaving(false);
+      return;
+    }
+    await fetchAll();
+    setCouponSaving(false);
+    setCouponModalOpen(false);
+    showToast('success', couponModalMode === 'add' ? 'Coupon created.' : 'Coupon updated.');
+  };
+
+  const handleToggleCoupon = async (coupon: Coupon) => {
+    // Optimistic update
+    setCoupons((prev) => prev.map((c) => (c.id === coupon.id ? { ...c, is_active: !c.is_active } : c)));
+    const { error } = await supabase.from('coupons').update({ is_active: !coupon.is_active }).eq('id', coupon.id);
+    if (error) {
+      setCoupons((prev) => prev.map((c) => (c.id === coupon.id ? { ...c, is_active: coupon.is_active } : c)));
+      showToast('error', `Failed to update coupon: ${error.message}`);
+    } else {
+      showToast('success', `Coupon ${coupon.code} ${coupon.is_active ? 'deactivated' : 'activated'}.`);
+    }
+  };
+
+  const handleDeleteCoupon = async (id: string) => {
+    await supabase.from('coupons').delete().eq('id', id);
+    setDeleteCouponConfirm(null);
+    await fetchAll();
+  };
+
+  const addCouponProductCode = () => {
+    const code = couponCodeInput.trim().toUpperCase().replace(/,+$/, '');
+    if (!code) return;
+    if (!/^[A-Z0-9_-]{2,24}$/.test(code)) {
+      setCouponError(`"${code}" is not a valid product code format.`);
+      return;
+    }
+    setCouponError('');
+    setCouponProductCodes((prev) => (prev.includes(code) ? prev : [...prev, code]));
+    setCouponCodeInput('');
+  };
+
+  const removeCouponProductCode = (code: string) => {
+    setCouponProductCodes((prev) => prev.filter((c) => c !== code));
+  };
+
   const upsertSiteSetting = async (
     key: string,
     value: string | null,
@@ -716,12 +1129,39 @@ export default function AdminPage() {
     await fetchAll();
   };
 
+  // Persist the Steadfast courier rates shown on checkout
+  const handleSaveSteadfastRates = async () => {
+    for (const v of [steadfastRates.dhaka_city, steadfastRates.dhaka_suburban, steadfastRates.outside_dhaka]) {
+      if (isNaN(Number(v)) || Number(v) < 0) {
+        showToast('error', 'Courier rates must be valid, non-negative numbers.');
+        return;
+      }
+    }
+    setSteadfastSaving(true);
+    const entries: Array<{ key: string; label: string; description: string; value: string }> = [
+      { key: 'steadfast_rate_dhaka_city', label: 'Steadfast Rate — Inside Dhaka', description: 'Courier charge (৳) for orders delivered inside Dhaka City.', value: steadfastRates.dhaka_city },
+      { key: 'steadfast_rate_dhaka_suburban', label: 'Steadfast Rate — Dhaka Suburban', description: 'Courier charge (৳) for Dhaka Suburban areas (Gazipur, Narayanganj, Savar, etc.).', value: steadfastRates.dhaka_suburban },
+      { key: 'steadfast_rate_outside_dhaka', label: 'Steadfast Rate — Outside Dhaka', description: 'Courier charge (৳) for deliveries outside Dhaka and its suburbs.', value: steadfastRates.outside_dhaka },
+    ];
+    const errors: string[] = [];
+    for (const entry of entries) {
+      const err = await upsertSiteSetting(entry.key, entry.value, entry.label, entry.description);
+      if (err) errors.push(entry.label);
+    }
+    if (errors.length > 0) {
+      showToast('error', `Failed to save: ${errors.join(', ')}`);
+    } else {
+      showToast('success', 'Steadfast courier rates saved.');
+    }
+    setSteadfastSaving(false);
+  };
+
   // ── Login screen ──
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-stone-900 flex items-center justify-center px-4">
-        <div className="absolute top-0 left-1/4 w-[400px] h-[400px] bg-brand-600/15 rounded-full blur-[120px]" />
-        <div className="absolute bottom-0 right-1/4 w-[300px] h-[300px] bg-amber-500/10 rounded-full blur-[100px]" />
+        <div className="absolute top-0 left-1/4 w-[400px] h-[400px] bg-brand-600/15 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-0 right-1/4 w-[300px] h-[300px] bg-amber-500/10 rounded-full blur-[100px] pointer-events-none" />
         <div className="relative bg-white rounded-3xl shadow-2xl p-8 w-full max-w-sm animate-fade-in-up">
           <div className="flex flex-col items-center mb-6">
             <div className="w-14 h-14 bg-stone-900 rounded-2xl flex items-center justify-center mb-4">
@@ -848,25 +1288,38 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="bg-white border-b border-stone-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
-          {(['products', 'stock', 'categories', 'orders', 'feedback', 'settings'] as Tab[]).map((t) => (
-             <button key={t} onClick={() => setTab(t)}
-               className={`flex items-center gap-2 px-5 py-4 text-sm font-semibold capitalize border-b-2 transition-all whitespace-nowrap ${
-                 tab === t ? 'border-brand-500 text-brand-600' : 'border-transparent text-stone-500 hover:text-stone-800'
-               }`}>
-                {t === 'products' && <Package className="w-4 h-4" />}
-                {t === 'stock' && <Package className="w-4 h-4" />}
-                {t === 'categories' && <Tag className="w-4 h-4" />}
-                {t === 'orders' && <ShoppingBag className="w-4 h-4" />}
-                {t === 'feedback' && <MessageSquare className="w-4 h-4" />}
-                {t === 'settings' && <Settings className="w-4 h-4" />}
-                {t}
-                {t === 'feedback' && unreadFeedback > 0 && (
-                  <span className="bg-brand-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-                    {unreadFeedback > 9 ? '9+' : unreadFeedback}
-                  </span>
-                )}
-              </button>
-            ))}
+          {([
+            { key: 'products' as Tab, label: 'Products', icon: <Package className="w-4 h-4" />, count: products.length },
+            { key: 'stock' as Tab, label: 'Stock', icon: <Package className="w-4 h-4" />, count: lowStockCount },
+            { key: 'categories' as Tab, label: 'Categories', icon: <Tag className="w-4 h-4" />, count: categories.length },
+            { key: 'orders' as Tab, label: 'Orders', icon: <ShoppingBag className="w-4 h-4" />, count: orders.length, highlight: pendingOrders > 0 ? `${pendingOrders} pending` : undefined },
+            { key: 'coupons' as Tab, label: 'Coupons', icon: <Percent className="w-4 h-4" />, count: couponsUnavailable ? undefined : coupons.length },
+            { key: 'feedback' as Tab, label: 'Feedback', icon: <MessageSquare className="w-4 h-4" />, count: feedbackList.length, badge: unreadFeedback },
+            { key: 'settings' as Tab, label: 'Settings', icon: <Settings className="w-4 h-4" />, count: undefined },
+          ]).map((t) => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              title={t.highlight ? t.highlight : undefined}
+              className={`relative flex items-center gap-2 px-4 sm:px-5 py-4 text-sm font-semibold transition-all whitespace-nowrap border-b-2 ${
+                tab === t.key ? 'border-brand-500 text-brand-600' : 'border-transparent text-stone-500 hover:text-stone-800'
+              }`}>
+              <span className={tab === t.key ? 'text-brand-500' : 'text-stone-400'}>{t.icon}</span>
+              {t.label}
+              {t.badge != null && t.badge > 0 ? (
+                <span className="bg-brand-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                  {t.badge > 9 ? '9+' : t.badge}
+                </span>
+              ) : t.count != null ? (
+                <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full ${
+                  tab === t.key ? 'bg-brand-50 text-brand-600' : 'bg-stone-100 text-stone-500'
+                }`}>
+                  {t.count}
+                </span>
+              ) : null}
+              {t.highlight && tab !== t.key && (
+                <span className="absolute top-2.5 right-1 w-2 h-2 rounded-full bg-amber-400" />
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -875,10 +1328,13 @@ export default function AdminPage() {
         {/* ── Products tab ── */}
         {tab === 'products' && (
           <div>
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
               <div>
                 <h2 className="font-display text-xl font-bold text-stone-900">Products</h2>
-                <p className="text-sm text-stone-500">{products.length} total</p>
+                <p className="text-sm text-stone-500">
+                  {products.length} total
+                  {filteredProducts.length !== products.length && ` · ${filteredProducts.length} shown`}
+                </p>
               </div>
               <button onClick={openAddModal}
                 className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5">
@@ -912,10 +1368,11 @@ export default function AdminPage() {
             {loading ? (
               <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-stone-400" /></div>
             ) : filteredProducts.length === 0 ? (
-              <div className="text-center py-20 text-stone-400">
-                <Package className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                <p>{productSearch || productCategoryFilter ? 'No products match your search or filter.' : 'No products yet. Add your first product!'}</p>
-              </div>
+              <EmptyState
+                icon={<Package className="w-6 h-6" />}
+                title={productSearch || productCategoryFilter ? 'No products match your search or filter.' : 'No products yet'}
+                hint={productSearch || productCategoryFilter ? 'Try a different search term or clear the filter.' : 'Click "Add Product" to create your first one.'}
+              />
             ) : (
               <>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -939,9 +1396,16 @@ export default function AdminPage() {
                           <h3 className="font-semibold text-stone-900 text-sm leading-snug">{product.title}</h3>
                           <span className="text-brand-600 font-bold text-sm flex-shrink-0">৳{Number(product.price).toFixed(0)}</span>
                         </div>
-                        {product.product_code && (
-                          <p className="text-[11px] font-mono text-stone-400 mb-2">{product.product_code}</p>
-                        )}
+                        <div className="flex items-center gap-2 mb-2">
+                          {product.product_code && (
+                            <p className="text-[11px] font-mono text-stone-400">{product.product_code}</p>
+                          )}
+                          {product.advance_optional && (
+                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                              COD
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-3 text-xs text-stone-500 mb-3">
                           <span>{product.stock_count} in stock</span>
                           {product.sizes.length > 0 && product.product_sizes && product.product_sizes.length > 0 && (
@@ -1014,7 +1478,7 @@ export default function AdminPage() {
         {/* ── Stock tab ── */}
         {tab === 'stock' && (
           <div>
-            <div className="mb-6 flex items-center justify-between gap-4">
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
               <div>
                 {stockSelectedCategory === null ? (
                   <>
@@ -1037,11 +1501,26 @@ export default function AdminPage() {
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {stockSelectedCategory === null && (
                   <button onClick={() => setStockCatPickerOpen(true)}
                     className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5 text-sm">
                     <Plus className="w-4 h-4" /> Add / Remove Categories
+                  </button>
+                )}
+                {stockSelectedCategory === null && (
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/shop-by-size`;
+                      navigator.clipboard?.writeText(url).then(() => {
+                        showToast('success', 'Shop by Size link copied.');
+                      }).catch(() => {
+                        window.prompt('Copy this link:', url);
+                      });
+                    }}
+                    className="flex items-center gap-2 bg-white border border-stone-200 hover:border-stone-300 text-stone-700 hover:text-stone-900 font-semibold px-4 py-2 rounded-xl transition-all text-sm"
+                  >
+                    <Link2 className="w-4 h-4" /> Copy Shop by Size Link
                   </button>
                 )}
                 <button
@@ -1131,10 +1610,11 @@ export default function AdminPage() {
             {/* Category list view */}
             {stockSelectedCategory === null ? (
               categories.length === 0 && products.every((p) => p.category_id) ? (
-                <div className="text-center py-20 text-stone-400">
-                  <Tag className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                  <p>No categories yet. Add your first one to organize stock!</p>
-                </div>
+                <EmptyState
+                  icon={<Tag className="w-6 h-6" />}
+                  title="No categories yet"
+                  hint="Create categories in the Categories tab to organize stock."
+                />
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {categories.filter((cat) => cat.show_in_stock !== false).map((cat) => {
@@ -1196,10 +1676,7 @@ export default function AdminPage() {
                 stockSelectedCategory === '__uncategorized__' ? !p.category_id : p.category_id === stockSelectedCategory
               );
               return categoryProducts.length === 0 ? (
-                <div className="text-center py-20 text-stone-400">
-                  <Package className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                  <p>No products in this category yet.</p>
-                </div>
+                <EmptyState icon={<Package className="w-6 h-6" />} title="No products in this category yet" />
               ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {categoryProducts.filter((p) => {
@@ -1266,7 +1743,7 @@ export default function AdminPage() {
         {/* ── Categories tab ── */}
         {tab === 'categories' && (
           <div>
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
               <div>
                 <h2 className="font-display text-xl font-bold text-stone-900">Categories</h2>
                 <p className="text-sm text-stone-500">{categories.length} total</p>
@@ -1278,10 +1755,11 @@ export default function AdminPage() {
             </div>
 
             {categories.length === 0 ? (
-              <div className="text-center py-20 text-stone-400">
-                <Tag className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                <p>No categories yet. Add your first one!</p>
-              </div>
+              <EmptyState
+                icon={<Tag className="w-6 h-6" />}
+                title="No categories yet"
+                hint='Click "Add Category" to create your first one.'
+              />
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 {categories.map((cat) => {
@@ -1293,7 +1771,14 @@ export default function AdminPage() {
                           <Tag className="w-5 h-5 text-brand-600" />
                         </div>
                         <div>
-                          <p className="font-semibold text-stone-900">{cat.name}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-stone-900">{cat.name}</p>
+                            {cat.is_hidden && (
+                              <span className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                                <EyeOff className="w-3 h-3" /> Hidden
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-stone-400">{count} product{count !== 1 ? 's' : ''}</p>
                         </div>
                         {cat.priority !== null && cat.priority !== undefined && (
@@ -1323,68 +1808,159 @@ export default function AdminPage() {
         {/* ── Orders tab ── */}
         {tab === 'orders' && (
           <div>
-            <div className="mb-6">
-              <h2 className="font-display text-xl font-bold text-stone-900">Orders</h2>
-              <p className="text-sm text-stone-500">{orders.length} total</p>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+              <div>
+                <h2 className="font-display text-xl font-bold text-stone-900">Orders</h2>
+                <p className="text-sm text-stone-500">
+                  {orders.length} total
+                  {pendingOrders > 0 && <span className="text-amber-600 font-medium"> · {pendingOrders} pending</span>}
+                </p>
+              </div>
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <input
+                  type="text"
+                  value={orderSearch}
+                  onChange={(e) => { setOrderSearch(e.target.value); setOrderPage(1); }}
+                  placeholder="Search name, phone, code, TrxID..."
+                  className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                />
+              </div>
             </div>
 
-            <div className="relative mb-6">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-              <input
-                type="text"
-                value={orderSearch}
-                onChange={(e) => { setOrderSearch(e.target.value); setOrderPage(1); }}
-                placeholder="Search by customer name, phone, product code, or TrxID..."
-                className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
-              />
+            {/* Status filter bar */}
+            <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
+              {([
+                { key: 'all' as const, label: 'All', count: orders.length, cls: 'bg-stone-900 text-white border-stone-900' },
+                { key: 'pending' as const, label: 'Pending', count: pendingOrders, cls: 'bg-amber-500 text-white border-amber-500' },
+                { key: 'delivered' as const, label: 'Delivered', count: deliveredOrders, cls: 'bg-emerald-500 text-white border-emerald-500' },
+                { key: 'canceled' as const, label: 'Canceled', count: canceledOrders, cls: 'bg-red-500 text-white border-red-500' },
+              ]).map((f) => {
+                const active = orderStatusFilter === f.key;
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => { setOrderStatusFilter(f.key); setOrderPage(1); }}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold border transition-all whitespace-nowrap ${
+                      active ? f.cls : 'bg-white text-stone-600 border-stone-200 hover:border-stone-300 hover:bg-stone-50'
+                    }`}
+                  >
+                    {f.label}
+                    <span className={`text-[11px] font-bold min-w-[20px] h-5 px-1.5 rounded-full flex items-center justify-center ${
+                      active ? 'bg-white/20 text-white' : 'bg-stone-100 text-stone-500'
+                    }`}>
+                      {f.count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
+
+            {/* Steadfast delivery pipeline: click a stage to see its parcels */}
+            {orders.length > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-4 mb-6">
+                <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5" /> Steadfast delivery pipeline
+                  </p>
+                  {steadfastConfigured && trackedCount > 0 && (
+                    <button
+                      onClick={() => void refreshAllSteadfastStatuses(false)}
+                      disabled={bulkChecking}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 disabled:opacity-60 transition-colors"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${bulkChecking ? 'animate-spin' : ''}`} />
+                      {bulkChecking ? 'Checking…' : 'Refresh all statuses'}
+                    </button>
+                    )}
+                </div>
+                <div className="flex items-stretch gap-1.5 overflow-x-auto pb-1">
+                  {([
+                    { key: 'not_booked' as const, label: 'Not booked', desc: 'Awaiting pickup booking', count: stageCounts.not_booked, dot: 'bg-stone-300' },
+                    { key: 'booked' as const, label: 'Booked', desc: 'Sent to Steadfast', count: stageCounts.booked, dot: 'bg-stone-400' },
+                    { key: 'in_review' as const, label: 'In review', desc: 'Steadfast is approving', count: stageCounts.in_review, dot: 'bg-sky-400' },
+                    { key: 'picked_up' as const, label: 'Picked up', desc: 'Parcel with the rider', count: stageCounts.picked_up, dot: 'bg-amber-400' },
+                    { key: 'in_transit' as const, label: 'In transit', desc: 'On the way to the customer', count: stageCounts.in_transit, dot: 'bg-orange-400' },
+                    { key: 'delivered' as const, label: 'Delivered', desc: 'Payment collected', count: stageCounts.delivered, dot: 'bg-emerald-500' },
+                    { key: 'cancelled' as const, label: 'Cancelled', desc: 'Returned or cancelled', count: stageCounts.cancelled, dot: 'bg-red-400' },
+                  ]).map((s, i, arr) => (
+                    <div key={s.key} className="flex items-center flex-shrink-0">
+                      <button
+                        onClick={() => { setDeliveryStageFilter(deliveryStageFilter === s.key ? 'all' : s.key); setOrderPage(1); }}
+                        title={s.desc}
+                        className={`text-left rounded-xl border px-3 py-2 transition-all min-w-[92px] ${
+                          deliveryStageFilter === s.key
+                            ? 'border-brand-400 bg-brand-50 ring-1 ring-brand-300'
+                            : 'border-stone-200 bg-stone-50 hover:border-stone-300'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${s.dot} ${s.key === 'not_booked' && stageCounts.not_booked > 0 ? 'animate-pulse' : ''}`} />
+                          <span className="text-base font-bold text-stone-900">{s.count}</span>
+                        </span>
+                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-stone-500 mt-0.5">{s.label}</span>
+                      </button>
+                      {i < arr.length - 1 && <span className="text-stone-300 px-0.5">›</span>} 
+                    </div>
+                  ))}
+                </div>
+                {deliveryStageFilter !== 'all' && (
+                  <p className="mt-2 text-xs text-stone-500">
+                    Showing only <span className="font-semibold">{deliveryStageFilter.replace(/_/g, ' ')}</span> parcels —{' '}
+                    <button onClick={() => setDeliveryStageFilter('all')} className="text-brand-600 font-semibold hover:underline">clear</button>
+                  </p>
+                  )}
+              </div>
+            )}
 
             {filteredOrders.length === 0 ? (
-              <div className="text-center py-20 text-stone-400">
-                <ShoppingBag className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                <p>{orderSearch ? 'No orders match your search.' : 'No orders yet.'}</p>
-              </div>
+              <EmptyState
+                icon={<ShoppingBag className="w-6 h-6" />}
+                title={orders.length === 0 ? 'No orders yet' : 'No orders match your filters.'}
+                hint={orders.length === 0 ? 'New orders will appear here in real time.' : 'Try a different search term or status filter.'}
+              />
             ) : (
               <>
               <div className="space-y-2" ref={orderStatusRef}>
                 {pagedOrders.map((order) => {
                   const pricing = getOrderPricing(order);
                   return (
-                    <div key={order.id} className="bg-white rounded-xl border border-stone-100 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="font-semibold text-stone-900 text-base truncate">{order.product_title}</p>
-                            {order.product_code && (
-                              <span className="text-xs font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full flex-shrink-0">
-                                {order.product_code}
-                              </span>
-                            )}
-                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${
-                              order.status === 'delivered'
-                                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                                : order.status === 'canceled'
-                                  ? 'bg-red-50 text-red-600 border border-red-200'
-                                  : 'bg-amber-50 text-amber-600 border border-amber-200'
-                            }`}>
-                              {order.status === 'delivered'
-                                ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
-                                : order.status === 'canceled'
-                                  ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
-                                  : <><Clock className="w-3.5 h-3.5" /> Pending</>}
-                            </span>
+                    <div key={order.id} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
+                      order.status === 'pending'
+                        ? 'border-l-amber-400'
+                        : order.status === 'canceled'
+                          ? 'border-l-red-300'
+                          : 'border-l-emerald-400'
+                    }`}>
+                      {/* Header: customer identity + status + actions */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm ${
+                            order.status === 'delivered'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : order.status === 'canceled'
+                                ? 'bg-red-100 text-red-500'
+                                : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {(order.customer_name || '?').trim().charAt(0).toUpperCase()}
                           </div>
-                          <div className="flex items-center gap-3 mt-1 text-sm text-stone-500 flex-wrap">
-                            {order.selected_size && (
-                              <span>Size: <span className="font-medium text-stone-700">{order.selected_size}</span></span>
-                            )}
-                            <span>Qty: <span className="font-medium text-stone-700">{order.quantity ?? 1}</span></span>
-                            <span className="font-medium text-stone-700">৳{pricing.total.toFixed(0)}</span>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-stone-900 truncate">{order.customer_name || 'Unknown customer'}</p>
+                            <a href={`tel:${order.customer_phone}`} className="text-xs text-stone-500 hover:text-brand-600 transition-colors">
+                              {order.customer_phone}
+                            </a>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-xs text-stone-400 hidden sm:block">
+                          <span className="hidden md:block text-xs text-stone-400">
                             {new Date(order.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </span>
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[order.status]}`}>
+                            {order.status === 'delivered'
+                              ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
+                              : order.status === 'canceled'
+                                ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
+                                : <><Clock className="w-3.5 h-3.5" /> Pending</>}
                           </span>
                           <div className="relative">
                             <button
@@ -1429,17 +2005,177 @@ export default function AdminPage() {
                                     {order.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
                                   </button>
                                 ))}
+                                <div className="border-t border-stone-100 my-1" />
+                                <button
+                                  onClick={() => { setOrderStatusOpen(null); setDeleteOrderConfirm(order.id); }}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  Delete order
+                                </button>
                               </div>
                             )}
                           </div>
                         </div>
                       </div>
-                      <div className="mt-2 pt-2 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm">
-                        <div><span className="text-stone-400">Customer</span> <p className="font-medium text-stone-800 truncate">{order.customer_name}</p></div>
-                        <div><span className="text-stone-400">Phone</span> <p className="font-medium text-stone-800">{order.customer_phone}</p></div>
-                        <div><span className="text-stone-400">bKash</span> <p className="font-medium text-stone-800">{order.bkash_number ?? '—'}</p></div>
-                        <div><span className="text-stone-400">TrxID</span> <p className="font-medium text-stone-800">{order.trx_id ?? '—'}</p></div>
-                        <div className="col-span-2 sm:col-span-4"><span className="text-stone-400">Address</span> <p className="font-medium text-stone-800 truncate">{order.customer_address}</p></div>
+                      {/* Order line: product + variant */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap text-sm">
+                        <span className="font-semibold text-stone-800">{order.product_title}</span>
+                        {order.product_code && (
+                          <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">{order.product_code}</span>
+                        )}
+                        {order.selected_size && (
+                          <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">Size: {order.selected_size}</span>
+                        )}
+                        <span className="text-[11px] text-stone-400">Qty: {order.quantity ?? 1}</span>
+                        {order.delivery_zone && (
+                          <span className="text-[11px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <MapPin className="w-3 h-3" /> {order.delivery_zone}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Courier: Steadfast booking + live status */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap">
+                        {order.tracking_code ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard?.writeText(order.tracking_code!)
+                                  .then(() => showToast('success', `Tracking code ${order.tracking_code} copied.`))
+                                  .catch(() => showToast('info', `Tracking code: ${order.tracking_code}`));
+                              }}
+                              title="Click to copy tracking code"
+                              className="flex items-center gap-1.5 text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
+                            >
+                              <Truck className="w-3.5 h-3.5" /> {order.tracking_code}
+                            </button>
+                            <button
+                              onClick={() => handleCheckSteadfastStatus(order)}
+                              disabled={checkingSteadfast === order.id}
+                              className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                            >
+                              {checkingSteadfast === order.id
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                : <RefreshCw className="w-3.5 h-3.5" />}
+                              Refresh status
+                            </button>
+                            <a
+                              href={`https://steadfast.com.bd/t/${order.tracking_code}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
+                            >
+                              Track ↗
+                            </a>
+                          </>
+                        ) : order.status === 'canceled' ? (
+                          <span className="text-xs text-stone-400">Not booked with Steadfast</span>
+                        ) : steadfastConfigured ? (
+                          <button
+                            onClick={() => handleSendToSteadfast(order)}
+                            disabled={sendingToSteadfast === order.id}
+                            title={order.courier_name === 'Store Pickup' ? 'Store-pickup order — no courier booking needed' : undefined}
+                            className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-3 py-1.5 rounded-full disabled:opacity-60 transition-all"
+                          >
+                            {sendingToSteadfast === order.id
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <Truck className="w-3.5 h-3.5" />}
+                            {sendingToSteadfast === order.id ? 'Booking…' : 'Book Steadfast pickup'}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-stone-400">Steadfast API keys not configured — add them to .env to book pickups.</span>
+                        )}
+                      </div>
+
+                      {/* Delivery pipeline tracker (only for booked parcels) */}
+                      {order.tracking_code && (() => {
+                        const stageInfo = steadfastStageBadge(order.steadfast_status);
+                        const stage = stageInfo?.stage ?? 'booked';
+                        const activeIdx = stage === 'cancelled' ? -1 : STEADFAST_STAGE_ORDER.indexOf(stage as SteadfastStage);
+                        return (
+                          <div className={`mt-2 flex items-center gap-1 rounded-xl px-3 py-2 ${stage === 'cancelled' ? 'bg-red-50/60' : 'bg-stone-50/70'}`}>
+                            {STEADFAST_STAGE_ORDER.map((s, i) => {
+                              const done = activeIdx >= 0 && i < activeIdx;
+                              const active = i === activeIdx;
+                              return (
+                                <div key={s} className="flex items-center flex-1 min-w-0">
+                                  <div className="flex flex-col items-center flex-1 min-w-0">
+                                    <span className={`w-2 h-2 rounded-full transition-colors ${
+                                      done ? 'bg-emerald-500' : active ? (stage === 'delivered' ? 'bg-emerald-500' : 'bg-brand-500') : 'bg-stone-300'
+                                    } ${active && stage !== 'delivered' ? 'animate-pulse' : ''}`} />
+                                    <span className={`text-[9px] font-semibold uppercase tracking-wide mt-1 truncate w-full text-center ${
+                                      done || active ? 'text-stone-700' : 'text-stone-400'
+                                    }`}>
+                                      {STEADFAST_STAGE_LABELS[s]}
+                                    </span>
+                                  </div>
+                                  {i < STEADFAST_STAGE_ORDER.length - 1 && (
+                                    <span className={`h-0.5 flex-1 max-w-[28px] rounded-full -mt-3 ${done ? 'bg-emerald-400' : 'bg-stone-200'}`} />
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {stage === 'cancelled' && (
+                              <span className="text-[10px] font-bold text-red-500 uppercase ml-1 flex-shrink-0">Cancelled</span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Details: money + payment */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-3">
+                        <div>
+                          <p className={ORD_LBL}>Total</p>
+                          <p className="font-bold text-stone-900 text-sm">{order.total_amount != null ? `৳${Number(order.total_amount).toFixed(0)}` : `৳${pricing.total.toFixed(0)}`}</p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>Due</p>
+                          <p className={`font-bold text-sm ${order.due_amount != null && Number(order.due_amount) > 0 ? 'text-amber-600' : 'text-stone-900'}`}>
+                            {order.due_amount != null ? `৳${Number(order.due_amount).toFixed(0)}` : '—'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>bKash</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">{order.bkash_number ?? '—'}</p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>TrxID</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">{order.trx_id ?? '—'}</p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>Payment</p>
+                          <p className="font-medium text-stone-800 text-sm">
+                            {order.payment_method === 'full_advance'
+                              ? 'Full advance'
+                              : order.payment_method === 'advance_partial'
+                                ? 'COD + advance'
+                                : order.payment_method === 'cash_on_delivery'
+                                  ? 'Cash on delivery'
+                                  : allNoAdvance([order.product_code], products)
+                                    ? 'Cash on delivery'
+                                    : '—'}
+                            {order.advance_amount != null && Number(order.advance_amount) > 0 ? ` (৳${Number(order.advance_amount).toFixed(0)})` : ''}
+                          </p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>Delivery</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">{order.courier_name ?? '—'}</p>
+                        </div>
+                        {order.coupon_code && (
+                          <div>
+                            <p className={ORD_LBL}>Coupon</p>
+                            <p className="font-medium text-emerald-600 text-sm">
+                              {order.coupon_code}{order.discount_amount != null ? ` (−৳${Number(order.discount_amount).toFixed(0)})` : ''}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Address */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-start gap-3">
+                        <p className={`${ORD_LBL} mt-0.5 flex-shrink-0`}>Address</p>
+                        <p className="text-sm text-stone-700 break-words">{order.customer_address}</p>
                       </div>
                     </div>
                   );
@@ -1487,6 +2223,115 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* ── Coupons tab ── */}
+        {tab === 'coupons' && (
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+              <div>
+                <h2 className="font-display text-xl font-bold text-stone-900">Coupon Codes</h2>
+                <p className="text-sm text-stone-500 mt-0.5">Discount codes customers can apply on the checkout page.</p>
+              </div>
+              <button onClick={openAddCoupon}
+                className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5">
+                <Plus className="w-4 h-4" /> Add Coupon
+              </button>
+            </div>
+
+            {couponsUnavailable ? (
+              <div className="bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl px-4 py-3 text-sm">
+                The coupons table doesn't exist yet. Run the migration
+                <span className="font-mono text-xs"> 20260924000000_add_checkout_fields_and_coupons.sql</span> in the Supabase SQL editor first.
+              </div>
+            ) : (
+              <>
+                <div className="relative mb-6">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                  <input
+                    type="text"
+                    value={couponSearch}
+                    onChange={(e) => setCouponSearch(e.target.value)}
+                    placeholder="Search by code..."
+                    className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                  />
+                </div>
+
+                {coupons.filter((c) =>
+                  c.code.toLowerCase().includes(couponSearch.trim().toLowerCase())
+                ).length === 0 ? (
+                  <EmptyState
+                    icon={<Percent className="w-6 h-6" />}
+                    title={couponSearch ? 'No coupons match your search.' : 'No coupons yet'}
+                    hint={couponSearch ? 'Try a different search term.' : 'Add one to offer discounts at checkout.'}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {coupons
+                      .filter((c) => c.code.toLowerCase().includes(couponSearch.trim().toLowerCase()))
+                      .map((coupon) => {
+                        const expired = coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now();
+                        const exhausted = coupon.max_uses != null && (coupon.times_used ?? 0) >= coupon.max_uses;
+                        return (
+                          <div key={coupon.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-4 hover:shadow-md transition-shadow">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                  <p className="font-mono font-bold text-stone-900 text-sm tracking-wide">{coupon.code}</p>
+                                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                    !coupon.is_active
+                                      ? 'bg-stone-100 text-stone-500'
+                                      : expired
+                                        ? 'bg-red-50 text-red-500'
+                                        : exhausted
+                                          ? 'bg-amber-50 text-amber-600'
+                                          : 'bg-emerald-100 text-emerald-600'
+                                  }`}>
+                                    {!coupon.is_active ? 'Inactive' : expired ? 'Expired' : exhausted ? 'Used up' : 'Active'}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-stone-700">
+                                  {coupon.discount_type === 'percent' ? `${Number(coupon.value).toFixed(0)}% off` : `৳${Number(coupon.value).toFixed(0)} off`}
+                                  {coupon.min_order_amount != null && <span className="text-stone-400"> · min order ৳{Number(coupon.min_order_amount).toFixed(0)}</span>}
+                                </p>
+                                {(coupon.product_codes?.length ?? 0) > 0 && (
+                                  <p className="text-[11px] text-brand-600 mt-0.5 font-mono truncate">
+                                    Only: {coupon.product_codes!.join(', ')}
+                                  </p>
+                                )}
+                                <p className="text-[11px] text-stone-400 mt-0.5">
+                                  Used {coupon.times_used ?? 0}{coupon.max_uses != null ? ` / ${coupon.max_uses}` : ''} times
+                                  {coupon.expires_at && ` · expires ${new Date(coupon.expires_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`}
+                                </p>
+                              </div>
+                              <div className="flex gap-1 flex-shrink-0">
+                                <button onClick={() => handleToggleCoupon(coupon)}
+                                  title={coupon.is_active ? 'Deactivate' : 'Activate'}
+                                  className={`p-1.5 rounded-lg transition-all ${
+                                    coupon.is_active
+                                      ? 'text-emerald-500 bg-emerald-50 hover:bg-emerald-100'
+                                      : 'text-stone-400 bg-stone-100 hover:bg-stone-200'
+                                  }`}>
+                                  <Power className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => openEditCoupon(coupon)}
+                                  className="p-1.5 text-stone-500 hover:text-stone-800 bg-stone-100 hover:bg-stone-200 rounded-lg transition-all">
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => setDeleteCouponConfirm(coupon.id)}
+                                  className="p-1.5 text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-all">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* ── Feedback tab ── */}
         {tab === 'feedback' && (
           <div>
@@ -1509,10 +2354,11 @@ export default function AdminPage() {
             </div>
 
             {filteredFeedback.length === 0 ? (
-              <div className="text-center py-20 text-stone-400">
-                <MessageSquare className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                <p>{feedbackSearch ? 'No feedback matches your search.' : 'No feedback yet.'}</p>
-              </div>
+              <EmptyState
+                icon={<MessageSquare className="w-6 h-6" />}
+                title={feedbackSearch ? 'No feedback matches your search.' : 'No feedback yet'}
+                hint={feedbackSearch ? 'Try a different search term.' : 'Customer messages will appear here.'}
+              />
             ) : (
               <div className="space-y-3">
                 {filteredFeedback.map((fb) => (
@@ -1600,10 +2446,11 @@ export default function AdminPage() {
                </div>
 
                {announcements.length === 0 ? (
-                 <div className="text-center py-12 text-stone-400 bg-white rounded-2xl border border-stone-100">
-                   <Bell className="w-12 h-12 mx-auto mb-3 text-stone-300" />
-                   <p>No announcements yet. Add one to display in the top bar.</p>
-                 </div>
+                 <EmptyState
+                   icon={<Bell className="w-6 h-6" />}
+                   title="No announcements yet"
+                   hint="Add one to display in the scrolling top bar."
+                 />
                ) : (
                  <div className="space-y-3">
                    {announcements.map((ann) => (
@@ -1701,6 +2548,43 @@ export default function AdminPage() {
                  </button>
                </div>
              </div>
+
+             {/* ── Steadfast courier rates ── */}
+             <div className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden">
+               <div className="px-6 py-5 border-b border-stone-100">
+                 <h3 className="font-display text-lg font-bold text-stone-900">Steadfast Courier Rates</h3>
+                 <p className="text-sm text-stone-500 mt-0.5">
+                   Customers are charged by their district's zone at checkout. The advance they send via bKash equals this fee.
+                 </p>
+               </div>
+               <div className="p-6 space-y-4">
+                 {([
+                   { key: 'dhaka_city' as const, label: 'Inside Dhaka', hint: 'Dhaka City', fallback: '60' },
+                   { key: 'dhaka_suburban' as const, label: 'Dhaka Suburban', hint: 'Gazipur, Narayanganj, Savar, Munshiganj…', fallback: '110' },
+                   { key: 'outside_dhaka' as const, label: 'Outside Dhaka', hint: 'Chattogram, Sylhet, Khulna, Rajshahi…', fallback: '130' },
+                 ]).map((z) => (
+                   <div key={z.key}>
+                     <label className="block text-sm font-medium text-stone-700 mb-1.5">{z.label}</label>
+                     <div className="relative">
+                       <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-stone-400">৳</span>
+                       <input
+                         type="number"
+                         min="0"
+                         value={steadfastRates[z.key]}
+                         onChange={(e) => setSteadfastRates({ ...steadfastRates, [z.key]: e.target.value })}
+                         className="w-full border border-stone-200 rounded-xl pl-8 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                       />
+                     </div>
+                     <p className="text-xs text-stone-400 mt-1">{z.hint}{steadfastRates[z.key] === '' ? ` — defaults to ৳${z.fallback} if left blank` : ''}</p>
+                   </div>
+                 ))}
+                 <button onClick={handleSaveSteadfastRates} disabled={steadfastSaving}
+                   className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
+                   {steadfastSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                   {steadfastSaving ? 'Saving...' : 'Save Courier Rates'}
+                 </button>
+               </div>
+             </div>
            </div>
          )}
        </div>
@@ -1787,6 +2671,29 @@ export default function AdminPage() {
                   </p>
                 )}
               </div>
+              {/* No-advance (pure cash on delivery) toggle */}
+              <div className={`rounded-2xl border p-4 transition-colors ${
+                form.advance_optional ? 'border-emerald-200 bg-emerald-50/50' : 'border-stone-200 bg-stone-50/50'
+              }`}>
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.advance_optional}
+                    onChange={(e) => setForm({ ...form, advance_optional: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-stone-300 text-emerald-600 focus:ring-emerald-400 accent-emerald-500"
+                  />
+                  <span>
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-stone-800">
+                      <Banknote className="w-4 h-4 text-emerald-600" />
+                      No advance payment — cash on delivery only
+                    </span>
+                    <span className="block text-xs text-stone-500 mt-1 leading-relaxed">
+                      Customers can order this product without sending any bKash advance — no bKash number or TrxID asked at checkout. They pay the full amount in cash on delivery.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1.5">Category</label>
                 <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}
@@ -1940,6 +2847,29 @@ export default function AdminPage() {
                 </p>
               </div>
 
+              {/* Hide from storefront */}
+              <div className={`rounded-2xl border p-4 transition-colors ${
+                catHidden ? 'border-amber-200 bg-amber-50/50' : 'border-stone-200 bg-stone-50/50'
+              }`}>
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={catHidden}
+                    onChange={(e) => { setCatHidden(e.target.checked); setCatError(''); }}
+                    className="mt-0.5 w-4 h-4 rounded border-stone-300 text-amber-500 focus:ring-amber-400 accent-amber-500"
+                  />
+                  <span>
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-stone-800">
+                      <EyeOff className="w-4 h-4 text-amber-600" />
+                      Hide this category from the store
+                    </span>
+                    <span className="block text-xs text-stone-500 mt-1 leading-relaxed">
+                      Hidden categories disappear from the navbar, home page and shop filters. Anyone with a direct link can still view the collection, and you can unhide it anytime.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
               {catError && (
                 <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 rounded-2xl px-4 py-3">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" /> {catError}
@@ -1990,6 +2920,72 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* ── Cancel order confirm ── */}
+        {cancelOrderConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
+              <div className="flex items-center justify-center w-14 h-14 bg-red-100 rounded-full mx-auto mb-4">
+                <XCircle className="w-7 h-7 text-red-500" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-stone-900 mb-2">Cancel this order?</h3>
+              <p className="text-stone-400 text-sm mb-6">
+                The customer's order will be marked as canceled. You can set it back to pending later if needed.
+              </p>
+              <div className="flex gap-3">
+                <button onClick={() => setCancelOrderConfirm(null)}
+                  className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                  Keep Order
+                </button>
+                <button
+                  onClick={() => { const id = cancelOrderConfirm; setCancelOrderConfirm(null); if (id) void applyOrderStatus(id, 'canceled'); }}
+                  className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                  Cancel Order
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Delete order confirm ── */}
+        {deleteOrderConfirm && (() => {
+          const target = orders.find((o) => o.id === deleteOrderConfirm);
+          return (
+            <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
+                <div className="flex items-center justify-center w-14 h-14 bg-red-100 rounded-full mx-auto mb-4">
+                  <Trash2 className="w-7 h-7 text-red-500" />
+                </div>
+                <h3 className="font-display text-lg font-bold text-stone-900 mb-2">Delete this order?</h3>
+                <p className="text-stone-400 text-sm mb-1">
+                  {target ? (
+                    <>
+                      <span className="font-medium text-stone-600">{target.customer_name}</span>
+                      {' '}— {target.product_title}
+                    </>
+                  ) : (
+                    'This order'
+                  )}
+                </p>
+                <p className="text-stone-400 text-sm mb-6">This permanently removes the order record. This cannot be undone.</p>
+                <div className="flex gap-3">
+                  <button onClick={() => setDeleteOrderConfirm(null)}
+                    className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleDeleteOrder(deleteOrderConfirm)}
+                    disabled={deletingOrder === deleteOrderConfirm}
+                    className="flex-1 flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 disabled:opacity-70 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm"
+                  >
+                    {deletingOrder === deleteOrderConfirm ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    {deletingOrder === deleteOrderConfirm ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ── Delete feedback confirm ── */}
         {deleteFeedbackConfirm && (
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2005,6 +3001,203 @@ export default function AdminPage() {
                   Cancel
                 </button>
                 <button onClick={() => handleDeleteFeedback(deleteFeedbackConfirm)}
+                  className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Coupon modal ── */}
+        {couponModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg animate-fade-in-up">
+              <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
+                <h3 className="font-display text-lg font-bold text-stone-900">
+                  {couponModalMode === 'add' ? 'Add Coupon' : 'Edit Coupon'}
+                </h3>
+                <button onClick={() => setCouponModalOpen(false)} className="text-stone-400 hover:text-stone-600 transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="px-6 py-5 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Coupon Code *</label>
+                  <input
+                    type="text"
+                    value={couponForm.code}
+                    onChange={(e) => { setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() }); setCouponError(''); }}
+                    placeholder="e.g. SUMMER20"
+                    maxLength={24}
+                    className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm font-mono uppercase tracking-wide focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  />
+                  <p className="text-xs text-stone-500 mt-1.5">3–24 characters — letters, numbers, hyphens or underscores. Customers type this at checkout.</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Discount Type *</label>
+                    <select
+                      value={couponForm.discount_type}
+                      onChange={(e) => { setCouponForm({ ...couponForm, discount_type: e.target.value as 'percent' | 'fixed' }); setCouponError(''); }}
+                      className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    >
+                      <option value="percent">Percentage (%)</option>
+                      <option value="fixed">Fixed amount (৳)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      {couponForm.discount_type === 'percent' ? 'Percent Off *' : 'Amount Off (৳) *'}
+                    </label>
+                    <input
+                      type="number"
+                      value={couponForm.value}
+                      onChange={(e) => { setCouponForm({ ...couponForm, value: e.target.value }); setCouponError(''); }}
+                      placeholder={couponForm.discount_type === 'percent' ? 'e.g. 20' : 'e.g. 100'}
+                      min="0"
+                      step={couponForm.discount_type === 'percent' ? '1' : '0.01'}
+                      className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Min Order (৳)</label>
+                    <input
+                      type="number"
+                      value={couponForm.min_order_amount}
+                      onChange={(e) => setCouponForm({ ...couponForm, min_order_amount: e.target.value })}
+                      placeholder="Optional"
+                      min="0"
+                      className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Max Uses</label>
+                    <input
+                      type="number"
+                      value={couponForm.max_uses}
+                      onChange={(a) => setCouponForm({ ...couponForm, max_uses: a.target.value })}
+                      placeholder="Optional — unlimited"
+                      min="1"
+                      className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Expiry Date</label>
+                  <input
+                    type="date"
+                    value={couponForm.expires_at}
+                    onChange={(e) => setCouponForm({ ...couponForm, expires_at: e.target.value })}
+                    className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  />
+                  <p className="text-xs text-stone-500 mt-1.5">Optional — coupon works until end of this day (Bangladesh time).</p>
+                </div>
+
+                {/* Product restriction */}
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Apply To Products</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={couponCodeInput}
+                      onChange={(e) => { setCouponCodeInput(e.target.value.toUpperCase()); setCouponError(''); }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ',') {
+                          e.preventDefault();
+                          addCouponProductCode();
+                        }
+                      }}
+                      placeholder="Product code, e.g. PRD-1001"
+                      className="flex-1 min-w-0 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={addCouponProductCode}
+                      className="px-4 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-sm font-semibold transition-all flex-shrink-0"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {couponProductCodes.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {couponProductCodes.map((code) => (
+                        <span key={code} className="inline-flex items-center gap-1 bg-brand-50 border border-brand-200 text-brand-700 text-xs font-mono font-semibold px-2.5 py-1 rounded-full">
+                          {code}
+                          <button type="button" onClick={() => removeCouponProductCode(code)} className="text-brand-400 hover:text-brand-700 transition-colors" aria-label={`Remove ${code}`}>
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setCouponProductCodes([])}
+                        className="text-xs text-stone-400 hover:text-red-500 underline underline-offset-2 transition-colors"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-stone-500 mt-1.5">
+                      Leave empty for the coupon to work on <span className="font-semibold">all products</span>. Add product codes (like PRD-1001) to restrict it to specific items.
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id="coupon-active"
+                    checked={couponForm.is_active}
+                    onChange={(e) => setCouponForm({ ...couponForm, is_active: e.target.checked })}
+                    className="w-4 h-4 rounded border-stone-300 text-brand-500 focus:ring-brand-400"
+                  />
+                  <label htmlFor="coupon-active" className="text-sm font-medium text-stone-700 cursor-pointer">
+                    Active — customers can use this coupon
+                  </label>
+                </div>
+
+                {couponError && (
+                  <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 rounded-2xl px-4 py-3">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" /> {couponError}
+                  </div>
+                )}
+              </div>
+              <div className="px-6 pb-6 pt-4 border-t border-stone-100 flex gap-3">
+                <button onClick={() => setCouponModalOpen(false)}
+                  className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-3 rounded-2xl transition-all text-sm">
+                  Cancel
+                </button>
+                <button onClick={handleSaveCoupon} disabled={couponSaving}
+                  className="flex-1 flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold py-3 rounded-2xl transition-all text-sm">
+                  {couponSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {couponSaving ? 'Saving...' : 'Save Coupon'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Delete coupon confirm ── */}
+        {deleteCouponConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
+              <div className="flex items-center justify-center w-14 h-14 bg-red-100 rounded-full mx-auto mb-4">
+                <Trash2 className="w-7 h-7 text-red-500" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-stone-900 mb-2">Delete Coupon?</h3>
+              <p className="text-stone-400 text-sm mb-6">Customers will no longer be able to use this code.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDeleteCouponConfirm(null)}
+                  className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">
+                  Cancel
+                </button>
+                <button onClick={() => handleDeleteCoupon(deleteCouponConfirm)}
                   className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
                   Delete
                 </button>
@@ -2096,6 +3289,9 @@ export default function AdminPage() {
            </div>
          </div>
        )}
+
+      {/* ── Toasts ── */}
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
      </div>
   );
 }
