@@ -413,27 +413,49 @@ export default function AdminPage() {
     const updates = new Map<string, string>();
     const CONCURRENCY = 4;
     let failed = 0;
+    const deletedPickups: string[] = []; // orders whose consignment vanished from Steadfast
     const queue = [...tracked];
+    // Each worker pulls its own items until the queue drains. The optional
+    // chaining on tracking_code guards the empty-queue case that used to throw
+    // and leave the "Checking…" spinner stuck forever.
     const worker = async () => {
-      const [o] = queue.splice(0, 1);      if (!o.tracking_code) return;
-      const res = await checkSteadfastStatus(o.tracking_code);
-      if (res.ok && res.status) updates.set(o.id, res.status);
-      else failed += 1;
-    };
-    while (queue.length > 0) {
-      const batch = queue.splice(0, CONCURRENCY);
-      await Promise.all(batch.map(worker));
-    }
-    if (updates.size > 0) {
-      setOrders((prev) => prev.map((o) => (updates.has(o.id) ? { ...o, steadfast_status: updates.get(o.id)! } : o)));
-      // Flip orders the courier confirms as delivered
-      const nowDelivered = [...updates.entries()].filter(([, s]) => s === 'delivered');
-      for (const [orderId] of nowDelivered) {
-        const o = orders.find((x) => x.id === orderId);
-        if (o && o.status !== 'delivered') await applyOrderStatus(orderId, 'delivered');
+      while (queue.length > 0) {
+        const o = queue.shift();
+        if (!o?.tracking_code) return;
+        const res = await checkSteadfastStatus(o.tracking_code);
+        if (res.ok && res.status) updates.set(o.id, res.status);
+        else if (res.notFound) deletedPickups.push(o.id);
+        else failed += 1;
       }
+    };
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker())
+      );
+      // Consignments deleted from the Steadfast portal: drop the stale tracking
+      // code so those orders become bookable again.
+      if (deletedPickups.length > 0) {
+        const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', deletedPickups);
+        if (error) {
+          showToast('error', `Could not clear deleted pickup${deletedPickups.length > 1 ? 's' : ''}: ${error.message}`);
+        } else {
+          setOrders((prev) => prev.map((o) => (deletedPickups.includes(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+          if (!silent) showToast('info', `${deletedPickups.length} pickup${deletedPickups.length > 1 ? 's were' : ' was'} deleted from Steadfast — the order${deletedPickups.length > 1 ? 's are' : ' is'} unbooked again.`);
+        }
+      }
+      if (updates.size > 0) {
+        setOrders((prev) => prev.map((o) => (updates.has(o.id) ? { ...o, steadfast_status: updates.get(o.id)! } : o)));
+        // Flip orders the courier confirms as delivered
+        const nowDelivered = [...updates.entries()].filter(([, s]) => s === 'delivered');
+        for (const [orderId] of nowDelivered) {
+          const o = orders.find((x) => x.id === orderId);
+          if (o && o.status !== 'delivered') await applyOrderStatus(orderId, 'delivered');
+        }
+      }
+    } finally {
+      // Always clear the spinner — even if a status check throws unexpectedly.
+      setBulkChecking(false);
     }
-    setBulkChecking(false);
     if (!silent) {
       if (failed > 0) showToast('error', `${failed} status check${failed > 1 ? 's' : ''} failed — Steadfast may be unreachable.`);
       else showToast('success', `Updated ${updates.size} Steadfast status${updates.size === 1 ? '' : 'es'}.`);
@@ -859,13 +881,15 @@ export default function AdminPage() {
     // exchange toggle) are unsupported by the API → ignored.
     const sizePart = order.selected_size ? ` (Size ${order.selected_size})` : '';
     const qtyPart = order.quantity > 1 ? ` × ${order.quantity}` : '';
+    const codePart = order.product_code ? ` [${order.product_code}]` : '';
     const result = await createSteadfastConsignment({
       invoice: order.order_code || order.id.slice(0, 12),
       recipient_name: order.customer_name || 'Customer',
       recipient_phone: order.customer_phone,
       recipient_address: order.customer_address,
       cod_amount: codAmount,
-      note: `${order.product_title}${sizePart}${qtyPart}`,
+      weight: 1.5, // declared parcel weight in kg
+      note: `${order.product_title}${sizePart}${qtyPart}${codePart}`,
     });
 
     if (result.ok && result.trackingCode) {
@@ -897,6 +921,16 @@ export default function AdminPage() {
       // Convenience: a confirmed Steadfast delivery can flip the local order too
       if (result.status === 'delivered' && order.status !== 'delivered') {
         await applyOrderStatus(order.id, 'delivered');
+      }
+    } else if (result.notFound) {
+      // The consignment no longer exists on Steadfast (deleted from their
+      // portal) — drop the stale tracking code so the order can be re-booked.
+      const { error } = await supabase.from('orders').update({ tracking_code: null }).eq('id', order.id);
+      if (error) {
+        showToast('error', `Steadfast has no record of this tracking code, but clearing it failed: ${error.message}`);
+      } else {
+        setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+        showToast('info', 'Steadfast has no record of this pickup (it was likely deleted from their portal). The order is now unbooked — you can book it again.');
       }
     } else {
       showToast('error', result.message);

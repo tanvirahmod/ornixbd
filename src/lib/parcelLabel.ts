@@ -13,6 +13,12 @@
 import QRCode from 'qrcode';
 import type { Order } from './supabase';
 
+// Same logo as the storefront navbar (ImageKit CDN).
+const LOGO_URL = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
+
+// Declared parcel weight printed on labels and sent with every booking.
+const WEIGHT_KG = 1.5;
+
 // Canonical Code 128 symbol widths (6 bar/space widths, 7 for the STOP symbol).
 const CODE128_PATTERNS = [
   '212222', '222122', '222221', '121223', '121322', '131222', '122213', '122312', '132212', '221213',
@@ -121,8 +127,7 @@ const LABEL_CSS = `
   }
   .head { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 8px;
           border-bottom: 3px solid #000; }
-  .logo { width: 64px; height: 64px; background: #000; color: #fff; display: flex; align-items: center;
-          justify-content: center; font-weight: 900; font-size: 13px; letter-spacing: 1px; }
+  .logo { width: 76px; height: 60px; object-fit: contain; object-position: left top; }
   .brand { text-align: right; }
   .brand-name { font-size: 26px; font-weight: 900; letter-spacing: 3px; }
   .merchant { font-size: 15px; color: #222; margin-top: 6px; }
@@ -156,7 +161,7 @@ function labelHtml(data: LabelData, merchantId: string | null): string {
     ['INVOICE', data.invoice],
     ['SF-ID', data.barcodeText],
     ['DELIVERY', data.delivery],
-    ['WEIGHT', 'N/G'],
+    ['WEIGHT', `${WEIGHT_KG} KG`],
   ];
   const custRows: Array<[string, string]> = [
     ['NAME', data.name],
@@ -168,7 +173,7 @@ function labelHtml(data: LabelData, merchantId: string | null): string {
   return `
     <div class="label">
       <div class="head">
-        <div class="logo">ORNIX</div>
+        <img class="logo" src="${LOGO_URL}" alt="ORNIX" />
         <div class="brand">
           <div class="brand-name">ORNIX</div>
           <div class="merchant">Merchant ID: ${esc(merchantId || '—')}</div>

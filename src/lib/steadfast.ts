@@ -1,6 +1,8 @@
 // ── Steadfast Courier API client ──
-// Docs (official Laravel package): https://github.com/steadfast-it/SteadFast-Courier-Laravel-Package
-// Base URL: https://portal.steadfast.com.bd/api/v1
+// Base URL: https://portal.packzy.com/api/v1
+//   (The API lives on Steadfast's portal host "packzy.com" — the same host the
+//   official WordPress plugin documents. portal.steadfast.com.bd does not
+//   resolve in DNS and only serves the merchant web dashboard.)
 //   POST /create_order            → book a consignment
 //   GET  /status_by_trackingcode/{code} → check delivery status
 // Auth headers: Api-Key + Secret-Key.
@@ -9,7 +11,7 @@
 // which is acceptable for a single-merchant shop. For multi-tenant deployments move these
 // calls into a Supabase Edge Function so the keys never reach any client.
 
-const BASE_URL = 'https://portal.steadfast.com.bd/api/v1';
+const BASE_URL = 'https://portal.packzy.com/api/v1';
 
 const API_KEY = import.meta.env.VITE_STEADFAST_API_KEY ?? '';
 const SECRET_KEY = import.meta.env.VITE_STEADFAST_SECRET_KEY ?? '';
@@ -31,6 +33,7 @@ export type SteadfastBookingInput = {
   recipient_phone: string;
   recipient_address: string;
   cod_amount: number;
+  weight?: number;
   note?: string;
 };
 
@@ -59,6 +62,7 @@ export async function createSteadfastConsignment(
         recipient_phone: input.recipient_phone,
         recipient_address: input.recipient_address,
         cod_amount: input.cod_amount,
+        weight: input.weight ?? 1.5, // declared parcel weight (kg)
         note: input.note ?? '',
       }),
     });
@@ -68,7 +72,9 @@ export async function createSteadfastConsignment(
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
-      return { ok: false, trackingCode: null, consignmentId: null, message: `Unexpected response from Steadfast (HTTP ${res.status}).` };
+      return { ok: false, trackingCode: null, consignmentId: null, message: res.status === 401
+        ? 'Steadfast rejected the API keys (401 Unauthorized).'
+        : `Unexpected response from Steadfast (HTTP ${res.status}).` };
     }
 
     const consignment = (data.consignment ?? {}) as Record<string, unknown>;
@@ -101,6 +107,9 @@ export type SteadfastStatusResult = {
   ok: boolean;
   status: string | null;
   message: string;
+  /** True when Steadfast has no such consignment (deleted, or never existed
+   *  on this merchant account) — the API answers 401 "Unauthorized Access". */
+  notFound?: boolean;
 };
 
 /** Check delivery status by tracking code. */
@@ -120,11 +129,21 @@ export async function checkSteadfastStatus(trackingCode: string): Promise<Steadf
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
+      if (res.status === 401) {
+        return { ok: false, status: null, notFound: true, message: 'Steadfast has no record of this tracking code (it may have been deleted from the portal).' };
+      }
       return { ok: false, status: null, message: `Unexpected response from Steadfast (HTTP ${res.status}).` };
     }
 
     if (res.ok && data.delivery_status) {
-      return { ok: true, status: String(data.delivery_status), message: 'ok' };
+      const status = String(data.delivery_status);
+      // Steadfast answers 200 + delivery_status:"unknown" for consignments that
+      // no longer exist on the merchant account (e.g. the pickup request was
+      // deleted from their portal). Treat that as "unbooked" upstream.
+      if (status === 'unknown') {
+        return { ok: false, status, notFound: true, message: 'Steadfast has no active record of this tracking code (it may have been deleted from the portal).' };
+      }
+      return { ok: true, status, message: 'ok' };
     }
     return { ok: false, status: null, message: (data.message as string | undefined) ?? `Status check failed (HTTP ${res.status}).` };
   } catch (err) {
