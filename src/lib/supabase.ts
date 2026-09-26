@@ -40,14 +40,36 @@ export type Product = {
   description: string;
   price: number;
   discount_price: number | null;
+  /** What the product costs you — powers margin/net-profit on the Finance tab. */
+  cost_price: number | null;
   sizes: string[];
   stock_count: number;
   category_id: string | null;
   advance_optional: boolean;
+  size_chart_template_id?: string | null;
   created_at: string;
   product_images?: ProductImage[];
   categories?: Category | null;
   product_sizes?: ProductSize[];
+  /** Embedded measurement chart (when a template is linked) */
+  size_chart_templates?: SizeChartTemplate | null;
+};
+
+/** Per-product size chart data: measurement rows × size columns, values as free text. */
+export type SizeChartMeasurements = {
+  rows: string[];
+  sizes: string[];
+  values: Record<string, Record<string, string>>;
+  note?: string;
+};
+
+/** Reusable measurement chart — many products can share one. */
+export type SizeChartTemplate = {
+  id: string;
+  name: string;
+  measurements: SizeChartMeasurements;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ProductImage = {
@@ -94,6 +116,49 @@ export type Order = {
   steadfast_status?: string | null;
   delivered: boolean;
   status: OrderStatus;
+  /** 'checkout' (website) or 'manual' (in-store purchase recorded by staff). */
+  order_source?: 'checkout' | 'manual' | null;
+  /** For manual orders: the staff member who made the sale. */
+  seller_name?: string | null;
+  created_at: string;
+};
+
+/** Audit trail: which admin did what (statuses, bookings, deletes, restocks…). */
+export type AdminLog = {
+  id: string;
+  admin_id: string;
+  action: string;
+  target: string | null;
+  detail: string | null;
+  created_at: string;
+};
+
+/** One row per stock change — orders decrement, manual sells, restocks, adjustments. */
+export type StockMovement = {
+  id: string;
+  product_id: string;
+  size: string | null;
+  delta: number;
+  reason: string;
+  note: string | null;
+  admin_id: string | null;
+  created_at: string;
+};
+
+/** Saved seller names for the Manual Orders dropdown (each deletable from admin). */
+export type Seller = {
+  id: string;
+  name: string;
+  created_at: string;
+};
+
+/** Business expenses (ads, packaging, rent, courier top-ups…) for net profit. */
+export type Expense = {
+  id: string;
+  title: string;
+  amount: number;
+  note: string | null;
+  spent_at: string;
   created_at: string;
 };
 

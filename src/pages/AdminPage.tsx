@@ -1,17 +1,22 @@
-import { useState, useEffect, useRef } from 'react';
-import { Lock, LogOut, Plus, Pencil, Trash2, X, Loader2,
+import { useState, useEffect, useMemo, useRef } from 'react';import {
+  Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer
+   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown
 } from 'lucide-react';
-import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon } from '../lib/supabase';
-import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage } from '../lib/steadfast';
+import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon, AdminLog, StockMovement, Expense, Seller, SizeChartTemplate } from '../lib/supabase';
+import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
-import { zoneForDistrict, type DeliveryZone } from '../components/ZoneSelect';
+import { zoneForDistrict, DELIVERY_ZONES, type DeliveryZone } from '../components/ZoneSelect';
+import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
+import ThanaSelect from '../components/ThanaSelect';
+import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, FinCard, FinDelta, DailyBars, EmptyState, ToastStack, nextToastId, type Toast } from '../admin/ui';
 import { printLabels } from '../lib/parcelLabel';
-import { verifyAdmin } from '../lib/adminCredentials';
+import { printManualOrdersReport, manualOrderInDateRange } from '../lib/manualOrdersReport';
+import { useAdminAuth } from '../lib/useAdminAuth';
 import { useNavigation } from '../lib/navigation';
+import { WHATSAPP_ORDER_KEY, WHATSAPP_CHAT_KEY, normalizeWhatsAppNumber } from '../lib/whatsapp';
 
-type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'coupons' | 'feedback' | 'settings';
+type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'manual' | 'finance' | 'coupons' | 'feedback' | 'settings';
 type ModalMode = 'add' | 'edit';
 
 // Compact page list for pagination: 1 … 4 5 6 … 12
@@ -34,11 +39,13 @@ const EMPTY_FORM = {
   description: '',
   price: '',
   discount_price: '',
+  cost_price: '',
   sizes: '',
   stock_count: '',
   category_id: '',
   product_code: '',
   advance_optional: false,
+  size_chart_template_id: '',
 };
 
 // True when every ordered line item is a no-advance (pure cash on delivery) product
@@ -47,15 +54,12 @@ const allNoAdvance = (codes: Array<string | null>, products: Product[]) => {
   return codes.length > 0 && codes.every((c) => c && set.has(c.toUpperCase()));
 };
 
-// Pill colors per order status (used on order cards)
-const ORDER_STATUS_PILL: Record<OrderStatus, string> = {
-  pending: 'bg-amber-50 text-amber-600 border border-amber-200',
-  delivered: 'bg-emerald-50 text-emerald-600 border border-emerald-200',
-  canceled: 'bg-red-50 text-red-600 border border-red-200',
+// Zone group headings for the manual-order district dropdown (same grouping as checkout)
+const ZONE_GROUP_LABELS: Record<DeliveryZone, string> = {
+  dhaka_city: 'Inside Dhaka',
+  dhaka_suburban: 'Dhaka Suburban',
+  outside_dhaka: 'Outside Dhaka',
 };
-
-// Small uppercase field label used inside order detail cards
-const ORD_LBL = 'text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-0.5';
 
 // Steadfast pipeline stages shown on order cards (must match steadfast.ts)
 const STEADFAST_STAGE_ORDER: SteadfastStage[] = ['booked', 'in_review', 'picked_up', 'in_transit', 'delivered'];
@@ -68,75 +72,19 @@ const STEADFAST_STAGE_LABELS: Record<SteadfastStage, string> = {
   cancelled: 'Cancelled',
 };
 
-// ── Toast system (replaces window.alert) ──
-type Toast = { id: number; kind: 'success' | 'error' | 'info'; text: string };
-let toastSeq = 0;
-
-function ToastStack({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
-  return (
-    <div className="fixed bottom-5 right-5 z-[60] flex flex-col gap-2 items-end pointer-events-none">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          role="status"
-          className={`pointer-events-auto flex items-start gap-2.5 max-w-sm w-full sm:w-96 bg-white rounded-xl shadow-lg border px-4 py-3 animate-fade-in-up ${
-            t.kind === 'success'
-              ? 'border-emerald-200'
-              : t.kind === 'error'
-                ? 'border-red-200'
-                : 'border-stone-200'
-          }`}
-        >
-          <span
-            className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5 ${
-              t.kind === 'success'
-                ? 'bg-emerald-100 text-emerald-600'
-                : t.kind === 'error'
-                  ? 'bg-red-100 text-red-500'
-                  : 'bg-stone-100 text-stone-500'
-            }`}
-          >
-            {t.kind === 'success' ? (
-              <CheckCircle2 className="w-3.5 h-3.5" />
-            ) : t.kind === 'error' ? (
-              <AlertCircle className="w-3.5 h-3.5" />
-            ) : (
-              <AlertTriangle className="w-3.5 h-3.5" />
-            )}
-          </span>
-          <p className="flex-1 text-sm text-stone-700 leading-snug break-words">{t.text}</p>
-          <button
-            onClick={() => onDismiss(t.id)}
-            className="flex-shrink-0 text-stone-300 hover:text-stone-500 transition-colors"
-            aria-label="Dismiss notification"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Consistent empty state used across tabs
-function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
-  return (
-    <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-stone-200">
-      <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-stone-50 text-stone-300 flex items-center justify-center">{icon}</div>
-      <p className="text-stone-500 font-medium">{title}</p>
-      {hint && <p className="text-stone-400 text-sm mt-1">{hint}</p>}
-    </div>
-  );
-}
 
 export default function AdminPage() {
   const onNavigate = useNavigation();
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return sessionStorage.getItem('admin_auth') === 'true';
-  });
+  // ── Supabase Auth login (session + admin allowlist enforced server-side) ──
+  const { authReady, isAuthenticated, adminEmail, signIn, signOut } = useAdminAuth();
+  const [currentAdminId, setCurrentAdminId] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
   const [adminId, setAdminId] = useState('');
   const [adminPass, setAdminPass] = useState('');
   const [loginError, setLoginError] = useState('');
+  useEffect(() => {
+    if (adminEmail) setCurrentAdminId(adminEmail);
+  }, [adminEmail]);
 
   const [tab, setTab] = useState<Tab>('products');
   const [products, setProducts] = useState<Product[]>([]);
@@ -163,7 +111,7 @@ export default function AdminPage() {
   const [catSaving, setCatSaving] = useState(false);
   const [catError, setCatError] = useState('');
 
-  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'product' | 'category'; id: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'product' | 'category' | 'size_chart'; id: string } | null>(null);
 
   const [productSearch, setProductSearch] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('');
@@ -183,6 +131,33 @@ export default function AdminPage() {
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [updatingDelivery, setUpdatingDelivery] = useState<string | null>(null);
   const [orderStatusOpen, setOrderStatusOpen] = useState<string | null>(null);
+
+  // ── Finance tab state ──
+  const [finRange, setFinRange] = useState<'today' | 'week' | 'month' | 'all' | 'custom'>('all');
+  const [finFrom, setFinFrom] = useState('');
+  const [finTo, setFinTo] = useState('');
+  const [expandedLedger, setExpandedLedger] = useState<string | null>(null);
+
+  // ── Bulk order actions ──
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState<null | 'book' | 'deliver' | 'cancel' | 'delete'>(null);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+
+  // ── COD reconciliation ──
+  const [sfBalance, setSfBalance] = useState<number | null>(null);
+  const [sfBalanceLoading, setSfBalanceLoading] = useState(false);
+  const [sfBalanceError, setSfBalanceError] = useState('');
+
+  // ── Expenses (Finance tab) ──
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenseForm, setExpenseForm] = useState({ title: '', amount: '', note: '', spent_at: '' });
+  const [expenseSaving, setExpenseSaving] = useState(false);
+  const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
+
+  // ── Activity log & stock movement history ──
+  const [adminLogs, setAdminLogs] = useState<AdminLog[]>([]);
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+  const [movementProductId, setMovementProductId] = useState<string | null>(null);
   const orderStatusRef = useRef<HTMLDivElement | null>(null);
   const [feedbackList, setFeedbackList] = useState<Feedback[]>([]);
   const [feedbackSearch, setFeedbackSearch] = useState('');
@@ -236,7 +211,47 @@ export default function AdminPage() {
 
   // ── Steadfast courier rates per delivery zone ──
   const [steadfastRates, setSteadfastRates] = useState({ dhaka_city: '60', dhaka_suburban: '110', outside_dhaka: '130' });
+  const [lowStockThreshold, setLowStockThreshold] = useState(5);
+  const [thresholdInput, setThresholdInput] = useState('5');
+  const [thresholdSaving, setThresholdSaving] = useState(false);
+
+  // ── WhatsApp numbers (storefront chat bubble + product-page order button) ──
+  const [waNumbers, setWaNumbers] = useState({ order: '', chat: '' });
+  const [waSaving, setWaSaving] = useState(false);
+
+  // ── Manual (in-store) orders ──
+  const [manualForm, setManualForm] = useState({
+    product_id: '', product_code: '', size: '', quantity: '1',
+    amount: '', seller_name: '', bkash: '', customer_name: '',
+    district: '', thana: '', address: '',
+  });
+  // ── Size chart templates (reusable measurement charts) ──
+  const [sizeCharts, setSizeCharts] = useState<SizeChartTemplate[]>([]);
+  const [chartModalOpen, setChartModalOpen] = useState(false);
+  const [chartModalMode, setChartModalMode] = useState<'add' | 'edit'>('add');
+  const [editingChart, setEditingChart] = useState<SizeChartTemplate | null>(null);
+  const [chartName, setChartName] = useState('');
+  const [chartNote, setChartNote] = useState('');
+  const [chartRows, setChartRows] = useState<string[]>(['Chest', 'Length']);
+  const [chartSizes, setChartSizes] = useState<string[]>(['M', 'L', 'XL']);
+  const [chartValues, setChartValues] = useState<Record<string, Record<string, string>>>({});
+  const [chartSaving, setChartSaving] = useState(false);
+  const [chartError, setChartError] = useState('');
+  const [chartManagerOpen, setChartManagerOpen] = useState(false);
+  const [manualSaving, setManualSaving] = useState(false);
+  // Saved seller names for the Manual Orders dropdown (sellers table)
+  const [sellers, setSellers] = useState<Seller[]>([]);
+  const [deletingSeller, setDeletingSeller] = useState<string | null>(null); // seller id while deleting
+  const [hiddenSellers, setHiddenSellers] = useState<Set<string>>(new Set()); // unsaved names hidden via ✕
+  // PDF report filters (seller + date range)
+  const [reportSeller, setReportSeller] = useState(''); // '' = all sellers
+  const [reportFrom, setReportFrom] = useState('');
+  const [reportTo, setReportTo] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+  const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const [merchantId, setMerchantId] = useState('');
+  // bKash number shown on checkout for the delivery-fee advance (site_settings)
+  const [checkoutBkash, setCheckoutBkash] = useState('');
   const [labelFrom, setLabelFrom] = useState('');
   const [labelTo, setLabelTo] = useState('');
   const [printingLabels, setPrintingLabels] = useState<string | null>(null); // 'bulk' | order id
@@ -245,7 +260,7 @@ export default function AdminPage() {
   // ── Toasts ──
   const [toasts, setToasts] = useState<Toast[]>([]);
   const showToast = (kind: Toast['kind'], text: string) => {
-    const id = ++toastSeq;
+    const id = nextToastId();
     setToasts((prev) => [...prev.slice(-3), { id, kind, text }]);
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -253,11 +268,69 @@ export default function AdminPage() {
   };
   const dismissToast = (id: number) => setToasts((prev) => prev.filter((t) => t.id !== id));
 
+  // ── Audit trail helpers (best-effort: never block the action itself) ──
+  const logAdmin = async (action: string, target?: string | null, detail?: string | null) => {
+    if (!currentAdminId) return;
+    try {
+      await supabase.from('admin_log').insert({ admin_id: currentAdminId, action, target: target ?? null, detail: detail ?? null });
+      setAdminLogs((prev) => [
+        { id: `local-${Date.now()}-${Math.random()}`, admin_id: currentAdminId, action, target: target ?? null, detail: detail ?? null, created_at: new Date().toISOString() },
+        ...prev,
+      ]);
+    } catch {
+      // logging must never break the underlying action
+    }
+  };
+
+  // Record a stock change (fires only once the stock_movements table exists)
+  const stockDelta = async (productId: string, size: string | null, delta: number, reason: string, note?: string | null) => {
+    try {
+      await supabase.from('stock_movements').insert({ product_id: productId, size, delta, reason, note: note ?? null, admin_id: currentAdminId || null });
+      setStockMovements((prev) => [
+        { id: `local-${Date.now()}-${Math.random()}`, product_id: productId, size, delta, reason, note: note ?? null, admin_id: currentAdminId || null, created_at: new Date().toISOString() },
+        ...prev,
+      ]);
+    } catch {
+      // movement history is best-effort until the migration runs
+    }
+  };
+
   // ── Dashboard at-a-glance stats ──
   const pendingOrders = orders.filter((o) => o.status === 'pending').length;
   const deliveredOrders = orders.filter((o) => o.status === 'delivered').length;
   const canceledOrders = orders.filter((o) => o.status === 'canceled').length;
-  const lowStockCount = products.filter((p) => p.stock_count <= 5).length;
+  const manualOrders = orders.filter((o) => o.order_source === 'manual');
+  const manualToday = manualOrders.filter((o) => new Date(o.created_at).toDateString() === new Date().toDateString());
+  // Dropdown names = saved sellers table + anyone already on an order (de-duped, A→Z)
+  const knownSellers = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Seller[] = sellers.map((s) => ({ ...s }));
+    for (const s of sellers) seen.add(s.name.toLowerCase());
+    for (const o of manualOrders) {
+      const name = (o.seller_name ?? '').trim();
+      if (name && !seen.has(name.toLowerCase()) && !hiddenSellers.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        out.push({ id: `order-${o.id}`, name, created_at: o.created_at });
+      }
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }, [sellers, manualOrders, hiddenSellers]);
+  // Apply the PDF report filters
+  const reportOrders = useMemo(() => {
+    const parseDay = (v: string, endOfDay: boolean) => {
+      if (!v) return null;
+      const d = new Date(`${v}T00:00:00`);
+      if (isNaN(d.getTime())) return null;
+      return endOfDay ? new Date(d.getTime() + 24 * 60 * 60 * 1000) : d;
+    };
+    const from = parseDay(reportFrom, false);
+    const to = parseDay(reportTo, true);
+    return manualOrders.filter(
+      (o) =>
+        (!reportSeller || (o.seller_name ?? '').trim() === reportSeller) &&
+        manualOrderInDateRange(o, from, to)
+    );
+  }, [manualOrders, reportSeller, reportFrom, reportTo]);
 
   const filteredProducts = products.filter((p) => {
     if (productCategoryFilter && p.category_id !== productCategoryFilter) return false;
@@ -290,6 +363,62 @@ export default function AdminPage() {
   };
   for (const o of orders) stageCounts[stageOfOrder(o)] += 1;
   const trackedCount = orders.filter((o) => o.tracking_code).length;
+
+  // ── Inventory aggregates (Finance tab) ──
+  const lowStockProducts = useMemo(
+    () => products.filter((p) => p.stock_count <= lowStockThreshold).sort((a, b) => a.stock_count - b.stock_count),
+    [products, lowStockThreshold]
+  );
+  // Badge on the Stock tab: same definition as the Finance "Low stock items" card
+  const lowStockCount = lowStockProducts.length;
+  const stockValue = useMemo(
+    () => products.reduce((sum, p) => {
+      const unit = p.discount_price != null && p.discount_price < p.price ? Number(p.discount_price) : Number(p.price);
+      return sum + unit * p.stock_count;
+    }, 0),
+    [products]
+  );
+  // Cash currently riding with the courier: booked, not yet delivered/cancelled
+  const pendingCod = useMemo(() => {
+    let amount = 0;
+    let count = 0;
+    for (const o of orders) {
+      if (!o.tracking_code || o.status === 'canceled' || o.status === 'delivered') continue;
+      const b = steadfastStageBadge(o.steadfast_status);
+      if (b && (b.stage === 'delivered' || b.stage === 'cancelled')) continue;
+      amount += Number(o.due_amount ?? 0);
+      count += 1;
+    }
+    return { amount, count };
+  }, [orders]);
+  void pendingCod; // reserved for the courier-cash section header
+
+  // ── COD reconciliation: where is the cash? ──
+  const codRecon = useMemo(() => {
+    let collected = 0;     // delivered & paid (cash received or confirmed by courier)
+    let collectedCount = 0;
+    let pending = 0;       // booked, in transit — cash with the courier
+    let pendingCount = 0;
+    let returned = 0;      // cancelled parcels — no cash
+    let returnedCount = 0;
+    for (const o of orders) {
+      if (!o.tracking_code || o.status === 'canceled') continue;
+      const cod = Math.max(0, Number(o.due_amount ?? 0));
+      const b = steadfastStageBadge(o.steadfast_status);
+      const stage = b?.stage ?? 'booked';
+      if (stage === 'delivered' || o.status === 'delivered') {
+        collected += cod;
+        collectedCount += 1;
+      } else if (stage === 'cancelled') {
+        returned += cod;
+        returnedCount += 1;
+      } else {
+        pending += cod;
+        pendingCount += 1;
+      }
+    }
+    return { collected, collectedCount, pending, pendingCount, returned, returnedCount };
+  }, [orders]);
 
   const filteredOrders = orders.filter((o) => {
     if (orderStatusFilter !== 'all' && o.status !== orderStatusFilter) return false;
@@ -329,6 +458,35 @@ export default function AdminPage() {
     const p = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
+
+  // First day (ISO) of the selected finance range — '' for all-time/custom
+  const rangeStartISO = () => {
+    if (finRange === 'today') return dayOffsetISO(0);
+    if (finRange === 'week') { const d = new Date(); return dayOffsetISO(-d.getDay()); }
+    if (finRange === 'month') { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`; }
+    return '';
+  };
+
+  // ── Finance & inventory aggregates (all derived from already-fetched orders/products) ──
+  const financeOrders = useMemo(() => {
+    if (finRange === 'all') return orders.filter((o) => o.status !== 'canceled');
+    let fromTs: number | null = null;
+    let toTs: number | null = null;
+    if (finRange === 'custom') {
+      fromTs = finFrom ? new Date(`${finFrom}T00:00:00`).getTime() : null;
+      toTs = finTo ? new Date(`${finTo}T23:59:59.999`).getTime() : null;
+    } else {
+      // today → today 00:00 · week → Sunday · month → 1st of current month
+      toTs = new Date(`${dayOffsetISO(0)}T23:59:59.999`).getTime();
+      fromTs = new Date(`${rangeStartISO()}T00:00:00`).getTime();
+    }
+    return orders.filter((o) => {
+      if (o.status === 'canceled') return false;
+      const ts = new Date(o.created_at).getTime();
+      return (fromTs == null || ts >= fromTs) && (toTs == null || ts <= toTs);
+    });
+  }, [orders, finRange, finFrom, finTo]);
+
 
   const handlePrintLabels = async (list: Order[], label: string) => {
     if (list.length === 0) {
@@ -371,13 +529,264 @@ export default function AdminPage() {
       : 0;
     const qty = Number(order.quantity ?? 1) || 1;
     const subtotal = unitPrice * qty;
-    // Fallback fee: the order's stored fee if present, else its zone rate, else flat 150
+    // Stored fee wins (0 = free delivery / in-store sale); fall back to zone rate, then flat 150
     const zone = order.delivery_zone ? zoneForDistrict(order.delivery_zone) : null;
     const zoneRate = zone ? Number(steadfastRates[zone as DeliveryZone]) : NaN;
-    const deliveryFee = Number(order.delivery_fee ?? NaN) || (isNaN(zoneRate) ? 150 : zoneRate);
+    const deliveryFee = order.delivery_fee != null ? Number(order.delivery_fee) : (isNaN(zoneRate) ? 150 : zoneRate);
     const total = subtotal + deliveryFee;
 
     return { unitPrice, qty, subtotal, deliveryFee, total };
+  };
+
+  // Flat financial statement for one order (Finance tab ledger + CSV export)
+  const buildLedgerRow = (o: Order) => {
+    const pricing = getOrderPricing(o);
+    const storedTotal = o.total_amount != null ? Number(o.total_amount) : pricing.total;
+    const storedDiscount = o.discount_amount != null ? Number(o.discount_amount) : 0;
+    const storedSubtotal = o.subtotal != null ? Number(o.subtotal) : Math.max(0, storedTotal - pricing.deliveryFee);
+    const matchedProduct = products.find((p) => p.id === o.product_id);
+    const unitCost = matchedProduct?.cost_price != null ? Number(matchedProduct.cost_price) : null;
+    const payLabel =
+      o.payment_method === 'in_store' ? 'In-store sale'
+        : o.payment_method === 'full_advance' ? 'Full advance'
+          : o.payment_method === 'advance_partial' ? 'COD + advance'
+            : o.payment_method === 'cash_on_delivery' ? 'Cash on delivery'
+              : o.order_source === 'manual' ? 'In-store sale'
+                : o.courier_name === 'Store Pickup' ? 'Store pickup'
+                  : allNoAdvance([o.product_code], products) ? 'Cash on delivery' : '';
+    return {
+      orderCode: o.order_code ?? o.id.slice(0, 8).toUpperCase(),
+      customer: o.customer_name || 'Unknown',
+      phone: o.customer_phone ?? '',
+      dateLabel: new Date(o.created_at).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true }),
+      coupon: o.coupon_code ?? '',
+      payLabel,
+      size: o.selected_size ?? '',
+      qty: Number(o.quantity ?? 1) || 1,
+      unitPrice: pricing.unitPrice,
+      subtotal: storedSubtotal,
+      discount: storedDiscount,
+      deliveryFee: pricing.deliveryFee,
+      total: storedTotal,
+      advance: Number(o.advance_amount ?? 0),
+      due: Number(o.due_amount ?? 0),
+      zone: o.delivery_zone ?? '—',
+      courier: o.courier_name ?? '',
+      trackingCode: o.tracking_code ?? '',
+      status: o.status as string,
+      unitCost,
+      costTotal: unitCost != null ? unitCost * (Number(o.quantity ?? 1) || 1) : null,
+      orderSource: o.order_source === 'manual' ? 'manual' : 'checkout',
+      sellerName: o.seller_name ?? '',
+    };
+  };
+
+  const finStats = useMemo(() => {
+    const count = financeOrders.length;
+    let grossRevenue = 0;   // product value (subtotal − discounts)
+    let deliveryCollected = 0;
+    let grossTotal = 0;
+    let advance = 0;
+    let due = 0;
+    let discounts = 0;
+    let courierEst = 0;
+    const couponSpend: Record<string, { count: number; amount: number }> = {};
+    for (const o of financeOrders) {
+      const pricing = getOrderPricing(o);
+      const storedTotal = o.total_amount != null ? Number(o.total_amount) : pricing.total;
+      const storedDiscount = o.discount_amount != null ? Number(o.discount_amount) : 0;
+      // storedTotal already has the discount baked in — don't subtract it twice
+      const subtotal = Math.max(0, storedTotal - pricing.deliveryFee);
+      grossRevenue += subtotal;
+      deliveryCollected += pricing.deliveryFee;
+      grossTotal += storedTotal;
+      advance += Number(o.advance_amount ?? 0);
+      due += Number(o.due_amount ?? 0);
+      discounts += storedDiscount;
+      courierEst += pricing.deliveryFee;
+      if (o.coupon_code) {
+        const c = couponSpend[o.coupon_code] ?? { count: 0, amount: 0 };
+        c.count += 1;
+        c.amount += storedDiscount;
+        couponSpend[o.coupon_code] = c;
+      }
+    }
+    return { count, grossRevenue, deliveryCollected, grossTotal, advance, due, discounts, courierEst, couponSpend };
+  }, [financeOrders, products, steadfastRates]);
+
+  // ── Profit: product cost + expenses for the selected range ──
+  const cogs = useMemo(() => {
+    let total = 0;
+    let known = true; // false when any order's product has no cost_price set
+    for (const o of financeOrders) {
+      const p = products.find((x) => x.id === o.product_id);
+      if (p?.cost_price != null) {
+        total += Number(p.cost_price) * (Number(o.quantity ?? 1) || 1);
+      } else {
+        known = false;
+      }
+    }
+    return { total, known };
+  }, [financeOrders, products]);
+
+  const rangeExpenses = useMemo(() => {
+    const startISO = finRange === 'all' ? '' : rangeStartISO();
+    return expenses.filter((e) => {
+      if (!startISO) return true;
+      const d = e.spent_at ?? (e.created_at ?? '').slice(0, 10);
+      return d >= startISO;
+    }).reduce((sum, e) => sum + Number(e.amount ?? 0), 0);
+  }, [expenses, finRange, rangeStartISO]);
+
+  // Revenue is already net of discounts — only costs are subtracted here.
+  // (Delivery fees cancel out: collected ≈ courier cost, so both are excluded.)
+  const netProfit = finStats.grossRevenue - cogs.total - finStats.courierEst - rangeExpenses;
+
+  // ── Previous-period twin of financeOrders (same length immediately before),
+  // for the ▲/▼ comparison on the hero band. Null when the range is open-ended
+  // (all-time / custom-with-no-start) — no fair baseline to compare against.
+  const prevFinanceOrders = useMemo(() => {
+    if (finRange === 'all') return [];
+    let fromTs: number, toTs: number;
+    if (finRange === 'custom') {
+      if (!finFrom) return [];
+      const from = new Date(`${finFrom}T00:00:00`).getTime();
+      const to = finTo ? new Date(`${finTo}T23:59:59.999`).getTime() : Date.now();
+      const span = to - from;
+      fromTs = from - span - 1;
+      toTs = from - 1;
+    } else {
+      const from = new Date(`${rangeStartISO()}T00:00:00`).getTime();
+      const to = new Date(`${dayOffsetISO(0)}T23:59:59.999`).getTime();
+      const span = to - from;
+      fromTs = from - span - 1;
+      toTs = from - 1;
+   }
+    return orders.filter((o) => {
+      if (o.status === 'canceled') return false;
+      const ts = new Date(o.created_at).getTime();
+      return ts >= fromTs && ts <= toTs;
+    });
+  }, [orders, finRange, finFrom, finTo]);
+
+  const prevStats = useMemo(() => {
+    let revenue = 0;
+    for (const o of prevFinanceOrders) {
+      const pricing = getOrderPricing(o);
+      const storedTotal = o.total_amount != null ? Number(o.total_amount) : pricing.total;
+      revenue += Math.max(0, storedTotal - pricing.deliveryFee);
+    }
+    return { count: prevFinanceOrders.length, revenue };
+  }, [prevFinanceOrders, products, steadfastRates]);
+
+  // ── Daily revenue buckets for the mini bar chart on the hero band ──
+  const dailyBuckets = useMemo(() => {
+    const byDay = new Map<string, number>();
+    for (const o of financeOrders) {
+      const day = (o.created_at ?? '').slice(0, 10);
+      if (!day) continue;
+      const pricing = getOrderPricing(o);
+      const storedTotal = o.total_amount != null ? Number(o.total_amount) : pricing.total;
+      byDay.set(day, (byDay.get(day) ?? 0) + Math.max(0, storedTotal - pricing.deliveryFee));
+    }
+    if (byDay.size === 0) return [];
+    const days: Array<{ label: string; amount: number }> = [];
+    // Build the actual calendar days of the range so empty days show as gaps
+    let startISO: string;
+    if (finRange === 'custom' && finFrom) startISO = finFrom;
+    else if (finRange === 'all') {
+      const allDays = [...byDay.keys()].sort();
+      startISO = allDays[0];
+    } else startISO = rangeStartISO();
+    const endISO = finRange === 'custom' && finTo ? finTo : dayOffsetISO(0);
+    const cursor = new Date(`${startISO}T00:00:00`);
+    const end = new Date(`${endISO}T00:00:00`);
+    // All-time ranges cap the chart at the last 30 days for readability
+    const hardStart = finRange === 'all' && byDay.size > 30
+      ? new Date(new Date(`${endISO}T00:00:00`).getTime() - 29 * 86400000)
+      : cursor;
+    for (let d = hardStart; d <= end; d.setDate(d.getDate() + 1)) {
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      days.push({ label: iso.slice(8), amount: byDay.get(iso) ?? 0 });
+    }
+    return days.slice(-31);
+  }, [financeOrders, finRange, finFrom, finTo]);
+
+  const grossMargin = finStats.grossRevenue > 0 && cogs.total > 0
+    ? Math.round(((finStats.grossRevenue - cogs.total) / finStats.grossRevenue) * 100)
+    : null;
+
+  // Performance lists for the selected range: best sellers, slow movers, top customers
+  const perf = useMemo(() => {
+    type ProdRow = { key: string; name: string; orders: number; qty: number; revenue: number };
+    type CustRow = { key: string; name: string; phone: string; orders: number; spend: number };
+    const byProduct = new Map<string, ProdRow>();
+    const byCustomer = new Map<string, CustRow>();
+    for (const o of financeOrders) {
+      const pricing = getOrderPricing(o);
+      const storedTotal = o.total_amount != null ? Number(o.total_amount) : pricing.total;
+      const revenue = Math.max(0, storedTotal - pricing.deliveryFee);
+      const pkey = o.product_id ?? o.product_title;
+      const prow = byProduct.get(pkey) ?? { key: pkey, name: o.product_title, orders: 0, qty: 0, revenue: 0 };
+      prow.orders += 1;
+      prow.qty += Number(o.quantity ?? 1) || 1;
+      prow.revenue += revenue;
+      byProduct.set(pkey, prow);
+      const ckey = o.customer_phone || o.customer_name || 'unknown';
+      const crow = byCustomer.get(ckey) ?? { key: ckey, name: o.customer_name || 'Unknown', phone: o.customer_phone ?? '', orders: 0, spend: 0 };
+      crow.orders += 1;
+      crow.spend += storedTotal;
+      byCustomer.set(ckey, crow);
+    }
+    // Catalogue products with zero sales also count as least performing
+    const soldKeys = new Set(byProduct.keys());
+    for (const p of products) {
+      if (!soldKeys.has(p.id)) byProduct.set(p.id, { key: p.id, name: p.title, orders: 0, qty: 0, revenue: 0 });
+    }
+    const all = [...byProduct.values()];
+    const topProducts = all.filter((p) => p.orders > 0).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+    const leastProducts = all.sort((a, b) => a.revenue - b.revenue || a.orders - b.orders).slice(0, 5);
+    const topCustomers = [...byCustomer.values()].sort((a, b) => b.spend - a.spend).slice(0, 5);
+    return { topProducts, leastProducts, topCustomers };
+  }, [financeOrders, products]);
+
+  // Download the currently selected finance range as a CSV file
+  const exportFinanceCsv = () => {
+    if (financeOrders.length === 0) return;
+    const headers = [
+      'Order code', 'Date', 'Customer', 'Phone', 'Product', 'Size', 'Qty',
+      'Unit price', 'Subtotal', 'Discount', 'Coupon', 'Delivery fee', 'Total',
+      'Advance paid', 'Due', 'Payment method', 'Zone', 'Courier', 'Tracking code', 'Status',
+      'Unit cost', 'Order cost', 'Order profit', 'Source', 'Seller',
+    ];
+    const esc = (v: string | number) => {
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [
+      headers.join(','),
+      ...financeOrders
+        .slice()
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+        .map((o) => {
+          const r = buildLedgerRow(o);
+          const profit = r.unitCost != null && r.costTotal != null ? r.subtotal - r.discount - r.costTotal : '';
+          return [
+            r.orderCode, r.dateLabel, r.customer, r.phone, o.product_title, r.size, r.qty,
+            r.unitPrice, r.subtotal, r.discount, r.coupon, r.deliveryFee, r.total,
+            r.advance, r.due, r.payLabel, r.zone, r.courier, r.trackingCode, r.status,
+            r.unitCost ?? '', r.costTotal ?? '', profit, r.orderSource, r.sellerName,
+          ].map(esc).join(',');
+        }),
+    ];
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ornix-finance-${finRange === 'custom' ? `${finFrom || 'start'}_to_${finTo || 'now'}` : finRange}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('success', `Exported ${financeOrders.length} order${financeOrders.length === 1 ? '' : 's'} to CSV.`);
   };
 
   useEffect(() => {
@@ -385,6 +794,24 @@ export default function AdminPage() {
       fetchAll();
     }
   }, [isAuthenticated]);
+
+  // Live Steadfast balance for the Finance tab's COD reconciliation card
+  useEffect(() => {
+    if (!isAuthenticated || !steadfastConfigured) return;
+    let cancelled = false;
+    setSfBalanceLoading(true);
+    setSfBalanceError('');
+    getSteadfastBalance()
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) setSfBalance(res.balance);
+        else setSfBalanceError(res.message);
+      })
+      .finally(() => {
+        if (!cancelled) setSfBalanceLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, tab]);
 
   // Auto-refresh Steadfast statuses shortly after the orders load
   useEffect(() => {
@@ -545,17 +972,28 @@ export default function AdminPage() {
 
   async function fetchAll() {
     setLoading(true);
-    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes, couponRes] = await Promise.all([
+    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes, couponRes, expensesRes, adminLogRes, stockMovesRes, sizeChartRes, sellersRes] = await Promise.all([
       supabase
         .from('products')
-        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity)')
+        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity), size_chart_templates(id, name, measurements, created_at, updated_at)')
         .order('created_at', { ascending: false }),
        supabase.from('categories').select('*').order('priority', { ascending: true, nullsFirst: false }).order('name'),
-      supabase.from('orders').select('*').order('created_at', { ascending: false }),
+      // Cap the orders fetch: full history in one request gets slow as the shop
+      // grows. The newest 2,000 orders cover all tabs; export/CSV stays accurate
+      // for any filtered range within that window.
+      supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(2000),
       supabase.from('feedback').select('*').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*').order('created_at', { ascending: false }),
       supabase.from('site_settings').select('*'),
       supabase.from('coupons').select('*').order('created_at', { ascending: false }),
+      // Admin-expansion tables (may not exist until the migration is applied)
+      supabase.from('expenses').select('*').order('spent_at', { ascending: false }).limit(200),
+      supabase.from('admin_log').select('*').order('created_at', { ascending: false }).limit(300),
+      supabase.from('stock_movements').select('*').order('created_at', { ascending: false }).limit(500),
+      // Size chart templates (may not exist until the size-chart migration is applied)
+      supabase.from('size_chart_templates').select('*').order('name', { ascending: true }),
+      // Saved seller names (may not exist until the sellers migration is applied)
+      supabase.from('sellers').select('*').order('name', { ascending: true }),
     ]);
     if (prodRes.data) {
       setProducts(
@@ -573,6 +1011,13 @@ export default function AdminPage() {
     if (annRes.data) setAnnouncements(annRes.data);
     if (couponRes.error) setCouponsUnavailable(true);
     else if (couponRes.data) setCoupons(couponRes.data);
+    if (expensesRes.data) setExpenses(expensesRes.data as Expense[]);
+    if (adminLogRes.data) setAdminLogs(adminLogRes.data as AdminLog[]);
+    if (stockMovesRes.data) setStockMovements(stockMovesRes.data as StockMovement[]);
+    if (sizeChartRes.error) setSizeCharts([]);
+    else if (sizeChartRes.data) setSizeCharts(sizeChartRes.data as SizeChartTemplate[]);
+    if (sellersRes.error) setSellers([]);
+    else if (sellersRes.data) setSellers(sellersRes.data as Seller[]);
     if (settingsRes.data) {
       const settings = settingsRes.data as SiteSetting[];
       const heroSetting = settings.find((s) => s.key === 'hero_background_image');
@@ -594,6 +1039,17 @@ export default function AdminPage() {
       });
       const merchantSetting = settings.find((s) => s.key === 'steadfast_merchant_id');
       setMerchantId(merchantSetting?.value ?? '');
+      const checkoutBkashSetting = settings.find((s) => s.key === 'checkout_bkash_number');
+      setCheckoutBkash(checkoutBkashSetting?.value ?? '');
+      const thresholdSetting = settings.find((s) => s.key === 'low_stock_threshold');
+      const parsedThreshold = Number(thresholdSetting?.value);
+      if (thresholdSetting?.value != null && thresholdSetting.value !== '' && !isNaN(parsedThreshold)) {
+        setLowStockThreshold(Math.max(0, Math.floor(parsedThreshold)));
+        setThresholdInput(String(Math.max(0, Math.floor(parsedThreshold))));
+      }
+      const waOrderSetting = settings.find((s) => s.key === WHATSAPP_ORDER_KEY);
+      const waChatSetting = settings.find((s) => s.key === WHATSAPP_CHAT_KEY);
+      setWaNumbers({ order: waOrderSetting?.value ?? '', chat: waChatSetting?.value ?? '' });
     }
     setLoading(false);
   }
@@ -617,20 +1073,25 @@ export default function AdminPage() {
     setRefreshing(false);
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (verifyAdmin(adminId, adminPass)) {
-      sessionStorage.setItem('admin_auth', 'true');
-      setIsAuthenticated(true);
-      setLoginError('');
-    } else {
-      setLoginError('Invalid admin ID or password.');
+    setLoggingIn(true);
+    setLoginError('');
+    const err = await signIn(adminId, adminPass);
+    if (err) {
+      setLoginError(err);
+      // Best-effort audit of the failed attempt (inserts are admin-only after
+      // the security migration, so this usually no-ops — harmless)
+      try {
+        await supabase.from('admin_log').insert({ admin_id: adminId.trim() || '(blank)', action: 'login_failed', detail: err });
+      } catch { /* locked down — expected */ }
     }
+    setLoggingIn(false);
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem('admin_auth');
-    setIsAuthenticated(false);
+  const handleLogout = async () => {
+    await signOut();
+    setCurrentAdminId('');
   };
 
   const openAddModal = () => {
@@ -654,7 +1115,9 @@ export default function AdminPage() {
       stock_count: String(product.stock_count),
       category_id: product.category_id ?? '',
       product_code: product.product_code ?? '',
+      cost_price: product.cost_price != null ? String(product.cost_price) : '',
       advance_optional: product.advance_optional ?? false,
+      size_chart_template_id: product.size_chart_template_id ?? '',
     });
     const imgs = product.product_images?.map((img) => img.image_url) ?? [];
     setImageUrls(imgs.length > 0 ? imgs : ['']);
@@ -703,17 +1166,26 @@ export default function AdminPage() {
       description: form.description.trim(),
       price: Number(form.price),
       discount_price: form.discount_price.trim() !== '' ? Number(form.discount_price) : null,
+      cost_price: form.cost_price.trim() !== '' ? Number(form.cost_price) : null,
       sizes,
       stock_count: totalStock,
       category_id: form.category_id || null,
       product_code: form.product_code.trim() !== '' ? form.product_code.trim().toUpperCase() : null,
       advance_optional: form.advance_optional,
+      size_chart_template_id: form.size_chart_template_id || null,
     };
 
     let productId: string;
     if (modalMode === 'add') {
-      const { data: inserted, error: insertError } = await supabase
+      let { data: inserted, error: insertError } = await supabase
         .from('products').insert(payload).select().single();
+      if ((insertError || !inserted) && insertError?.message.includes('cost_price')) {
+        // Pre-migration schema: retry without cost_price
+        const { cost_price: _omit, ...rest } = payload;
+        const retry = await supabase.from('products').insert(rest).select().single();
+        inserted = retry.data;
+        insertError = retry.error;
+      }
       if (insertError || !inserted) {
         setFormError(
           insertError?.message.includes('duplicate key')
@@ -731,8 +1203,13 @@ export default function AdminPage() {
       }
     } else if (editingProduct) {
       productId = editingProduct.id;
-      const { error: updateError } = await supabase
+      let { error: updateError } = await supabase
         .from('products').update(payload).eq('id', editingProduct.id);
+      if (updateError?.message.includes('cost_price')) {
+        // Pre-migration schema: retry without cost_price
+        const { cost_price: _omit, ...rest } = payload;
+        updateError = (await supabase.from('products').update(rest).eq('id', editingProduct.id)).error;
+      }
       if (updateError) { setFormError('Failed to update product.'); setSaving(false); return; }
       await supabase.from('product_images').delete().eq('product_id', editingProduct.id);
       if (validImages.length > 0) {
@@ -756,9 +1233,26 @@ export default function AdminPage() {
       );
     }
 
+    // Stock movement history: record the net change from this save
+    if (editingProduct) {
+      const before = editingProduct.stock_count ?? 0;
+      const delta = totalStock - before;
+      if (delta !== 0) {
+        void stockDelta(productId, null, delta, delta > 0 ? 'restock' : 'adjustment', `Product form save (${before} → ${totalStock})`);
+        void logAdmin('stock_adjust', productId, `${delta > 0 ? '+' : ''}${delta} units (${before} → ${totalStock})`);
+      }
+    } else if (totalStock > 0) {
+      void stockDelta(productId, null, totalStock, 'restock', 'Initial stock');
+    }
+
     await fetchAll();
     setSaving(false);
     setModalOpen(false);
+    if (modalMode === 'add') {
+      void logAdmin('product_create', productId, form.title.trim());
+    } else {
+      void logAdmin('product_update', productId, form.title.trim());
+    }
     showToast('success', modalMode === 'add' ? 'Product created.' : 'Product updated.');
   };
 
@@ -810,12 +1304,85 @@ export default function AdminPage() {
   const handleDelete = async () => {
     if (!deleteConfirm) return;
     if (deleteConfirm.type === 'product') {
+      void logAdmin('product_delete', deleteConfirm.id);
       await supabase.from('products').delete().eq('id', deleteConfirm.id);
+    } else if (deleteConfirm.type === 'size_chart') {
+      void logAdmin('size_chart_delete', deleteConfirm.id);
+      await supabase.from('size_chart_templates').delete().eq('id', deleteConfirm.id);
     } else {
+      void logAdmin('category_delete', deleteConfirm.id);
       await supabase.from('categories').delete().eq('id', deleteConfirm.id);
     }
     setDeleteConfirm(null);
     await fetchAll();
+  };
+
+  // ── Size chart templates ──
+  const openAddChartModal = () => {
+    setEditingChart(null);
+    setChartModalMode('add');
+    setChartName('');
+    setChartNote('Measurements in inches');
+    setChartRows(['Chest', 'Length']);
+    setChartSizes(['M', 'L', 'XL']);
+    setChartValues({});
+    setChartError('');
+    setChartModalOpen(true);
+  };
+
+  const openEditChartModal = (tpl: SizeChartTemplate) => {
+    setEditingChart(tpl);
+    setChartModalMode('edit');
+    setChartName(tpl.name);
+    setChartNote(tpl.measurements?.note ?? '');
+    setChartRows(tpl.measurements?.rows?.length ? tpl.measurements.rows : ['Chest']);
+    setChartSizes(tpl.measurements?.sizes?.length ? tpl.measurements.sizes : ['M']);
+    setChartValues(tpl.measurements?.values ?? {});
+    setChartError('');
+    setChartModalOpen(true);
+  };
+
+  const handleSaveChart = async () => {
+    const name = chartName.trim();
+    const rows = chartRows.map((r) => r.trim()).filter(Boolean);
+    const sizes = chartSizes.map((s) => s.trim()).filter(Boolean);
+    if (!name) { setChartError('Give the chart a name, e.g. "Round Neck Tee — Relaxed".'); return; }
+    if (rows.length === 0 || sizes.length === 0) { setChartError('Add at least one measurement row and one size.'); return; }
+    // De-duplicate rows/sizes (case-insensitive) so values keys stay consistent
+    const seenR = new Set<string>(); const seenS = new Set<string>();
+    const cleanRows = rows.filter((r) => { const k = r.toLowerCase(); if (seenR.has(k)) return false; seenR.add(k); return true; });
+    const cleanSizes = sizes.filter((s) => { const k = s.toLowerCase(); if (seenS.has(k)) return false; seenS.add(k); return true; });
+    const values: Record<string, Record<string, string>> = {};
+    for (const r of cleanRows) {
+      values[r] = {};
+      for (const s of cleanSizes) values[r][s] = chartValues[r]?.[s] ?? '';
+    }
+    setChartSaving(true);
+    setChartError('');
+    const payload = { name, measurements: { rows: cleanRows, sizes: cleanSizes, values, note: chartNote.trim() || undefined } };
+    const { error } = chartModalMode === 'add'
+      ? await supabase.from('size_chart_templates').insert(payload)
+      : await supabase.from('size_chart_templates').update(payload).eq('id', editingChart!.id);
+    if (error) {
+      setChartError(error.message.includes('duplicate key') ? 'A chart with this name already exists.' : 'Failed to save the chart.');
+      setChartSaving(false);
+      return;
+    }
+    setChartSaving(false);
+    setChartModalOpen(false);
+    void logAdmin(chartModalMode === 'add' ? 'size_chart_create' : 'size_chart_update', null, name);
+    await fetchAll();
+    showToast('success', chartModalMode === 'add' ? 'Size chart created.' : 'Size chart updated — every product using it is updated too.');
+  };
+
+  const handleDeleteChart = async (tpl: SizeChartTemplate) => {
+    const inUse = products.filter((p) => p.size_chart_template_id === tpl.id).length;
+    if (inUse > 0) {
+      showToast('error', `This chart is used by ${inUse} product${inUse === 1 ? '' : 's'}. Unlink it from them first.`);
+      return;
+    } else {
+      setDeleteConfirm({ type: 'size_chart', id: tpl.id });
+    }
   };
 
   const setOrderStatus = (orderId: string, status: OrderStatus) => {
@@ -828,8 +1395,9 @@ export default function AdminPage() {
     void applyOrderStatus(orderId, status);
   };
 
-  const applyOrderStatus = async (orderId: string, status: OrderStatus) => {
+  const applyOrderStatus = async (orderId: string, status: OrderStatus, opts?: { via?: string }) => {
     setUpdatingDelivery(orderId);
+    void logAdmin('order_status', orderId, `${status}${opts?.via ? ` (${opts.via})` : ''}`);
 
     const prevOrders = orders;
     const prevNotifications = notifications;
@@ -854,6 +1422,7 @@ export default function AdminPage() {
 
   const handleDeleteOrder = async (orderId: string) => {
     setDeletingOrder(orderId);
+    void logAdmin('order_delete', orderId);
     const { error } = await supabase.from('orders').delete().eq('id', orderId);
     if (error) {
       showToast('error', `Failed to delete order: ${error.message}`);
@@ -865,6 +1434,107 @@ export default function AdminPage() {
     setDeleteOrderConfirm(null);
     setDeletingOrder(null);
     showToast('success', 'Order deleted.');
+  };
+
+  // ── Bulk order actions ──
+  const toggleOrderSelection = (id: string) => {
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allVisibleSelected = filteredOrders.length > 0 && filteredOrders.every((o) => selectedOrderIds.has(o.id));
+
+  const toggleSelectAllVisible = () => {
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) filteredOrders.forEach((o) => next.delete(o.id));
+      else filteredOrders.forEach((o) => next.add(o.id));
+      return next;
+    });
+  };
+
+  const bulkSetStatus = async (status: OrderStatus) => {
+    const ids = [...selectedOrderIds];
+    if (ids.length === 0) return;
+    setBulkBusy(status === 'delivered' ? 'deliver' : 'cancel');
+    const { error } = await supabase.from('orders').update({ status }).in('id', ids);
+    if (error) {
+      showToast('error', `Failed to update orders: ${error.message}`);
+    } else {
+      setOrders((prev) => prev.map((o) => (selectedOrderIds.has(o.id) ? { ...o, status, delivered: status === 'delivered' } : o)));
+      setNotifications((prev) => prev.map((n) => (selectedOrderIds.has(n.id) ? { ...n, status, delivered: status === 'delivered' } : n)));
+      void logAdmin('bulk_status', null, `${ids.length} order(s) → ${status}`);
+      showToast('success', `${ids.length} order${ids.length === 1 ? '' : 's'} marked ${status}.`);
+    }
+    setSelectedOrderIds(new Set());
+    setBulkBusy(null);
+  };
+
+  const bulkBookSteadfast = async () => {
+    const targets = orders.filter((o) => selectedOrderIds.has(o.id) && !o.tracking_code && o.status !== 'canceled' && o.courier_name !== 'Store Pickup');
+    if (targets.length === 0) {
+      showToast('info', 'Nothing to book — selected orders are already booked, canceled, or store pickups.');
+      return;
+    }
+    setBulkBusy('book');
+    let ok = 0;
+    let failed = 0;
+    for (const order of targets) {
+      const due = order.due_amount != null ? Number(order.due_amount) : null;
+      const total = order.total_amount != null ? Number(order.total_amount) : null;
+      const codAmount = Math.max(0, due ?? total ?? 0);
+      const sizePart = order.selected_size ? ` (Size ${order.selected_size})` : '';
+      const qtyPart = order.quantity > 1 ? ` × ${order.quantity}` : '';
+      const codePart = order.product_code ? ` [${order.product_code}]` : '';
+      const result = await createSteadfastConsignment({
+        invoice: order.order_code || order.id.slice(0, 12),
+        recipient_name: order.customer_name || 'Customer',
+        recipient_phone: order.customer_phone,
+        recipient_address: order.customer_address,
+        cod_amount: codAmount,
+        weight: 1.5, // declared parcel weight in kg (matches single booking)
+        note: `${order.product_title}${sizePart}${qtyPart}${codePart}`,
+      });
+      if (result.ok && result.trackingCode) {
+        const { error } = await supabase.from('orders').update({ tracking_code: result.trackingCode }).eq('id', order.id);
+        if (!error) {
+          const code = result.trackingCode;
+          setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, tracking_code: code } : o)));
+          void logAdmin('steadfast_book', order.id, `Tracking ${code} · COD ৳${codAmount}`);
+          ok += 1;
+        } else {
+          failed += 1;
+        }
+      } else {
+        failed += 1;
+        showToast('error', `${order.order_code ?? order.id.slice(0, 8)}: ${result.message}`);
+      }
+    }
+    if (ok > 0) showToast('success', `Booked ${ok} pickup${ok === 1 ? '' : 's'} with Steadfast.${failed > 0 ? ` ${failed} failed.` : ''}`);
+    setSelectedOrderIds(new Set());
+    setBulkBusy(null);
+  };
+
+  const bulkDeleteOrders = async () => {
+    const ids = [...selectedOrderIds];
+    if (ids.length === 0) return;
+    setBulkBusy('delete');
+    const { error } = await supabase.from('orders').delete().in('id', ids);
+    if (error) {
+      showToast('error', `Failed to delete orders: ${error.message}`);
+    } else {
+      setOrders((prev) => prev.filter((o) => !selectedOrderIds.has(o.id)));
+      setNotifications((prev) => prev.filter((n) => !selectedOrderIds.has(n.id)));
+      void logAdmin('bulk_delete', null, `${ids.length} order(s) deleted`);
+      showToast('success', `${ids.length} order${ids.length === 1 ? '' : 's'} deleted.`);
+    }
+    setBulkDeleteConfirm(false);
+    setSelectedOrderIds(new Set());
+    setBulkBusy(null);
   };
 
   // Book the parcel with Steadfast and store the tracking code on the order
@@ -893,6 +1563,7 @@ export default function AdminPage() {
     });
 
     if (result.ok && result.trackingCode) {
+      void logAdmin('steadfast_book', order.id, `Tracking ${result.trackingCode} · COD ৳${codAmount}`);
       const { error } = await supabase
         .from('orders')
         .update({ tracking_code: result.trackingCode })
@@ -941,6 +1612,8 @@ export default function AdminPage() {
   const handleSellProduct = async (productId: string, size: string | null, currentQty: number) => {
     if (currentQty <= 0) return;
     const newQty = currentQty - 1;
+    void stockDelta(productId, size, -1, 'manual_sell');
+    void logAdmin('stock_sell', productId, size ? `1 unit of size ${size}` : '1 unit');
 
     if (size) {
       setProducts((prev) => prev.map((p) => {
@@ -1225,7 +1898,7 @@ export default function AdminPage() {
     await fetchAll();
   };
 
-  // Persist the Steadfast courier rates shown on checkout
+  // Persist the Steadfast courier rates + checkout bKash number
   const handleSaveSteadfastRates = async () => {
     for (const v of [steadfastRates.dhaka_city, steadfastRates.dhaka_suburban, steadfastRates.outside_dhaka]) {
       if (isNaN(Number(v)) || Number(v) < 0) {
@@ -1233,12 +1906,17 @@ export default function AdminPage() {
         return;
       }
     }
+    if (checkoutBkash.trim() && checkoutBkash.replace(/\D/g, '').length < 11) {
+      showToast('error', 'The checkout bKash number should be a valid BD mobile number (11 digits).');
+      return;
+    }
     setSteadfastSaving(true);
     const entries: Array<{ key: string; label: string; description: string; value: string }> = [
       { key: 'steadfast_rate_dhaka_city', label: 'Steadfast Rate — Inside Dhaka', description: 'Courier charge (৳) for orders delivered inside Dhaka City.', value: steadfastRates.dhaka_city },
       { key: 'steadfast_rate_dhaka_suburban', label: 'Steadfast Rate — Dhaka Suburban', description: 'Courier charge (৳) for Dhaka Suburban areas (Gazipur, Narayanganj, Savar, etc.).', value: steadfastRates.dhaka_suburban },
       { key: 'steadfast_rate_outside_dhaka', label: 'Steadfast Rate — Outside Dhaka', description: 'Courier charge (৳) for deliveries outside Dhaka and its suburbs.', value: steadfastRates.outside_dhaka },
       { key: 'steadfast_merchant_id', label: 'Steadfast Merchant ID', description: 'Shown on printed parcel labels (e.g. 8JFK3PPH). Find it in your Steadfast merchant dashboard.', value: merchantId.trim() },
+      { key: 'checkout_bkash_number', label: 'Checkout bKash Number', description: 'Personal bKash number shown on checkout — customers send the delivery-fee advance here.', value: checkoutBkash.trim() },
     ];
     const errors: string[] = [];
     for (const entry of entries) {
@@ -1248,12 +1926,264 @@ export default function AdminPage() {
     if (errors.length > 0) {
       showToast('error', `Failed to save: ${errors.join(', ')}`);
     } else {
-      showToast('success', 'Steadfast courier rates saved.');
+      showToast('success', 'Courier rates & payment settings saved.');
     }
     setSteadfastSaving(false);
   };
 
+  // ── Expenses (Finance tab) ──
+  const handleAddExpense = async () => {
+    const title = expenseForm.title.trim();
+    const amount = Number(expenseForm.amount);
+    if (!title) { showToast('error', 'Give the expense a title.'); return; }
+    if (!expenseForm.amount.trim() || isNaN(amount) || amount <= 0) { showToast('error', 'Enter a valid amount.'); return; }
+    setExpenseSaving(true);
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert({
+        title,
+        amount,
+        note: expenseForm.note.trim() || null,
+        spent_at: expenseForm.spent_at || dayOffsetISO(0),
+      })
+      .select()
+      .single();
+    if (error || !data) {
+      const missing = error?.message.includes('does not exist') || error?.message.includes('schema cache');
+      showToast('error', missing
+        ? 'Could not save — run the admin-expansion SQL migration in Supabase first (adds the expenses table).'
+        : `Failed to save expense: ${error?.message ?? 'unknown error'}`);
+    } else {
+      setExpenses((prev) => [data as Expense, ...prev]);
+      void logAdmin('expense_add', null, `${title} · ৳${amount}`);
+      setExpenseForm({ title: '', amount: '', note: '', spent_at: expenseForm.spent_at || dayOffsetISO(0) });
+      showToast('success', 'Expense added.');
+    }
+    setExpenseSaving(false);
+  };
+
+  const handleDeleteExpense = async (id: string) => {
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (error) {
+      showToast('error', `Failed to delete expense: ${error.message}`);
+      return;
+    }
+    setExpenses((prev) => prev.filter((e) => e.id !== id));
+    setDeleteExpenseId(null);
+    showToast('success', 'Expense removed.');
+  };
+
+  // Persist the low-stock alert threshold (Finance & inventory)
+  const handleSaveThreshold = async () => {
+    const parsed = Number(thresholdInput);
+    if (thresholdInput.trim() === '' || isNaN(parsed) || Number(parsed) < 0 || !Number.isInteger(parsed)) {
+      showToast('error', 'Threshold must be a whole number, 0 or more.');
+      return;
+    }
+    setThresholdSaving(true);
+    const err = await upsertSiteSetting(
+      'low_stock_threshold',
+      String(parsed),
+      'Low Stock Alert Threshold',
+      'Products with stock at or below this number are flagged as low stock in Products/Stock tabs and on the Finance tab.',
+    );
+    if (err) {
+      showToast('error', `Failed to save threshold: ${err.message}`);
+    } else {
+      setLowStockThreshold(parsed);
+      showToast('success', `Low-stock threshold set to ${parsed}.`);
+    }
+    setThresholdSaving(false);
+  };
+
+  // Persist the storefront WhatsApp numbers
+  const handleSaveWhatsApp = async () => {
+    const order = normalizeWhatsAppNumber(waNumbers.order);
+    const chat = normalizeWhatsAppNumber(waNumbers.chat);
+    if (!order || !chat) {
+      showToast('error', 'Both numbers are required (e.g. 01410423299 or 8801410423299).');
+      return;
+    }
+    setWaSaving(true);
+    const [orderErr, chatErr] = await Promise.all([
+      upsertSiteSetting(WHATSAPP_ORDER_KEY, order, 'WhatsApp Order Number', 'Number used by the "Order on WhatsApp" button on product pages (international format).'),
+      upsertSiteSetting(WHATSAPP_CHAT_KEY, chat, 'WhatsApp Chat Number', 'Number used by the floating chat bubble and the footer social link (international format).'),
+    ]);
+    if (orderErr || chatErr) {
+      showToast('error', `Failed to save: ${[orderErr?.message, chatErr?.message].filter(Boolean).join(', ')}`);
+    } else {
+      setWaNumbers({ order, chat });
+      void logAdmin('settings_update', null, `WhatsApp numbers updated`);
+      showToast('success', 'WhatsApp numbers saved — live on the storefront immediately.');
+    }
+    setWaSaving(false);
+  };
+
+  // ── Manual (in-store) order: save + decrement stock ──
+  const handleSaveManualOrder = async () => {
+    const product = products.find((p) => p.id === manualForm.product_id);
+    if (!product) { showToast('error', 'Pick a product.'); return; }
+    const qty = Math.max(1, Number(manualForm.quantity) || 1);
+    if (!manualForm.amount.trim() || isNaN(Number(manualForm.amount)) || Number(manualForm.amount) < 0) {
+      showToast('error', 'Enter the amount the customer paid.');
+      return;
+    }
+    const seller = manualForm.seller_name.trim();
+    if (!seller) { showToast('error', 'Seller name is required (who recorded this sale).'); return; }
+    if (product.sizes.length > 0 && !manualForm.size) { showToast('error', 'Pick a size for this product.'); return; }
+    const bkashDigits = manualForm.bkash.replace(/\D/g, '');
+    if (manualForm.bkash.trim() !== '' && bkashDigits.length < 4) {
+      showToast('error', 'bKash number needs at least the last 4 digits.');
+      return;
+    }
+    // Stock guard
+    const sizeEntry = manualForm.size ? product.product_sizes?.find((ps) => ps.size === manualForm.size) : null;
+    const available = sizeEntry ? sizeEntry.quantity : product.stock_count;
+    if (available < qty) {
+      showToast('error', `Not enough stock — only ${available} left${manualForm.size ? ` in size ${manualForm.size}` : ''}.`);
+      return;
+    }
+
+    setManualSaving(true);
+
+    // Remember the seller so they show up in the dropdown next time (new names only)
+    if (!sellers.some((s) => s.name.toLowerCase() === seller.toLowerCase())) {
+      try {
+        const { data: sellerRow, error: sellerErr } = await supabase
+          .from('sellers')
+          .insert({ name: seller })
+          .select()
+          .single();
+        if (!sellerErr && sellerRow) setSellers((prev) => [...prev, sellerRow as Seller]);
+      } catch {
+        // Sellers table may not exist yet (migration pending) — the sale must still go through.
+      }
+    }
+
+    const amount = Number(manualForm.amount);
+    const customer = manualForm.customer_name.trim() || 'Walk-in customer';
+    // Optional delivery details — composed into the order's address line:
+    // "detail, thana, district" (kept as "In-store purchase" when left blank).
+    const addressParts = [manualForm.address.trim(), manualForm.thana.trim(), manualForm.district].filter(Boolean);
+    const composedAddress = addressParts.length ? addressParts.join(', ') : 'In-store purchase';
+    const manualZone = manualForm.district ? zoneForDistrict(manualForm.district) : null;
+    const { data: inserted, error } = await supabase
+      .from('orders')
+      .insert({
+        order_code: 'ORN-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+        product_id: product.id,
+        product_title: product.title,
+        product_code: product.product_code,
+        selected_size: manualForm.size || null,
+        quantity: qty,
+        customer_name: customer,
+        customer_phone: bkashDigits || '—',
+        customer_address: composedAddress,
+        subtotal: amount,
+        delivery_fee: 0,
+        discount_amount: 0,
+        total_amount: amount,
+        payment_method: 'in_store',
+        advance_amount: amount,
+        due_amount: 0,
+        courier_name: 'Store Pickup',
+        delivery_zone: manualZone,
+        status: 'delivered',
+        delivered: true,
+        order_source: 'manual',
+        seller_name: seller,
+        bkash_number: bkashDigits || null,
+      })
+      .select()
+      .single();
+
+    if (error || !inserted) {
+      const missing = error?.message.includes('order_source') || error?.message.includes('seller_name');
+      showToast('error', missing
+        ? 'Could not save — run the manual-orders SQL migration first (adds order_source / seller_name).'
+        : `Failed to save: ${error?.message ?? 'unknown error'}`);
+      setManualSaving(false);
+      return;
+    }
+
+    // Stock: decrement total and size quantity
+    const newStock = Math.max(0, product.stock_count - qty);
+    await supabase.from('products').update({ stock_count: newStock }).eq('id', product.id);
+    if (sizeEntry) {
+      await supabase.from('product_sizes')
+        .update({ quantity: Math.max(0, sizeEntry.quantity - qty) })
+        .eq('product_id', product.id)
+        .eq('size', manualForm.size);
+    }
+    void stockDelta(product.id, manualForm.size || null, -qty, 'in_store_sale', `Manual order by ${seller}`);
+    void logAdmin('manual_order', inserted.id, `${product.title}${manualForm.size ? ` (${manualForm.size})` : ''} × ${qty} · ৳${amount} · seller ${seller}`);
+
+    setOrders((prev) => [inserted as Order, ...prev]);
+    setNotifications((prev) => [inserted as Order, ...prev]);
+    setProducts((prev) => prev.map((p) => {
+      if (p.id !== product.id) return p;
+      const newSizes = sizeEntry && p.product_sizes
+        ? p.product_sizes.map((ps) => (ps.size === manualForm.size ? { ...ps, quantity: Math.max(0, ps.quantity - qty) } : ps))
+        : p.product_sizes;
+      return { ...p, stock_count: newStock, product_sizes: newSizes };
+    }));
+    setManualForm(f => ({ ...f, product_id: '', product_code: '', size: '', quantity: '1', amount: '', bkash: '', customer_name: '', district: '', thana: '', address: '' }));
+    setManualSaving(false);
+    showToast('success', `In-store sale recorded — ৳${amount.toLocaleString('en-IN')} · ${product.title} × ${qty}.`);
+  };
+
+  // ── Saved sellers: remove a name from the dropdown (does not touch past orders) ──
+  const handleDeleteSeller = async (id: string, name: string) => {
+    if (!window.confirm(`Remove "${name}" from the seller dropdown?\nPast orders keep their seller name — only the saved entry goes away.`)) return;
+    setDeletingSeller(id);
+    // Synthetic entries (sellers seen only on orders, no saved row yet) hide until reload
+    if (id.startsWith('order-')) {
+      setHiddenSellers((prev) => new Set(prev).add(name.toLowerCase()));
+      setDeletingSeller(null);
+      showToast('info', `"${name}" hidden from the list — it was never saved as a seller.`);
+      return;
+    }
+    const { error } = await supabase.from('sellers').delete().eq('id', id);
+    if (error) {
+      const missing = error.message.includes('sellers') || error.message.includes('relation');
+      showToast('error', missing
+        ? 'Could not delete — run the sellers SQL migration first (creates the sellers table).'
+        : `Failed to delete seller: ${error.message}`);
+    } else {
+      setSellers((prev) => prev.filter((s) => s.id !== id));
+      if (reportSeller === name) setReportSeller('');
+      showToast('success', `Removed "${name}" from the seller list.`);
+    }
+    setDeletingSeller(null);
+  };
+
+  // ── Manual orders PDF report (filtered by seller + date range) ──
+  const handleDownloadReport = async () => {
+    setReportBusy(true);
+    try {
+      const from = reportFrom ? new Date(`${reportFrom}T00:00:00`) : null;
+      const to = reportTo ? new Date(`${reportTo}T00:00:00`) : null;
+      if (to) to.setDate(to.getDate() + 1); // exclusive end-of-day
+      await printManualOrdersReport(reportOrders, {
+        sellerFilter: reportSeller || null,
+        from: from && !isNaN(from.getTime()) ? from : null,
+        to: to && !isNaN(to.getTime()) ? to : null,
+      });
+    } catch (err) {
+      showToast('error', `Could not build the report: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+    setReportBusy(false);
+  };
+
   // ── Login screen ──
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+        <div className="animate-spin w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-stone-900 flex items-center justify-center px-4">
@@ -1265,20 +2195,20 @@ export default function AdminPage() {
               <Lock className="w-7 h-7 text-white" />
             </div>
             <h1 className="font-display text-xl font-bold text-stone-900">Ornix Admin</h1>
-            <p className="text-stone-400 text-sm">Sign in with your admin credentials</p>
+            <p className="text-stone-400 text-sm">Sign in with your admin account</p>
           </div>
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={(e) => void handleLogin(e)} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-stone-700 mb-1.5">Admin ID</label>
-              <input type="text" value={adminId}
+              <label className="block text-sm font-medium text-stone-700 mb-1.5">Email</label>
+              <input type="email" value={adminId} autoComplete="username"
                 onChange={(e) => { setAdminId(e.target.value); setLoginError(''); }}
-                placeholder="admin1"
+                placeholder="admin@ornix.com.bd"
                 className="w-full border border-stone-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-stone-700 mb-1.5">Password</label>
-              <input type="password" value={adminPass}
+              <input type="password" value={adminPass} autoComplete="current-password"
                 onChange={(e) => { setAdminPass(e.target.value); setLoginError(''); }}
                 placeholder="••••••••"
                 className="w-full border border-stone-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
@@ -1289,8 +2219,9 @@ export default function AdminPage() {
                 <AlertCircle className="w-4 h-4 flex-shrink-0" /> {loginError}
               </div>
             )}
-            <button type="submit"
-              className="w-full bg-stone-900 hover:bg-stone-800 text-white font-bold py-3.5 rounded-2xl transition-all hover:shadow-lg">
+            <button type="submit" disabled={loggingIn}
+              className="w-full bg-stone-900 hover:bg-stone-800 disabled:opacity-70 text-white font-bold py-3.5 rounded-2xl transition-all hover:shadow-lg flex items-center justify-center gap-2">
+              {loggingIn && <Loader2 className="w-4 h-4 animate-spin" />}
               Sign In
             </button>
           </form>
@@ -1374,7 +2305,10 @@ export default function AdminPage() {
               className="flex items-center gap-1.5 text-stone-400 hover:text-white text-sm transition-colors">
               <Eye className="w-4 h-4" /> View Store
             </button>
-            <button onClick={handleLogout}
+            {adminEmail && (
+              <span className="hidden sm:inline text-xs text-stone-400" title={adminEmail}>{adminEmail}</span>
+            )}
+            <button onClick={() => void handleLogout()}
               className="flex items-center gap-1.5 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-sm px-3 py-1.5 rounded-xl transition-all">
               <LogOut className="w-4 h-4" /> Logout
             </button>
@@ -1390,6 +2324,8 @@ export default function AdminPage() {
             { key: 'stock' as Tab, label: 'Stock', icon: <Package className="w-4 h-4" />, count: lowStockCount },
             { key: 'categories' as Tab, label: 'Categories', icon: <Tag className="w-4 h-4" />, count: categories.length },
             { key: 'orders' as Tab, label: 'Orders', icon: <ShoppingBag className="w-4 h-4" />, count: orders.length, highlight: pendingOrders > 0 ? `${pendingOrders} pending` : undefined },
+            { key: 'manual' as Tab, label: 'Manual Orders', icon: <Store className="w-4 h-4" />, count: manualOrders.length },
+            { key: 'finance' as Tab, label: 'Finance', icon: <Banknote className="w-4 h-4" /> },
             { key: 'coupons' as Tab, label: 'Coupons', icon: <Percent className="w-4 h-4" />, count: couponsUnavailable ? undefined : coupons.length },
             { key: 'feedback' as Tab, label: 'Feedback', icon: <MessageSquare className="w-4 h-4" />, count: feedbackList.length, badge: unreadFeedback },
             { key: 'settings' as Tab, label: 'Settings', icon: <Settings className="w-4 h-4" />, count: undefined },
@@ -1433,10 +2369,16 @@ export default function AdminPage() {
                   {filteredProducts.length !== products.length && ` · ${filteredProducts.length} shown`}
                 </p>
               </div>
-              <button onClick={openAddModal}
-                className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5">
-                <Plus className="w-4 h-4" /> Add Product
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setChartManagerOpen(true)}
+                  className="flex items-center gap-2 bg-white hover:bg-stone-50 text-stone-700 border border-stone-200 font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
+                  <Ruler className="w-4 h-4" /> Size Charts ({sizeCharts.length})
+                </button>
+                <button onClick={openAddModal}
+                  className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5">
+                  <Plus className="w-4 h-4" /> Add Product
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
@@ -1800,18 +2742,26 @@ export default function AdminPage() {
                               const ps = product.product_sizes?.find((p) => p.size === size);
                               const qty = ps?.quantity ?? 0;
                               return (
-                                <div key={size} className="flex items-center justify-between bg-stone-50 rounded-xl px-3 py-2">
-                                  <div>
-                                    <span className="text-xs font-semibold text-stone-700 uppercase">{size}</span>
-                                    <span className="text-xs text-stone-500 ml-2">{qty} left</span>
+                                <div key={size} className="flex items-center justify-between bg-stone-50 rounded-xl px-3 py-2">                <div>
+                                  <span className="text-xs font-semibold text-stone-700 uppercase">{size}</span>
+                                  <span className="text-xs text-stone-500 ml-2">{qty} left</span>
                                   </div>
-                                  <button
-                                    onClick={() => handleSellProduct(product.id, size, qty)}
-                                    disabled={qty <= 0}
-                                    className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 hover:bg-red-100 text-red-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                                  >
-                                    <Minus className="w-4 h-4" />
-                                  </button>
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => setMovementProductId(product.id)}
+                                      title="View stock movement history for this product"
+                                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-500 transition-all"
+                                    >
+                                      <Clock className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleSellProduct(product.id, size, qty)}
+                                      disabled={qty <= 0}
+                                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 hover:bg-red-100 text-red-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                                    >
+                                      <Minus className="w-4 h-4" />
+                                    </button>
+                                  </div>
                                 </div>
                               );
                             })}
@@ -1904,13 +2854,16 @@ export default function AdminPage() {
 
         {/* ── Orders tab ── */}
         {tab === 'orders' && (
-          <div>
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <div>              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
               <div>
                 <h2 className="font-display text-xl font-bold text-stone-900">Orders</h2>
                 <p className="text-sm text-stone-500">
-                  {orders.length} total
+                  {orders.length} total{orders.length >= 2000 && <span className="text-amber-600 font-medium"> · showing newest 2,000</span>}
                   {pendingOrders > 0 && <span className="text-amber-600 font-medium"> · {pendingOrders} pending</span>}
+                  <span className="text-stone-300"> · </span>
+                  <button onClick={toggleSelectAllVisible} className="text-brand-600 font-medium hover:underline">
+                    {allVisibleSelected ? 'Clear page selection' : 'Select all shown'}
+                  </button>
                 </p>
               </div>
               <div className="relative w-full sm:w-80">
@@ -2065,6 +3018,52 @@ export default function AdminPage() {
               </div>
             )}
 
+            {/* Bulk actions bar — appears when orders are ticked */}
+            {selectedOrderIds.size > 0 && (
+              <div className="bg-stone-900 text-white rounded-2xl shadow-md p-4 mb-6 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold mr-1">{selectedOrderIds.size} selected</span>
+                <button
+                  onClick={() => void bulkBookSteadfast()}
+                  disabled={bulkBusy !== null}
+                  title="Book Steadfast pickups for every selected unbooked, non-canceled order"
+                  className="flex items-center gap-1.5 text-xs font-semibold bg-brand-500 hover:bg-brand-400 disabled:opacity-60 px-3 py-2 rounded-lg transition-all"
+                >
+                  {bulkBusy === 'book' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                  Book pickups
+                </button>
+                <button
+                  onClick={() => void bulkSetStatus('delivered')}
+                  disabled={bulkBusy !== null}
+                  className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 px-3 py-2 rounded-lg transition-all"
+                >
+                  {bulkBusy === 'deliver' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCheck className="w-3.5 h-3.5" />}
+                  Mark delivered
+                </button>
+                <button
+                  onClick={() => void bulkSetStatus('canceled')}
+                  disabled={bulkBusy !== null}
+                  className="flex items-center gap-1.5 text-xs font-semibold bg-amber-500 hover:bg-amber-400 disabled:opacity-60 px-3 py-2 rounded-lg transition-all"
+                >
+                  {bulkBusy === 'cancel' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setBulkDeleteConfirm(true)}
+                  disabled={bulkBusy !== null}
+                  className="flex items-center gap-1.5 text-xs font-semibold bg-red-500/90 hover:bg-red-500 disabled:opacity-60 px-3 py-2 rounded-lg transition-all"
+                >
+                  {bulkBusy === 'delete' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  Delete
+                </button>
+                <button
+                  onClick={() => setSelectedOrderIds(new Set())}
+                  className="ml-auto text-xs font-semibold text-stone-300 hover:text-white px-2 py-2 transition-colors"
+                >
+                  Clear selection
+                </button>
+              </div>
+            )}
+
             {filteredOrders.length === 0 ? (
               <EmptyState
                 icon={<ShoppingBag className="w-6 h-6" />}
@@ -2087,6 +3086,13 @@ export default function AdminPage() {
                       {/* Header: customer identity + status + actions */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={selectedOrderIds.has(order.id)}
+                            onChange={() => toggleOrderSelection(order.id)}
+                            title="Select for bulk actions"
+                            className="w-4 h-4 accent-brand-500 flex-shrink-0 cursor-pointer"
+                          />
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm ${
                             order.status === 'delivered'
                               ? 'bg-emerald-100 text-emerald-700'
@@ -2309,7 +3315,9 @@ export default function AdminPage() {
                         <div>
                           <p className={ORD_LBL}>Payment</p>
                           <p className="font-medium text-stone-800 text-sm">
-                            {order.payment_method === 'full_advance'
+                            {order.payment_method === 'in_store' || order.order_source === 'manual'
+                              ? 'In-store sale'
+                              : order.payment_method === 'full_advance'
                               ? 'Full advance'
                               : order.payment_method === 'advance_partial'
                                 ? 'COD + advance'
@@ -2325,6 +3333,12 @@ export default function AdminPage() {
                           <p className={ORD_LBL}>Delivery</p>
                           <p className="font-medium text-stone-800 text-sm truncate">{order.courier_name ?? '—'}</p>
                         </div>
+                        {order.order_source === 'manual' && (
+                          <div>
+                            <p className={ORD_LBL}>Sold by</p>
+                            <p className="font-medium text-stone-800 text-sm">{order.seller_name ?? '—'}</p>
+                          </div>
+                        )}
                         {order.coupon_code && (
                           <div>
                             <p className={ORD_LBL}>Coupon</p>
@@ -2383,6 +3397,930 @@ export default function AdminPage() {
               )}
               </>
             )}
+          </div>
+        )}
+
+        {/* ── Manual Orders tab (in-store sales) ── */}
+        {tab === 'manual' && (() => {
+          const knownSellersFiltered = sellerDropdownOpen && manualForm.seller_name.trim()
+            ? knownSellers.filter((s) => s.name.toLowerCase().includes(manualForm.seller_name.trim().toLowerCase()))
+            : knownSellers;
+          const selectedProduct = products.find((p) => p.id === manualForm.product_id) ?? null;
+          const unitPrice = selectedProduct
+            ? (selectedProduct.discount_price != null && selectedProduct.discount_price < selectedProduct.price
+              ? Number(selectedProduct.discount_price)
+              : Number(selectedProduct.price))
+            : 0;
+          const selectedSizeEntry = selectedProduct && manualForm.size
+            ? selectedProduct.product_sizes?.find((ps) => ps.size === manualForm.size)
+            : null;
+          const available = selectedSizeEntry ? selectedSizeEntry.quantity : (selectedProduct?.stock_count ?? 0);
+          const manualTotal = manualForm.quantity && unitPrice ? unitPrice * (Number(manualForm.quantity) || 0) : 0;
+          const manualHistory = [...manualOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+          const todaySum = manualToday.reduce((s, o) => s + Number(o.total_amount ?? 0), 0);
+          return (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-xl font-bold text-stone-900">Manual Orders</h2>
+                  <p className="text-sm text-stone-500">
+                    Record walk-in purchases. They count in Finance, top products, and top customers like website orders.
+                    {manualToday.length > 0 && <span className="text-emerald-600 font-medium"> · Today: {manualToday.length} sale{manualToday.length === 1 ? '' : 's'} · ৳{todaySum.toLocaleString('en-IN')}</span>}
+                  </p>
+                </div>
+              </div>
+
+              {/* Entry form */}
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 mb-4">New in-store sale</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="sm:col-span-2 lg:col-span-1">
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Product *</label>
+                    <select
+                      value={manualForm.product_id}
+                      onChange={(e) => {
+                        const p = products.find((x) => x.id === e.target.value);
+                        setManualForm((f) => {
+                          const unit = p ? (p.discount_price != null && p.discount_price < p.price ? p.discount_price : p.price) : null;
+                          const qty = Math.max(1, Number(f.quantity) || 1);
+                          return {
+                            ...f,
+                            product_id: e.target.value,
+                            product_code: p?.product_code ?? '',
+                            size: '',
+                            amount: unit != null ? String(unit * qty) : f.amount,
+                          };
+                        });
+                      }}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                    >
+                      <option value="">Select a product…</option>
+                      {[...products].sort((a, b) => a.title.localeCompare(b.title)).map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.title} — ৳{Number(p.discount_price ?? p.price).toFixed(0)} ({p.stock_count} in stock)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Product code</label>
+                    <input
+                      type="text"
+                      value={manualForm.product_code}
+                      readOnly
+                      placeholder="Auto from product"
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono bg-stone-50 text-stone-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Size {selectedProduct && selectedProduct.sizes.length > 0 ? '*' : ''}</label>
+                    <select
+                      value={manualForm.size}
+                      onChange={(e) => setManualForm((f) => ({ ...f, size: e.target.value }))}
+                      disabled={!selectedProduct || selectedProduct.sizes.length === 0}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white disabled:bg-stone-50 disabled:text-stone-400"
+                    >
+                      <option value="">{selectedProduct && selectedProduct.sizes.length > 0 ? 'Select size…' : '—'}</option>
+                      {(selectedProduct?.sizes ?? []).map((size) => {
+                        const qty = selectedProduct?.product_sizes?.find((ps) => ps.size === size)?.quantity ?? 0;
+                        return (
+                          <option key={size} value={size} disabled={qty <= 0}>
+                            {size} ({qty} left)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Quantity *</label>
+                    <input
+                      type="number" min="1" value={manualForm.quantity}
+                      onChange={(e) => {
+                        setManualForm((f) => {
+                          const prevQty = Math.max(1, Number(f.quantity) || 1);
+                          const newQty = Math.max(1, Number(e.target.value) || 1);
+                          // Auto-fill the amount while it still holds the auto value
+                          // (unit × qty); never clobber a manually-edited amount.
+                          const wasAuto = f.amount === '' || Number(f.amount) === unitPrice * prevQty;
+                          return { ...f, quantity: e.target.value, amount: unitPrice > 0 && wasAuto ? String(unitPrice * newQty) : f.amount };
+                        });
+                      }}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Amount (৳) *</label>
+                    <input
+                      type="number" min="0" value={manualForm.amount}
+                      onChange={(e) => setManualForm((f) => ({ ...f, amount: e.target.value }))}
+                      placeholder={unitPrice ? `e.g. ${unitPrice * (Number(manualForm.quantity) || 1)}` : 'What the customer paid'}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div className="relative">
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Seller name *</label>
+                    <input
+                      type="text" value={manualForm.seller_name}
+                      onChange={(e) => { setManualForm((f) => ({ ...f, seller_name: e.target.value })); setSellerDropdownOpen(true); }}
+                      onFocus={() => setSellerDropdownOpen(true)}
+                      placeholder="Who made this sale? e.g. admin1"
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                    {sellerDropdownOpen && knownSellersFiltered.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white border border-stone-200 rounded-xl shadow-lg py-1 max-h-48 overflow-y-auto">
+                        {knownSellersFiltered.map((s) => (
+                          <div key={s.id} className="flex items-center hover:bg-stone-50">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualForm((f) => ({ ...f, seller_name: s.name }));
+                                setSellerDropdownOpen(false);
+                              }}
+                              className="flex-1 text-left px-3 py-2 text-sm text-stone-700 truncate"
+                            >
+                              {s.name}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteSeller(s.id, s.name)}
+                              title={`Delete "${s.name}" from the seller list`}
+                              disabled={deletingSeller === s.id}
+                              className="flex-shrink-0 mr-1.5 p-1.5 text-stone-300 hover:text-red-500 disabled:opacity-40 transition-colors"
+                            >
+                              {deletingSeller === s.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      Customer name <span className="text-stone-400 font-normal">(optional)</span>
+                    </label>
+                    <input
+                      type="text" value={manualForm.customer_name}
+                      onChange={(e) => setManualForm((f) => ({ ...f, customer_name: e.target.value }))}
+                      placeholder="Defaults to Walk-in customer"
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      bKash number <span className="text-stone-400 font-normal">(optional)</span>
+                    </label>
+                    <input
+                      type="text" value={manualForm.bkash}
+                      onChange={(e) => setManualForm((f) => ({ ...f, bkash: e.target.value }))}
+                      placeholder="Last 4 digits or full number"
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      District <span className="text-stone-400 font-normal">(optional)</span>
+                    </label>
+                    <select
+                      value={manualForm.district}
+                      onChange={(e) => setManualForm((f) => ({ ...f, district: e.target.value, thana: '' }))}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                    >
+                      <option value="">— none —</option>
+                      {DELIVERY_ZONES.map((zone) => (
+                        <optgroup key={zone.id} label={ZONE_GROUP_LABELS[zone.id]}>
+                          {zone.districts.map((d) => (
+                            <option key={d} value={d}>{d} · {DISTRICT_NAMES_BN[d] ?? d}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      Thana <span className="text-stone-400 font-normal">(optional)</span>
+                    </label>
+                    <ThanaSelect
+                      district={manualForm.district}
+                      value={manualForm.thana}
+                      onChange={(thana) => setManualForm((f) => ({ ...f, thana }))}
+                      variant="admin"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      Address <span className="text-stone-400 font-normal">(optional)</span>
+                    </label>
+                    <textarea
+                      value={manualForm.address}
+                      onChange={(e) => setManualForm((f) => ({ ...f, address: e.target.value }))}
+                      placeholder="House / road / area details"
+                      rows={2}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 resize-none"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-4 mt-5 pt-4 border-t border-stone-100">
+                  <p className="text-sm text-stone-500">
+                    {selectedProduct ? (
+                      <>
+                        Stock available: <span className={`font-bold ${available >= (Number(manualForm.quantity) || 1) ? 'text-emerald-600' : 'text-red-500'}`}>{available}</span>
+                        {manualTotal > 0 && <> · Sale total: <span className="font-bold text-stone-900">৳{manualTotal.toLocaleString('en-IN')}</span></>}
+                      </>
+                    ) : (
+                      'Pick a product to see stock and price.'
+                    )}
+                  </p>
+                  <button
+                    onClick={() => void handleSaveManualOrder()}
+                    disabled={manualSaving || !manualForm.product_id}
+                    className="ml-auto flex items-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white font-semibold px-5 py-2.5 rounded-xl transition-all shadow-sm"
+                  >
+                    {manualSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Store className="w-4 h-4" />}
+                    {manualSaving ? 'Saving...' : 'Record sale'}
+                  </button>
+                </div>
+              </div>
+
+              {/* PDF report: filter by seller and/or date range, then print → Save as PDF */}
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 mb-4 flex items-center gap-1.5">
+                  <FileDown className="w-3.5 h-3.5" /> PDF report
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Seller</label>
+                    <select
+                      value={reportSeller}
+                      onChange={(e) => setReportSeller(e.target.value)}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                    >
+                      <option value="">All sellers</option>
+                      {knownSellers.map((s) => (
+                        <option key={s.id} value={s.name}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">From <span className="text-stone-400 font-normal">(optional)</span></label>
+                    <input
+                      type="date" value={reportFrom}
+                      onChange={(e) => setReportFrom(e.target.value)}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">To <span className="text-stone-400 font-normal">(optional)</span></label>
+                    <input
+                      type="date" value={reportTo}
+                      onChange={(e) => setReportTo(e.target.value)}
+                      min={reportFrom || undefined}
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={() => void handleDownloadReport()}
+                      disabled={reportBusy || reportOrders.length === 0}
+                      className="w-full flex items-center justify-center gap-2 bg-stone-900 hover:bg-stone-800 disabled:opacity-60 text-white font-semibold px-5 py-2.5 rounded-xl transition-all shadow-sm"
+                    >
+                      {reportBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                      {reportBusy ? 'Preparing…' : 'Download PDF'}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-sm text-stone-500 mt-4">
+                  {reportOrders.length === 0 ? (
+                    'No in-store sales match — widen the filters.'
+                  ) : (
+                    <>
+                      {reportOrders.length} sale{reportOrders.length === 1 ? '' : 's'} ·{' '}
+                      <span className="font-bold text-stone-900">
+                        ৳{reportOrders.reduce((s, o) => s + Number(o.total_amount ?? 0), 0).toLocaleString('en-IN')}
+                      </span>{' '}
+                      in the selected range. Click “Download PDF”, then choose <b>Save as PDF</b> in the print dialog.
+                    </>
+                  )}
+                </p>
+              </div>
+
+              {/* History */}
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm overflow-hidden">
+                <div className="px-5 pt-5 pb-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <Store className="w-3.5 h-3.5" /> Recorded in-store sales ({manualHistory.length})
+                  </p>
+                </div>
+                {manualHistory.length === 0 ? (
+                  <div className="px-5 pb-6">
+                    <p className="text-sm text-stone-400">No in-store sales recorded yet. Use the form above for walk-in purchases.</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-stone-100">
+                    {manualHistory.slice(0, 30).map((o) => (
+                      <div key={o.id} className="flex items-center gap-3 px-5 py-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs font-bold text-stone-800">{o.order_code ?? o.id.slice(0, 8).toUpperCase()}</span>
+                            <span className="text-sm font-medium text-stone-800 truncate">{o.product_title}</span>
+                            {o.selected_size && <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">{o.selected_size}</span>}
+                            <span className="text-[11px] text-stone-400">× {o.quantity ?? 1}</span>
+                          </div>
+                          <p className="text-[11px] text-stone-400 mt-0.5">
+                            {o.customer_name} · sold by <span className="font-semibold text-stone-500">{o.seller_name ?? '—'}</span>
+                            {o.bkash_number ? ` · bKash ··${o.bkash_number.slice(-4)}` : ' · cash'}
+                            {' · '}{new Date(o.created_at).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })}
+                          </p>
+                        </div>
+                        <span className="text-sm font-bold text-stone-900 flex-shrink-0">৳{Number(o.total_amount ?? 0).toLocaleString('en-IN')}</span>
+                        <button
+                          onClick={() => setDeleteOrderConfirm(o.id)}
+                          title="Delete this record"
+                          className="text-stone-300 hover:text-red-500 transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Finance tab ── */}
+        {tab === 'finance' && (
+          <div className="space-y-6">
+            {/* Range selector */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-xl font-bold text-stone-900">Finance Overview</h2>
+                <p className="text-sm text-stone-500">
+                  {financeOrders.length} order{financeOrders.length === 1 ? '' : 's'} in range · canceled orders excluded
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {([
+                  { key: 'today' as const, label: 'Today' },
+                  { key: 'week' as const, label: 'This week' },
+                  { key: 'month' as const, label: 'This month' },
+                  { key: 'all' as const, label: 'All time' },
+                  { key: 'custom' as const, label: 'Custom' },
+                  { key: 'csv' as const, label: '' },
+                ]).map((r) =>
+                  r.key === 'csv' ? (
+                    <button
+                      key="csv"
+                      onClick={exportFinanceCsv}
+                      disabled={financeOrders.length === 0}
+                      title="Download the currently selected range as CSV"
+                      className="flex items-center gap-1.5 text-xs font-semibold text-stone-700 bg-white border border-stone-200 hover:border-stone-300 px-3 py-2 rounded-xl disabled:opacity-50 transition-all"
+                    >
+                      <Download className="w-3.5 h-3.5" /> CSV
+                    </button>
+                  ) : (
+                    <button
+                      key={r.key}
+                      onClick={() => setFinRange(r.key)}
+                      className={`px-3.5 py-2 rounded-full text-sm font-semibold border transition-all whitespace-nowrap ${
+                        finRange === r.key
+                          ? 'bg-stone-900 text-white border-stone-900 shadow-sm'
+                          : 'bg-white text-stone-600 border-stone-200 hover:border-stone-300'
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+
+            {/* Custom range inputs */}
+            {finRange === 'custom' && (
+              <div className="flex flex-wrap items-end gap-2 bg-white rounded-2xl border border-stone-100 shadow-sm p-4">
+                <div>
+                  <label className="block text-[11px] font-semibold text-stone-500 mb-1">From</label>
+                  <input
+                    type="date"
+                    value={finFrom}
+                    onChange={(e) => setFinFrom(e.target.value)}
+                    className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-stone-500 mb-1">To</label>
+                  <input
+                    type="date"
+                    value={finTo}
+                    onChange={(e) => setFinTo(e.target.value)}
+                    className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  />
+                </div>
+                <p className="text-xs text-stone-400 pb-2.5">Leave a field empty for an open-ended range.</p>
+              </div>
+            )}            {/* ── Hero: how are we doing? ── */}
+            <div className="bg-white rounded-3xl border border-stone-100 shadow-sm p-6">
+              <div className="flex flex-wrap items-start justify-between gap-6">
+                <div className="min-w-[180px]">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Net profit · selected range</p>
+                  <p className={`font-display text-4xl font-bold mt-1 leading-none ${netProfit >= 0 ? 'text-stone-900' : 'text-red-500'}`}>{formatBDT(netProfit)}</p>
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    {grossMargin != null && (
+                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">{grossMargin}% margin</span>
+                    )}
+                    {!cogs.known && (
+                      <span className="text-[11px] font-medium text-amber-600">· some products have no cost price set</span>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-x-8 gap-y-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">Revenue</p>
+                    <p className="font-display text-xl font-bold text-stone-900">{formatBDT(finStats.grossRevenue)}</p>
+                    <FinDelta current={finStats.grossRevenue} previous={prevStats.revenue} />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">Orders</p>
+                    <p className="font-display text-xl font-bold text-stone-900">{finStats.count}</p>
+                    <FinDelta current={finStats.count} previous={prevStats.count} />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">Avg order</p>
+                    <p className="font-display text-xl font-bold text-stone-900">{formatBDT(finStats.count ? finStats.grossRevenue / finStats.count : 0)}</p>
+                  </div>
+                </div>
+              </div>
+              {dailyBuckets.length > 0 && (
+                <div className="mt-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400 mb-1.5">Revenue by day</p>
+                  <DailyBars buckets={dailyBuckets} />
+                </div>
+              )}
+              {/* Cash strip: money in hand vs money still out there (range-based) */}
+              <div className="mt-5 pt-4 border-t border-stone-100 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <FinCard label="In hand (bKash advance)" value={formatBDT(finStats.advance)} sub="Paid up front by customers" tone="emerald" icon={CheckCircle2} />
+                <FinCard label="To collect on delivery" value={formatBDT(finStats.due)} sub="Customer pays the courier" tone={finStats.due > 0 ? 'amber' : 'stone'} icon={Clock} />
+                <FinCard label="Delivery fees charged" value={formatBDT(finStats.deliveryCollected)} sub="Added to customer bills" tone="sky" icon={Truck} />
+                <FinCard label="Discounts given" value={`−${formatBDT(finStats.discounts)}`} sub={`${Object.keys(finStats.couponSpend).length} coupon(s) used`} tone="amber" icon={Percent} />
+              </div>
+            </div>
+
+            {/* COD reconciliation — where is the cash right now? */}
+            <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <Banknote className="w-3.5 h-3.5" /> Courier cash · Steadfast
+                  </p>
+                  <p className="text-sm text-stone-500 mt-0.5">Where every parcel's cash sits right now — all time, not just this range.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setSfBalanceLoading(true);
+                    setSfBalanceError('');
+                    getSteadfastBalance()
+                      .then((res) => {
+                        if (res.ok) setSfBalance(res.balance);
+                        else setSfBalanceError(res.message);
+                      })
+                      .finally(() => setSfBalanceLoading(false));
+                  }}
+                  disabled={sfBalanceLoading || !steadfastConfigured}
+                  title={steadfastConfigured ? 'Fetch your live Steadfast account balance' : 'Add Steadfast API keys to .env to enable'}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-stone-600 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                >
+                  {sfBalanceLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  Refresh courier balance
+                </button>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <FinCard label="Cash collected" value={formatBDT(codRecon.collected)} sub={`${codRecon.collectedCount} delivered parcel${codRecon.collectedCount === 1 ? '' : 's'}`} tone="emerald" icon={CheckCircle2} />
+                <FinCard label="Cash with courier" value={formatBDT(codRecon.pending)} sub={`${codRecon.pendingCount} in transit`} tone={codRecon.pendingCount > 0 ? 'amber' : 'stone'} icon={Truck} />
+                <FinCard label="Steadfast balance" value={sfBalance != null ? formatBDT(sfBalance) : '—'} sub={sfBalanceError || 'Live from Steadfast API'} tone="brand" icon={Banknote} />
+                <FinCard label="Returned / lost COD" value={formatBDT(codRecon.returned)} sub={`${codRecon.returnedCount} cancelled parcel${codRecon.returnedCount === 1 ? '' : 's'}`} tone={codRecon.returnedCount > 0 ? 'red' : 'stone'} icon={XCircle} />
+              </div>
+            </div>
+
+            {/* Profit ledger — the story of the range in five lines */}
+            <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5" /> Where the money went · selected range
+                  </p>
+                  <p className="text-sm text-stone-500 mt-0.5">From revenue to net profit, line by line.</p>
+                </div>
+              </div>
+              <div className="mt-4 space-y-1.5 max-w-xl">
+                {([
+                  { label: 'Revenue (after discounts)', amount: finStats.grossRevenue, sign: '+', tone: 'text-emerald-600' },
+                  { label: 'Product cost', amount: -cogs.total, sign: '−', tone: 'text-stone-600', warn: !cogs.known ? 'some products have no cost price — counted as ৳0' : '' },
+                  { label: 'Courier cost (est.)', amount: -finStats.courierEst, sign: '−', tone: 'text-stone-600' },
+                  { label: 'Expenses', amount: -rangeExpenses, sign: '−', tone: 'text-stone-600' },
+                ] as Array<{ label: string; amount: number; sign: string; tone: string; warn?: string }>).map((line) => (
+                  <div key={line.label} className="flex items-center justify-between text-sm py-1.5 border-b border-stone-100 last:border-0">
+                    <span className="text-stone-600">
+                      <span className={`font-bold mr-1.5 ${line.tone}`}>{line.sign}</span>{line.label}
+                      {line.warn && <span className="block text-[11px] text-amber-600">{line.warn}</span>}
+                    </span>
+                    <span className={`font-semibold tabular-nums ${line.amount < 0 ? 'text-stone-700' : line.tone}`}>{formatBDT(Math.abs(line.amount))}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between pt-2.5 mt-1 border-t-2 border-stone-200">
+                  <span className="font-bold text-stone-900">= Net profit</span>
+                  <span className={`font-display text-xl font-bold tabular-nums ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{formatBDT(netProfit)}</span>
+                </div>
+              </div>
+
+              {/* Quick expense logger */}
+              <div className="mt-5 pt-4 border-t border-stone-100">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 mb-2">Log an expense</p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="min-w-[140px] flex-1">
+                    <input
+                      type="text"
+                      value={expenseForm.title}
+                      onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })}
+                      placeholder="What was it? e.g. Facebook ads"
+                      className="w-full border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div className="w-28">
+                    <input
+                      type="number"
+                      min="0"
+                      value={expenseForm.amount}
+                      onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                      placeholder="৳ Amount"
+                      className="w-full border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="date"
+                      value={expenseForm.spent_at || dayOffsetISO(0)}
+                      onChange={(e) => setExpenseForm({ ...expenseForm, spent_at: e.target.value })}
+                      className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <button
+                    onClick={() => void handleAddExpense()}
+                    disabled={expenseSaving}
+                    className="flex items-center gap-1.5 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold text-sm px-4 py-2 rounded-xl transition-all shadow-sm"
+                  >
+                    {expenseSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    Add
+                  </button>
+                </div>
+                {expenses.length > 0 && (
+                  <div className="mt-3 space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                    {expenses.slice(0, 30).map((e) => (
+                      <div key={e.id} className="flex items-center justify-between bg-stone-50 rounded-xl px-3.5 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-stone-800 truncate">{e.title}</p>
+                          <p className="text-[11px] text-stone-400">{e.spent_at ?? (e.created_at ?? '').slice(0, 10)}{e.note ? ` · ${e.note}` : ''}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-sm font-semibold text-red-500">−{formatBDT(Number(e.amount))}</span>
+                          <button
+                            onClick={() => setDeleteExpenseId(e.id)}
+                            title="Remove expense"
+                            className="text-stone-300 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Inventory snapshot */}
+            <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <Package className="w-3.5 h-3.5" /> Inventory snapshot
+                  </p>
+                  <p className="text-sm text-stone-500 mt-0.5">Current stock across all products, valued at current selling price.</p>
+                </div>
+                <button
+                  onClick={() => setTab('stock')}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 transition-colors"
+                >
+                  Manage stock →
+                </button>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <FinCard label="Stock value" value={formatBDT(stockValue)} sub={`${products.length} products`} tone="brand" icon={Package} />
+                <FinCard label="Low stock items" value={String(lowStockProducts.length)} sub={`Alert threshold: ${lowStockThreshold}`} tone={lowStockProducts.length > 0 ? 'amber' : 'stone'} icon={AlertTriangle} />
+                <FinCard label="Out of stock" value={String(products.filter((p) => p.stock_count === 0).length)} sub="Hide from storefront or restock" tone={products.some((p) => p.stock_count === 0) ? 'red' : 'stone'} icon={XCircle} />
+                <FinCard label="Units in stock" value={String(products.reduce((s, p) => s + p.stock_count, 0))} sub="Across all products" tone="stone" icon={Package} />
+              </div>
+
+              {lowStockProducts.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-stone-100">
+                  <p className="text-xs font-semibold text-amber-600 mb-2 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Low stock — restock soon ({lowStockProducts.length})
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {lowStockProducts.map((p) => (
+                      <span
+                        key={p.id}
+                        title={`৳${Number(p.discount_price ?? p.price).toFixed(0)} each`}
+                        className={`text-xs font-semibold px-2.5 py-1.5 rounded-full border ${
+                          p.stock_count === 0
+                            ? 'bg-red-50 text-red-600 border-red-200'
+                            : 'bg-amber-50 text-amber-600 border-amber-200'
+                        }`}
+                      >
+                        {p.title} · {p.stock_count} left
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-stone-400 mt-2">
+                    Threshold is adjustable in Settings → Finance &amp; inventory.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Performance: best sellers, slow movers, top customers */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5 mb-3">
+                  <TrendingUp className="w-3.5 h-3.5" /> Top products
+                </p>
+                {perf.topProducts.length === 0 ? (
+                  <p className="text-sm text-stone-400">No sales in this range yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {perf.topProducts.map((p, i) => (
+                      <div key={p.key} className="flex items-center gap-2.5 bg-stone-50 rounded-xl px-3 py-2">
+                        <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${i === 0 ? 'bg-amber-100 text-amber-600' : 'bg-stone-200 text-stone-500'}`}>{i + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-stone-800 truncate">{p.name}</p>
+                          <p className="text-[11px] text-stone-400">{p.qty} sold · {p.orders} order{p.orders === 1 ? '' : 's'}</p>
+                        </div>
+                        <span className="text-sm font-bold text-stone-900 flex-shrink-0">{formatBDT(p.revenue)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5 mb-3">
+                  <TrendingDown className="w-3.5 h-3.5" /> Least performing
+                </p>
+                {perf.leastProducts.length === 0 ? (
+                  <p className="text-sm text-stone-400">No products yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {perf.leastProducts.map((p) => (
+                      <div key={p.key} className="flex items-center gap-2.5 bg-stone-50 rounded-xl px-3 py-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-stone-800 truncate">{p.name}</p>
+                          <p className="text-[11px] text-stone-400">{p.revenue > 0 ? `${p.qty} sold · ${p.orders} order${p.orders === 1 ? '' : 's'}` : 'No sales in this range'}</p>
+                        </div>
+                        <span className="text-sm font-bold text-stone-900 flex-shrink-0">{p.revenue > 0 ? formatBDT(p.revenue) : '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5 mb-3">
+                  <Users className="w-3.5 h-3.5" /> Top customers
+                </p>
+                {perf.topCustomers.length === 0 ? (
+                  <p className="text-sm text-stone-400">No customers in this range yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {perf.topCustomers.map((c) => (
+                      <div key={c.key} className="flex items-center gap-2.5 bg-stone-50 rounded-xl px-3 py-2">
+                        <span className="w-6 h-6 rounded-full bg-stone-900 text-white text-[10px] font-bold flex-shrink-0 flex items-center justify-center">{(c.name || '?').trim().charAt(0).toUpperCase()}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-stone-800 truncate">{c.name}</p>
+                          <p className="text-[11px] text-stone-400">{c.phone || '—'} · {c.orders} order{c.orders === 1 ? '' : 's'}</p>
+                        </div>
+                        <span className="text-sm font-bold text-stone-900 flex-shrink-0">{formatBDT(c.spend)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Coupon usage breakdown */}
+            {Object.keys(finStats.couponSpend).length > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5 mb-3">
+                  <Percent className="w-3.5 h-3.5" /> Coupon usage in range
+                </p>
+                <div className="space-y-2">
+                  {Object.entries(finStats.couponSpend)
+                    .sort((a, b) => b[1].amount - a[1].amount)
+                    .map(([code, s]) => (
+                      <div key={code} className="flex items-center justify-between bg-stone-50 rounded-xl px-4 py-2.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-xs font-bold bg-stone-900 text-white px-2 py-0.5 rounded-md">{code}</span>
+                          <span className="text-xs text-stone-500">{s.count} order{s.count === 1 ? '' : 's'}</span>
+                        </div>
+                        <span className="text-sm font-semibold text-emerald-600">−{formatBDT(s.amount)}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Per-order ledger — every order's complete financial statement */}
+            <div className="bg-white rounded-2xl border border-stone-100 shadow-sm overflow-hidden">
+              <div className="px-5 pt-5 pb-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                  <ShoppingBag className="w-3.5 h-3.5" /> Order ledger ({financeOrders.length})
+                </p>
+                <p className="text-sm text-stone-500 mt-0.5">Newest first. Click a row to expand its full financial breakdown.</p>
+              </div>
+              <div className="divide-y divide-stone-100">
+                {financeOrders.slice(0, 60).map((o) => {
+                  const ledger = buildLedgerRow(o);
+                  const open = expandedLedger === o.id;
+                  return (
+                    <div key={o.id}>
+                      <button
+                        onClick={() => setExpandedLedger(open ? null : o.id)}
+                        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-stone-50 transition-colors"
+                      >
+                        <ChevronRight className={`w-4 h-4 text-stone-300 flex-shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs font-bold text-stone-800">{ledger.orderCode}</span>
+                            <span className="text-sm text-stone-600 truncate">{ledger.customer}</span>
+                            {ledger.coupon && (
+                              <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">{ledger.coupon}</span>
+                            )}
+                            {ledger.payLabel && (
+                              <span className="text-[10px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full">{ledger.payLabel}</span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-stone-400 mt-0.5">
+                            {ledger.dateLabel} · {o.product_title}{ledger.size ? ` · ${ledger.size}` : ''} · Qty {ledger.qty}
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-bold text-stone-900">{formatBDT(ledger.total)}</p>
+                          <p className={`text-[11px] font-semibold ${ledger.due > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {ledger.due > 0 ? `${formatBDT(ledger.due)} due` : 'Fully paid'}
+                          </p>
+                        </div>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${
+                            o.status === 'delivered' ? 'bg-emerald-100 text-emerald-600'
+                              : o.status === 'canceled' ? 'bg-red-100 text-red-600'
+                                : 'bg-amber-100 text-amber-600'
+                          }`}>
+                          {o.status === 'delivered' ? 'Delivered' : o.status === 'canceled' ? 'Canceled' : 'Pending'}
+                        </span>
+                      </button>
+                      {open && (
+                        <div className="px-5 pb-4 pt-1 bg-stone-50/60">
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+                            <div>
+                              <p className={ORD_LBL}>Unit price</p>
+                              <p className="text-sm font-semibold text-stone-800">{formatBDT(ledger.unitPrice)} × {ledger.qty}</p>
+                            </div>
+                            <div>
+                              <p className={ORD_LBL}>Subtotal</p>
+                              <p className="text-sm font-semibold text-stone-800">{formatBDT(ledger.subtotal)}</p>
+                            </div>
+                            <div>
+                              <p className={ORD_LBL}>Discount</p>
+                              <p className="text-sm font-semibold text-emerald-600">{ledger.discount > 0 ? `−${formatBDT(ledger.discount)}` : '—'}</p>
+                            </div>
+                            <div>
+                              <p className={ORD_LBL}>Delivery fee</p>
+                              <p className="text-sm font-semibold text-stone-800">{formatBDT(ledger.deliveryFee)}</p>
+                            </div>
+                            <div>
+                              <p className={ORD_LBL}>Order total</p>
+                              <p className="text-sm font-bold text-stone-900">{formatBDT(ledger.total)}</p>
+                            </div>                            <div>
+                              <p className={ORD_LBL}>Advance paid</p>
+                              <p className="text-sm font-semibold text-emerald-600">{formatBDT(ledger.advance)}</p>
+                            </div>
+                            <div>
+                              <p className={ORD_LBL}>Due on delivery</p>
+                              <p className={`text-sm font-semibold ${ledger.due > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{formatBDT(ledger.due)}</p>
+                            </div>
+                            <div>
+                              <p className={ORD_LBL}>Zone</p>
+                              <p className="text-sm font-semibold text-stone-800">{ledger.zone}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Stock movement history modal ── */}
+        {movementProductId && (() => {
+          const product = products.find((p) => p.id === movementProductId);
+          const moves = stockMovements.filter((m) => m.product_id === movementProductId);
+          const productName = product?.title ?? 'Product';
+          return (
+            <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setMovementProductId(null)}>
+              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg animate-fade-in-up" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
+                  <div>
+                    <h3 className="font-display text-lg font-bold text-stone-900">Stock history — {productName}</h3>
+                    <p className="text-xs text-stone-500 mt-0.5">Every recorded stock change, newest first.</p>
+                  </div>
+                  <button onClick={() => setMovementProductId(null)} className="text-stone-400 hover:text-stone-600 transition-colors">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="px-6 py-4 max-h-[60vh] overflow-y-auto">
+                  {moves.length === 0 ? (
+                    <div className="text-center py-8 text-stone-400">
+                      <Clock className="w-10 h-10 mx-auto mb-2 text-stone-300" />
+                      <p className="text-sm">No movements recorded yet.</p>
+                      <p className="text-xs mt-1">History starts once the SQL migration is applied — then every order, sell, and restock is logged.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {moves.map((m) => (
+                        <div key={m.id} className="flex items-center justify-between bg-stone-50 rounded-xl px-3.5 py-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-stone-800">
+                              {m.size ? <span className="text-[11px] font-bold uppercase text-stone-500 mr-1.5">{m.size}</span> : null}
+                              {m.reason.replace(/_/g, ' ')}{m.note ? <span className="text-xs text-stone-400"> · {m.note}</span> : null}
+                            </p>
+                            <p className="text-[11px] text-stone-400">
+                              {new Date(m.created_at).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })}
+                              {m.admin_id ? ` · by ${m.admin_id}` : ' · customer order'}
+                            </p>
+                          </div>
+                          <span className={`text-sm font-bold ${m.delta < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                            {m.delta > 0 ? `+${m.delta}` : m.delta}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Bulk delete orders confirm modal ── */}
+        {bulkDeleteConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setBulkDeleteConfirm(false)}>
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-fade-in-up p-6" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-red-100 rounded-2xl flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-500" />
+                </div>
+                <div>
+                  <h3 className="font-display text-lg font-bold text-stone-900">Delete {selectedOrderIds.size} order{selectedOrderIds.size === 1 ? '' : 's'}?</h3>
+                  <p className="text-xs text-stone-500">This permanently removes them and cannot be undone.</p>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end mt-5">
+                <button onClick={() => setBulkDeleteConfirm(false)} className="px-4 py-2 text-sm font-semibold text-stone-600 bg-stone-100 hover:bg-stone-200 rounded-xl transition-all">Keep orders</button>
+                <button
+                  onClick={() => void bulkDeleteOrders()}
+                  disabled={bulkBusy === 'delete'}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-red-500 hover:bg-red-400 disabled:opacity-60 rounded-xl transition-all"
+                >
+                  {bulkBusy === 'delete' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  Delete forever
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Delete expense confirm modal ── */}
+        {deleteExpenseId && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDeleteExpenseId(null)}>
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-fade-in-up p-6" onClick={(e) => e.stopPropagation()}>
+              <h3 className="font-display text-lg font-bold text-stone-900">Remove this expense?</h3>
+              <p className="text-xs text-stone-500 mt-1">It will no longer count against net profit.</p>
+              <div className="flex gap-2 justify-end mt-5">
+                <button onClick={() => setDeleteExpenseId(null)} className="px-4 py-2 text-sm font-semibold text-stone-600 bg-stone-100 hover:bg-stone-200 rounded-xl transition-all">Cancel</button>
+                <button onClick={() => void handleDeleteExpense(deleteExpenseId)} className="px-4 py-2 text-sm font-semibold text-white bg-red-500 hover:bg-red-400 rounded-xl transition-all">Remove</button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -2595,6 +4533,100 @@ export default function AdminPage() {
          {/* ── Settings tab ── */}
          {tab === 'settings' && (
            <div className="space-y-8">
+             {/* ── Finance & inventory settings ── */}
+             <div>
+               <h2 className="font-display text-xl font-bold text-stone-900">Finance &amp; Inventory</h2>
+               <p className="text-sm text-stone-500 mt-1">Tune the numbers shown on the Finance tab.</p>
+               <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4">
+                 <div className="max-w-xs">
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Low-stock alert threshold</label>
+                   <input
+                     type="number"
+                     min="0"
+                     step="1"
+                     value={thresholdInput}
+                     onChange={(e) => setThresholdInput(e.target.value)}
+                     placeholder="5"
+                     className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                   />
+                   <p className="text-xs text-stone-400 mt-1">
+                     Products with stock at or below this are flagged as low stock. 0 turns alerts off.
+                   </p>
+                 </div>
+                 <button onClick={handleSaveThreshold} disabled={thresholdSaving}
+                   className="mt-4 flex items-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
+                   {thresholdSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                   {thresholdSaving ? 'Saving...' : 'Save Threshold'}
+                 </button>
+               </div>
+             </div>
+
+             {/* ── WhatsApp numbers ── */}
+             <div>
+               <h2 className="font-display text-xl font-bold text-stone-900">WhatsApp Numbers</h2>
+               <p className="text-sm text-stone-500 mt-1">Where customers reach you on WhatsApp. Both numbers go live on the storefront as soon as you save.</p>
+               <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4 space-y-5">
+                 <div>
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Order number <span className="text-stone-400 font-normal">(product pages)</span></label>
+                   <div className="relative">
+                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-stone-400">+88</span>
+                     <input
+                       type="tel"
+                       value={waNumbers.order}
+                       onChange={(e) => setWaNumbers({ ...waNumbers, order: e.target.value })}
+                       placeholder="e.g. 01410423299"
+                       className="w-full border border-stone-200 rounded-xl pl-11 pr-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
+                     />
+                   </div>
+                   <p className="text-xs text-stone-400 mt-1">Used by the green "Order on WhatsApp" button on every product page. Local (01…) or international (880…) format both work.</p>
+                 </div>
+                 <div>
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Chat number <span className="text-stone-400 font-normal">(floating bubble + footer)</span></label>
+                   <div className="relative">
+                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-stone-400">+88</span>
+                     <input
+                       type="tel"
+                       value={waNumbers.chat}
+                       onChange={(e) => setWaNumbers({ ...waNumbers, chat: e.target.value })}
+                       placeholder="e.g. 01305827996"
+                       className="w-full border border-stone-200 rounded-xl pl-11 pr-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
+                     />
+                   </div>
+                   <p className="text-xs text-stone-400 mt-1">Used by the always-visible chat bubble in the bottom-right corner and the WhatsApp link in the footer.</p>
+                 </div>
+                 <button onClick={handleSaveWhatsApp} disabled={waSaving}
+                   className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
+                   {waSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                   {waSaving ? 'Saving...' : 'Save WhatsApp Numbers'}
+                 </button>
+               </div>
+             </div>
+
+             {/* ── Admin activity log ── */}
+             <div>
+               <h2 className="font-display text-xl font-bold text-stone-900">Admin Activity Log</h2>
+               <p className="text-sm text-stone-500 mt-1">Who did what — status changes, bookings, deletions, product edits, stock changes. Newest first.</p>
+               {adminLogs.length === 0 ? (
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4">
+                   <p className="text-sm text-stone-400">
+                     No activity recorded yet. Actions start appearing once the admin-expansion SQL migration is applied and admins use the panel.
+                   </p>
+                 </div>
+               ) : (
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 divide-y divide-stone-100 mt-4 max-h-96 overflow-y-auto">
+                   {adminLogs.slice(0, 80).map((log) => (
+                     <div key={log.id} className="flex items-center gap-3 px-4 py-2.5">
+                       <span className="text-[10px] font-bold uppercase bg-stone-900 text-white px-2 py-0.5 rounded-md flex-shrink-0">{log.admin_id}</span>
+                       <span className="text-xs font-semibold text-brand-600 flex-shrink-0">{log.action.replace(/_/g, ' ')}</span>
+                       <span className="text-xs text-stone-500 truncate min-w-0 flex-1">{log.detail ?? log.target ?? ''}</span>
+                       <span className="text-[11px] text-stone-400 flex-shrink-0">
+                         {new Date(log.created_at).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })}
+                       </span>
+                     </div>
+                   ))}
+                 </div>
+               )}
+             </div>
              {/* ── Announcement Bar section ── */}
              <div>
                <div className="flex items-center justify-between mb-4">
@@ -2712,10 +4744,10 @@ export default function AdminPage() {
                </div>
              </div>
 
-             {/* ── Steadfast courier rates ── */}
+             {/* ── Steadfast courier rates + checkout payment ── */}
              <div className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden">
                <div className="px-6 py-5 border-b border-stone-100">
-                 <h3 className="font-display text-lg font-bold text-stone-900">Steadfast Courier Rates</h3>
+                 <h3 className="font-display text-lg font-bold text-stone-900">Steadfast Courier Rates & Checkout Payment</h3>
                  <p className="text-sm text-stone-500 mt-0.5">
                    Customers are charged by their district's zone at checkout. The advance they send via bKash equals this fee.
                  </p>
@@ -2752,6 +4784,17 @@ export default function AdminPage() {
                    />
                    <p className="text-xs text-stone-400 mt-1">Printed on parcel labels ("Merchant ID: …"). Find it in your Steadfast merchant dashboard or on any old sticker.</p>
                  </div>
+                 <div>
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Checkout bKash number (advance payment)</label>
+                   <input
+                     type="tel"
+                     value={checkoutBkash}
+                     onChange={(e) => setCheckoutBkash(e.target.value)}
+                     placeholder="e.g. 01712-345678"
+                     className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
+                   />
+                   <p className="text-xs text-stone-400 mt-1">Shown on checkout as the personal bKash number customers send the delivery-fee advance to. Falls back to the built-in placeholder if left blank.</p>
+                 </div>
                  <button onClick={handleSaveSteadfastRates} disabled={steadfastSaving}
                    className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
                    {steadfastSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -2762,6 +4805,174 @@ export default function AdminPage() {
            </div>
          )}
        </div>
+
+      {/* ── Size chart manager modal ── */}
+      {chartManagerOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl my-4 animate-fade-in-up">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
+              <div>
+                <h3 className="font-display text-lg font-bold text-stone-900">Size Charts</h3>
+                <p className="text-sm text-stone-500 mt-0.5">Reusable measurement tables — attach one to any product; edit once, updates everywhere.</p>
+              </div>
+              <button onClick={() => setChartManagerOpen(false)} className="text-stone-400 hover:text-stone-600 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-3 max-h-[70vh] overflow-y-auto">
+              {sizeCharts.length === 0 ? (
+                <p className="text-sm text-stone-500 py-6 text-center">No size charts yet — create one to show measurements on product pages.</p>
+              ) : (
+                sizeCharts.map((tpl) => {
+                  const inUse = products.filter((p) => p.size_chart_template_id === tpl.id).length;
+                  return (
+                    <div key={tpl.id} className="border border-stone-200 rounded-2xl px-4 py-3.5 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-stone-900 text-sm">{tpl.name}</p>
+                        <p className="text-xs text-stone-500 mt-0.5">
+                          {(tpl.measurements?.rows ?? []).join(' · ') || '—'} across {(tpl.measurements?.sizes ?? []).length} sizes
+                          {inUse > 0 && <span className="text-emerald-600 font-medium"> · used by {inUse} product{inUse === 1 ? '' : 's'}</span>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button onClick={() => openEditChartModal(tpl)} className="p-2 text-stone-400 hover:text-stone-700 transition-colors" aria-label="Edit chart">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => void handleDeleteChart(tpl)} className="p-2 text-stone-400 hover:text-red-500 transition-colors" aria-label="Delete chart">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <button onClick={openAddChartModal}
+                className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-stone-200 hover:border-brand-400 text-stone-500 hover:text-brand-600 font-semibold py-3 rounded-2xl transition-all">
+                <Plus className="w-4 h-4" /> New size chart
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Size chart editor modal ── */}
+      {chartModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl my-4 animate-fade-in-up">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-stone-100">
+              <h3 className="font-display text-lg font-bold text-stone-900">
+                {chartModalMode === 'add' ? 'New Size Chart' : `Edit — ${editingChart?.name}`}
+              </h3>
+              <button onClick={() => setChartModalOpen(false)} className="text-stone-400 hover:text-stone-600 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Chart name *</label>
+                  <input type="text" value={chartName} onChange={(e) => setChartName(e.target.value)}
+                    placeholder="e.g. Round Neck Tee — Relaxed"
+                    className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                    Note <span className="text-stone-400 font-normal">(optional)</span>
+                  </label>
+                  <input type="text" value={chartNote} onChange={(e) => setChartNote(e.target.value)}
+                    placeholder="e.g. Measurements in inches"
+                    className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
+                </div>
+              </div>
+
+              {/* Sizes (columns) */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">Sizes (columns)</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {chartSizes.map((s, i) => (
+                    <span key={i} className="inline-flex items-center gap-1.5 bg-stone-100 rounded-full pl-3 pr-1.5 py-1">
+                      <input type="text" value={s}
+                        onChange={(e) => setChartSizes(chartSizes.map((x, j) => (j === i ? e.target.value : x)))}
+                        className="bg-transparent w-14 text-sm focus:outline-none" />
+                      <button onClick={() => { setChartSizes(chartSizes.filter((_, j) => j !== i)); }}
+                        className="text-stone-400 hover:text-red-500" aria-label="Remove size"><X className="w-3.5 h-3.5" /></button>
+                    </span>
+                  ))}
+                  <button onClick={() => setChartSizes([...chartSizes, ''])}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700">
+                    <Plus className="w-3.5 h-3.5" /> Add size
+                  </button>
+                </div>
+              </div>
+
+              {/* Measurement rows */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-sm font-medium text-stone-700">Measurements (rows)</label>
+                  <button onClick={() => setChartRows([...chartRows, ''])}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700">
+                    <Plus className="w-3.5 h-3.5" /> Add row
+                  </button>
+                </div>
+                <div className="border border-stone-200 rounded-2xl overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-stone-50 border-b border-stone-200">
+                        <th className="text-left px-3 py-2 text-xs font-semibold text-stone-500 uppercase tracking-wide">Measurement</th>
+                        {chartSizes.map((s, i) => (
+                          <th key={i} className="px-3 py-2 text-xs font-semibold text-stone-500 uppercase tracking-wide">{s || '—'}</th>
+                        ))}
+                        <th className="w-8" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {chartRows.map((row, ri) => (
+                        <tr key={ri} className="border-b border-stone-100 last:border-0">
+                          <td className="px-3 py-2">
+                            <input type="text" value={row}
+                              onChange={(e) => setChartRows(chartRows.map((x, j) => (j === ri ? e.target.value : x)))}
+                              placeholder="e.g. Chest"
+                              className="w-full bg-transparent font-medium text-stone-800 focus:outline-none min-w-[6rem]" />
+                          </td>
+                          {chartSizes.map((s, si) => (
+                            <td key={si} className="px-2 py-2">
+                              <input type="text" value={chartValues[row]?.[s] ?? ''}
+                                onChange={(e) => setChartValues((prev) => ({
+                                  ...prev,
+                                  [row]: { ...(prev[row] ?? {}), [s]: e.target.value },
+                                }))}
+                                className="w-16 bg-transparent text-center focus:outline-none focus:bg-brand-50 rounded" />
+                            </td>
+                          ))}
+                          <td className="px-2">
+                            <button onClick={() => setChartRows(chartRows.filter((_, j) => j !== ri))}
+                              className="text-stone-300 hover:text-red-500" aria-label="Remove row"><X className="w-4 h-4" /></button>
+                          </td>
+                        </tr>
+                      ))}
+                      {chartRows.length === 0 && (
+                        <tr><td colSpan={chartSizes.length + 2} className="px-3 py-4 text-center text-stone-400 text-sm">Add a measurement row to begin.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-stone-400 mt-1.5">Values are free text — “40”, “40 in”, “28.5”, or “—” if not applicable.</p>
+              </div>
+
+              {chartError && <p className="text-sm text-red-500">{chartError}</p>}
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setChartModalOpen(false)}
+                  className="px-6 py-2.5 rounded-xl border-2 border-stone-200 hover:border-stone-400 text-stone-700 font-semibold text-sm transition-all">Cancel</button>
+                <button onClick={handleSaveChart} disabled={chartSaving}
+                  className="flex-1 flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold py-2.5 rounded-xl transition-all">
+                  {chartSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {chartSaving ? 'Saving...' : chartModalMode === 'add' ? 'Create Chart' : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Product modal ── */}
       {modalOpen && (
@@ -2795,6 +5006,27 @@ export default function AdminPage() {
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={3} placeholder="Describe your product..."
                   className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 resize-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                  Size chart <span className="text-stone-400 font-normal">(optional — measurement table shown on the product page)</span>
+                </label>
+                <select
+                  value={form.size_chart_template_id}
+                  onChange={(e) => setForm({ ...form, size_chart_template_id: e.target.value })}
+                  className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                >
+                  <option value="">No size chart</option>
+                  {sizeCharts.map((tpl) => (
+                    <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                  ))}
+                </select>
+                {(() => {
+                  const linked = sizeCharts.find((tpl) => tpl.id === form.size_chart_template_id);
+                  if (!linked) return <p className="text-xs text-stone-400 mt-1">Create reusable charts under “Size Charts” — many products can share one.</p>;
+                  const m = linked.measurements;
+                  return <p className="text-xs text-stone-400 mt-1">{m?.rows?.join(' · ') ?? ''} across {m?.sizes?.length ?? 0} sizes — edit it under “Size Charts”.</p>;
+                })()}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -2842,6 +5074,24 @@ export default function AdminPage() {
                     <Tag className="w-3 h-3" />
                     Customer saves ৳{(Number(form.price) - Number(form.discount_price)).toFixed(0)}
                     ({Math.round((1 - Number(form.discount_price) / Number(form.price)) * 100)}% off)
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                  Cost Price (৳) <span className="text-stone-400 font-normal">(optional — what you pay your supplier; powers profit reports)</span>
+                </label>
+                <input type="number" min="0" step="1" value={form.cost_price}
+                  onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+                  className="w-full border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  placeholder="Leave blank if unknown" />
+                {form.cost_price && form.price && Number(form.cost_price) > 0 && (
+                  <p className="text-xs text-stone-500 mt-1.5">
+                    Margin: <span className="text-emerald-600 font-semibold">৳{(Number(form.price) - Number(form.cost_price)).toFixed(0)}/unit</span>
+                    {' '}({Math.round(((Number(form.price) - Number(form.cost_price)) / Number(form.price)) * 100)}%)
+                    {form.discount_price && Number(form.discount_price) < Number(form.price) && Number(form.cost_price) < Number(form.discount_price) && (
+                      <span className="text-stone-400"> · at discount price: ৳{(Number(form.discount_price) - Number(form.cost_price)).toFixed(0)}/unit</span>
+                    )}
                   </p>
                 )}
               </div>

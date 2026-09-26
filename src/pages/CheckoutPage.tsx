@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import {
   Check, ChevronRight, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash,
-  ShieldCheck, ShoppingBag, Truck, Tag, X, Pencil, Store, Banknote, AlertTriangle,
+  ShieldCheck, ShoppingBag, Truck, Tag, X, Pencil, Banknote, AlertTriangle,
 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { supabase, Product, Coupon } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import ZoneSelect, { zoneForDistrict } from '../components/ZoneSelect';
+import ThanaSelect from '../components/ThanaSelect';
 import { useNavigation } from '../lib/navigation';
 import { useCart, CartItem } from '../lib/CartContext';
 import { COVER_FALLBACK } from '../lib/utils';
@@ -21,7 +22,6 @@ const FREE_DELIVERY_THRESHOLD = 1000;
 const FULL_ADVANCE_THRESHOLD = 1500;
 const BKASH_NUMBER = '01700-000000';
 
-type DeliveryChoice = 'courier' | 'pickup';
 type PaymentChoice = 'advance' | 'full';
 type CheckoutStep = 1 | 2 | 3;
 type DeliveryZone = 'dhaka_city' | 'dhaka_suburban' | 'outside_dhaka';
@@ -30,7 +30,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const CHECKOUT_STORAGE_KEY = 'ornix_checkout_v2';
 
-function loadPersistedCheckout(): { name: string; phone: string; address: string; deliveryDistrict: string; deliveryChoice: DeliveryChoice; paymentChoice: PaymentChoice; bkashNumber: string; trxId: string } | null {
+function loadPersistedCheckout(): { name: string; phone: string; address: string; deliveryDistrict: string; deliveryThana: string; paymentChoice: PaymentChoice; bkashNumber: string; trxId: string } | null {
   try {
     const raw = window.sessionStorage.getItem(CHECKOUT_STORAGE_KEY);
     if (!raw) return null;
@@ -40,8 +40,8 @@ function loadPersistedCheckout(): { name: string; phone: string; address: string
       name: typeof parsed.name === 'string' ? parsed.name : '',
       phone: typeof parsed.phone === 'string' ? parsed.phone : '',
       deliveryDistrict: typeof parsed.deliveryDistrict === 'string' ? parsed.deliveryDistrict : '',
+      deliveryThana: typeof parsed.deliveryThana === 'string' ? parsed.deliveryThana : '',
       address: typeof parsed.address === 'string' ? parsed.address : '',
-      deliveryChoice: parsed.deliveryChoice === 'pickup' ? 'pickup' : 'courier',
       paymentChoice: parsed.paymentChoice === 'full' ? 'full' : 'advance',
       bkashNumber: typeof parsed.bkashNumber === 'string' ? parsed.bkashNumber : '',
       trxId: typeof parsed.trxId === 'string' ? parsed.trxId : '',
@@ -51,9 +51,18 @@ function loadPersistedCheckout(): { name: string; phone: string; address: string
   }
 }
 
-/** Normalizes a BD mobile number: keeps digits and a single leading + */
+/** Map Bengali (০-৯) and Arabic-Indic (٠-٩) digits to ASCII so users typing
+ *  with a Bangla keyboard still produce valid phone numbers / TrxIDs. */
+export function toAsciiDigits(raw: string): string {
+  return raw.replace(/[\u09E6-\u09EF\u0660-\u0669]/g, (d) => {
+    const code = d.charCodeAt(0);
+    return String.fromCharCode(code - (code >= 0x09e6 ? 0x09e6 : 0x0660) + 48);
+  });
+}
+
+/** Normalizes a BD mobile number: transliterates Bangla digits, keeps digits and a single leading + */
 function normalizeBdPhone(raw: string): string {
-  const trimmed = raw.replace(/[\s\-()]/g, '');
+  const trimmed = toAsciiDigits(raw).replace(/[\s\-()]/g, '');
   return trimmed.startsWith('+') ? `+${trimmed.slice(1).replace(/\D/g, '')}` : trimmed.replace(/\D/g, '');
 }
 
@@ -88,9 +97,9 @@ export default function CheckoutPage() {
     phone: persisted?.phone ?? '',
     address: persisted?.address ?? '',
     deliveryDistrict: persisted?.deliveryDistrict ?? '',
+    deliveryThana: persisted?.deliveryThana ?? '',
   });
-  const [errors, setErrors] = useState({ name: '', phone: '', address: '', deliveryDistrict: '' });
-  const [deliveryChoice, setDeliveryChoice] = useState<DeliveryChoice>(persisted?.deliveryChoice ?? 'courier');
+  const [errors, setErrors] = useState({ name: '', phone: '', address: '', deliveryDistrict: '', deliveryThana: '' });
   const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>(persisted?.paymentChoice ?? 'advance');
   const [bkashNumber, setBkashNumber] = useState(persisted?.bkashNumber ?? '');
   const [trxId, setTrxId] = useState(persisted?.trxId ?? '');
@@ -117,15 +126,16 @@ export default function CheckoutPage() {
     try {
       window.sessionStorage.setItem(
         CHECKOUT_STORAGE_KEY,
-        JSON.stringify({ ...form, deliveryChoice, paymentChoice, bkashNumber, trxId })
+        JSON.stringify({ ...form, paymentChoice, bkashNumber, trxId })
       );
     } catch {
       // storage unavailable — the form just won't persist across reloads
     }
-  }, [form, deliveryChoice, paymentChoice, bkashNumber, trxId]);
+  }, [form, paymentChoice, bkashNumber, trxId]);
 
-  // ── Steadfast courier charges, editable in Admin → Settings ──
+  // ── Steadfast courier charges + the bKash number to pay the advance to, editable in Admin → Settings ──
   const [zoneRates, setZoneRates] = useState<Record<DeliveryZone, number> | null>(null);
+  const [payToBkash, setPayToBkash] = useState(BKASH_NUMBER);
   useEffect(() => {
     async function fetchZoneRates() {
       const { data } = await supabase.from('site_settings').select('key, value');
@@ -139,6 +149,8 @@ export default function CheckoutPage() {
         dhaka_suburban: pick('steadfast_rate_dhaka_suburban', 110),
         outside_dhaka: pick('steadfast_rate_outside_dhaka', 130),
       });
+      const bkashRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_bkash_number');
+      setPayToBkash(bkashRow?.value?.trim() || BKASH_NUMBER);
     }
     fetchZoneRates();
   }, []);
@@ -248,10 +260,8 @@ export default function CheckoutPage() {
   const zoneFee = zone && zoneRates ? zoneRates[zone] : null;
 
   const deliveryFee =
-    deliveryChoice === 'pickup'
+    subtotal >= FREE_DELIVERY_THRESHOLD
       ? 0
-      : subtotal >= FREE_DELIVERY_THRESHOLD
-        ? 0
         : zoneFee ?? DELIVERY_FEE;
 
   const discountAmount = coupon
@@ -293,7 +303,7 @@ export default function CheckoutPage() {
 
   /* ── Step 1 validation ── */
   const validateAddress = () => {
-    const next = { name: '', phone: '', address: '', deliveryDistrict: '' };
+    const next = { name: '', phone: '', address: '', deliveryDistrict: '', deliveryThana: '' };
     if (!form.name.trim()) next.name = t('fullNameRequired');
     if (!form.phone.trim()) next.phone = t('phoneRequired');
     else if (!isValidBdMobile(form.phone)) next.phone = t('phoneInvalidBd');
@@ -301,6 +311,7 @@ export default function CheckoutPage() {
     else if (form.address.trim().length < 10) next.address = t('addressTooShort');
     // Steadfast delivers by district — require it so the courier charge matches the destination
     if (!form.deliveryDistrict) next.deliveryDistrict = t('districtRequired');
+    if (!form.deliveryThana) next.deliveryThana = t('thanaRequired');
     setErrors(next);
     return !Object.values(next).some(Boolean);
   };
@@ -354,7 +365,7 @@ export default function CheckoutPage() {
       if (!bkashNumber.trim()) next.bkashNumber = t('bkashNumberRequired');
       else if (!isValidBdMobile(bkashNumber)) next.bkashNumber = t('bkashNumberInvalid');
       if (!trxId.trim()) next.trxId = t('trxIdRequired');
-      else if (!/^[A-Za-z0-9]{6,20}$/.test(trxId.trim())) next.trxId = t('trxIdInvalid');
+      else if (!/^[A-Za-z0-9]{6,20}$/.test(toAsciiDigits(trxId.trim()))) next.trxId = t('trxIdInvalid');
     }
     setPaymentErrors(next);
     const agreed = agreeTerms || fullAdvanceRequired;
@@ -396,10 +407,12 @@ export default function CheckoutPage() {
           },
         ];
 
+    // Full address line: street details + thana + district
+    const addressParts = [form.address.trim(), form.deliveryThana.trim(), form.deliveryDistrict].filter(Boolean);
     const customer = {
       customer_name: form.name.trim(),
       customer_phone: form.phone.trim(),
-      customer_address: form.address.trim(),
+      customer_address: addressParts.join(', '),
     };
 
     // Customer-facing tracking code (shared by every line item of this purchase)
@@ -419,7 +432,7 @@ export default function CheckoutPage() {
       payment_method: noAdvanceRequired ? 'cash_on_delivery' : paymentChoice === 'full' ? 'full_advance' : 'advance_partial',
       advance_amount: noAdvanceRequired ? 0 : round2(advanceAmount),
       due_amount: noAdvanceRequired ? total : round2(dueAmount),
-      courier_name: deliveryChoice === 'courier' ? `Steadfast Courier · ${deliveryDistrict || 'Bangladesh'}` : 'Store Pickup',
+      courier_name: `Steadfast Courier · ${deliveryDistrict || 'Bangladesh'}`,
       delivery_zone: form.deliveryDistrict || null,
       bkash_number: advanceAmount > 0 && !noAdvanceRequired ? bkashNumber.trim() : null,
       trx_id: advanceAmount > 0 && !noAdvanceRequired ? trxId.trim() : null,
@@ -506,37 +519,50 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Best-effort coupon usage counter
+    // Best-effort coupon usage counter — via locked-down RPC, direct update as legacy fallback
     if (coupon) {
       try {
-        await supabase
-          .from('coupons')
-          .update({ times_used: (coupon.times_used ?? 0) + 1 })
-          .eq('id', coupon.id);
+        const rpc = await supabase.rpc('checkout_consume_coupon', { p_code: coupon.code });
+        if (rpc.error) throw rpc.error;
       } catch {
-        // counter is cosmetic — never block the order
+        try {
+          await supabase.from('coupons').update({ times_used: (coupon.times_used ?? 0) + 1 }).eq('id', coupon.id);
+        } catch {
+          // counter is cosmetic — never block the order
+        }
       }
     }
 
-    // Decrement stock for each ordered line item
-    for (const item of lineItems) {
-      const { data: currentProduct } = await supabase
-        .from('products')
-        .select('stock_count')
-        .eq('id', item.productId)
-        .maybeSingle();
-      const newStock = Math.max(0, (currentProduct?.stock_count ?? 0) - item.quantity);
-      await supabase.from('products').update({ stock_count: newStock }).eq('id', item.productId);
-
-      if (item.size) {
-        const { data: currentSize } = await supabase
-          .from('product_sizes')
-          .select('quantity')
-          .eq('product_id', item.productId)
-          .eq('size', item.size)
+    // Decrement stock for each ordered line item — via locked-down RPC,
+    // falling back to direct updates for databases without the migration yet.
+    const stockPayload = lineItems.map((item) => ({ product_id: item.productId, size: item.size ?? null, quantity: item.quantity }));
+    let stockDone = false;
+    try {
+      const rpc = await supabase.rpc('checkout_decrement_stock', { p_items: stockPayload });
+      if (!rpc.error) stockDone = true;
+    } catch {
+      // fall through to the legacy path
+    }
+    if (!stockDone) {
+      for (const item of lineItems) {
+        const { data: currentProduct } = await supabase
+          .from('products')
+          .select('stock_count')
+          .eq('id', item.productId)
           .maybeSingle();
-        const newSizeQty = Math.max(0, (currentSize?.quantity ?? 0) - item.quantity);
-        await supabase.from('product_sizes').update({ quantity: newSizeQty }).eq('product_id', item.productId).eq('size', item.size);
+        const newStock = Math.max(0, (currentProduct?.stock_count ?? 0) - item.quantity);
+        await supabase.from('products').update({ stock_count: newStock }).eq('id', item.productId);
+
+        if (item.size) {
+          const { data: currentSize } = await supabase
+            .from('product_sizes')
+            .select('quantity')
+            .eq('product_id', item.productId)
+            .eq('size', item.size)
+            .maybeSingle();
+          const newSizeQty = Math.max(0, (currentSize?.quantity ?? 0) - item.quantity);
+          await supabase.from('product_sizes').update({ quantity: newSizeQty }).eq('product_id', item.productId).eq('size', item.size);
+        }
       }
     }
 
@@ -675,41 +701,18 @@ export default function CheckoutPage() {
           : 'border-stone-200 bg-white hover:border-stone-300'
     }`;
 
-  const deliveryOptions = [
-    {
-      id: 'courier' as DeliveryChoice,
-      icon: <Truck className="w-5 h-5" />,
-      name: t('homeDeliveryName'),
-      desc: t('homeDeliveryDesc'),
-      eta: t('courierEta'),
-      fee: deliveryChoice === 'courier' ? deliveryFee : subtotal >= FREE_DELIVERY_THRESHOLD ? 0 : DELIVERY_FEE,
-    },
-    {
-      id: 'pickup' as DeliveryChoice,
-      icon: <Store className="w-5 h-5" />,
-      name: t('pickupName'),
-      desc: t('pickupDesc'),
-      eta: t('pickupEta'),
-      fee: 0,
-    },
-  ];
-
   const paymentOptions = [
     {
       id: 'advance' as PaymentChoice,
       icon: noAdvanceRequired ? <Banknote className="w-5 h-5" /> : <Wallet className="w-5 h-5" />,
       title: noAdvanceRequired
         ? t('codOnlyTitle')
-        : deliveryChoice === 'pickup'
-          ? t('pickupPayTitle')
-          : t('payDeliveryNowTitle'),
+        : t('payDeliveryNowTitle'),
       desc: noAdvanceRequired
         ? t('codOnlyDesc', { total: total.toFixed(0) })
-        : deliveryChoice === 'pickup'
-          ? t('pickupPayDesc', { amount: total.toFixed(0) })
-          : deliveryFee === 0
-            ? t('payNothingNowDesc', { due: total.toFixed(0) })
-            : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0) }),
+        : deliveryFee === 0
+          ? t('payNothingNowDesc', { due: total.toFixed(0) })
+          : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0) }),
       disabled: fullAdvanceRequired,
       advance: noAdvanceRequired ? 0 : deliveryFee,
       due: noAdvanceRequired ? total : round2(total - deliveryFee),
@@ -725,9 +728,9 @@ export default function CheckoutPage() {
     },
   ];
 
-  // Hint when courier delivery is chosen but the zone fee isn't known yet
+  // Hint when the zone fee isn't known yet for the chosen district
   const zonePendingHint =
-    deliveryChoice === 'courier' && subtotal < FREE_DELIVERY_THRESHOLD && zoneFee == null
+    subtotal < FREE_DELIVERY_THRESHOLD && zoneFee == null
       ? t('districtFeeHint')
       : '';
 
@@ -932,7 +935,7 @@ export default function CheckoutPage() {
                     <input
                       type="tel"
                       value={form.phone}
-                      onChange={(e) => { setForm({ ...form, phone: e.target.value }); setErrors({ ...errors, phone: '' }); }}
+                      onChange={(e) => { setForm({ ...form, phone: toAsciiDigits(e.target.value) }); setErrors({ ...errors, phone: '' }); }}
                       placeholder={t('phonePlaceholder')}
                       autoComplete="tel"
                       className={inputCls(!!errors.phone)}
@@ -946,6 +949,19 @@ export default function CheckoutPage() {
                     error={errors.deliveryDistrict}
                     required
                   />
+
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      <span className="flex items-center gap-1.5"><MapPin className="w-4 h-4" /> {t('thanaLabel')} <span className="text-red-400">*</span></span>
+                    </label>
+                    <ThanaSelect
+                      district={form.deliveryDistrict}
+                      value={form.deliveryThana}
+                      onChange={(thana) => { setForm({ ...form, deliveryThana: thana }); setErrors({ ...errors, deliveryThana: '' }); }}
+                      error={errors.deliveryThana}
+                      required
+                    />
+                  </div>
 
                   <div>
                     <label className="block text-sm font-medium text-stone-700 mb-1.5">
@@ -997,39 +1013,19 @@ export default function CheckoutPage() {
                     </span>
                   </button>
 
-                  <div className="space-y-3">
-                    {deliveryOptions.map((option) => {
-                      const selected = deliveryChoice === option.id;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          onClick={() => setDeliveryChoice(option.id)}
-                          className={optionCardCls(selected)}
-                        >
-                          <div className="flex items-start gap-3">
-                            <span
-                              className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
-                                selected ? 'border-brand-500 bg-brand-500' : 'border-stone-300 bg-white'
-                              }`}
-                            >
-                              {selected && <Check className="w-3 h-3 text-white" />}
-                            </span>
-                            <span className={`flex-shrink-0 mt-0.5 ${selected ? 'text-brand-600' : 'text-stone-400'}`}>{option.icon}</span>
-                            <span className="flex-1 min-w-0">
-                              <span className="flex items-center justify-between gap-2">
-                                <span className="font-bold text-stone-900 text-sm">{option.name}</span>
-                                <span className={`text-sm font-bold whitespace-nowrap ${option.fee === 0 ? 'text-emerald-600' : 'text-stone-900'}`}>
-                                  {option.fee === 0 ? t('freeDeliveryShort') : `৳${option.fee.toFixed(0)}`}
-                                </span>
-                              </span>
-                              <span className="block text-xs text-stone-500 mt-0.5">{option.desc}</span>
-                              <span className="block text-[11px] text-stone-400 mt-1">{option.eta}</span>
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
+                  {/* Home delivery is the only method — show a static summary instead of a chooser */}
+                  <div className="flex items-start gap-3 rounded-2xl border-2 border-brand-500 bg-brand-50/60 shadow-sm p-4">
+                    <span className="flex-shrink-0 mt-0.5 text-brand-600"><Truck className="w-5 h-5" /></span>
+                    <span className="flex-1 min-w-0">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-stone-900 text-sm">{t('homeDeliveryName')}</span>
+                        <span className={`text-sm font-bold whitespace-nowrap ${deliveryFee === 0 ? 'text-emerald-600' : 'text-stone-900'}`}>
+                          {deliveryFee === 0 ? t('freeDeliveryShort') : `৳${deliveryFee.toFixed(0)}`}
+                        </span>
+                      </span>
+                      <span className="block text-xs text-stone-500 mt-0.5">{t('homeDeliveryDesc')}</span>
+                      <span className="block text-[11px] text-stone-400 mt-1">{t('courierEta')}</span>
+                    </span>
                   </div>
 
                   <p className="flex items-start gap-2 text-xs text-stone-500 bg-stone-50 border border-stone-100 rounded-2xl px-4 py-3">
@@ -1093,7 +1089,7 @@ export default function CheckoutPage() {
                       <div className="min-w-0">
                         <p className="text-xs font-semibold text-stone-400 uppercase tracking-wider">{t('recapDelivery')}</p>
                         <p className="text-sm text-stone-800 font-medium truncate">
-                          {deliveryChoice === 'courier' ? t('homeDeliveryName') : t('pickupName')}
+                          {t('homeDeliveryName')}
                         </p>
                         <p className="text-xs text-stone-500">
                           {t('shippingRowLabel')}: {deliveryFee === 0 ? t('freeDeliveryShort') : `৳${deliveryFee.toFixed(0)}`}
@@ -1150,11 +1146,11 @@ export default function CheckoutPage() {
                       <div className="flex items-center justify-between gap-3 bg-white/80 border border-pink-100 rounded-xl px-4 py-3">
                         <span className="text-xs font-semibold text-stone-500">{t('bkashPersonalLabel')}</span>
                         <span className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-pink-600">{BKASH_NUMBER}</span>
+                          <span className="font-mono font-bold text-pink-600">{payToBkash}</span>
                           <button
                             type="button"
                             onClick={() => {
-                              navigator.clipboard?.writeText(BKASH_NUMBER.replace(/[^0-9]/g, '')).then(() => {
+                              navigator.clipboard?.writeText(payToBkash.replace(/[^0-9]/g, '')).then(() => {
                                 setBkashCopied(true);
                                 window.setTimeout(() => setBkashCopied(false), 2000);
                               }).catch(() => { /* clipboard unavailable */ });
@@ -1184,10 +1180,6 @@ export default function CheckoutPage() {
                       <p className="text-sm text-emerald-700/90">{t('codOnlyDesc', { total: total.toFixed(0) })}</p>
                       <p className="text-xs text-emerald-600/80">{t('codNote')}</p>
                     </div>
-                  ) : deliveryChoice === 'pickup' ? (
-                    <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-sm text-emerald-700 font-medium">
-                      {t('pickupPayDesc', { amount: dueAmount.toFixed(0) })}
-                    </div>
                   ) : (
                     <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-sm text-emerald-700 font-medium">
                       {t('payNothingNowDesc', { due: dueAmount.toFixed(0) })}
@@ -1204,7 +1196,7 @@ export default function CheckoutPage() {
                         <input
                           type="tel"
                           value={bkashNumber}
-                          onChange={(e) => { setBkashNumber(e.target.value); setPaymentErrors({ ...paymentErrors, bkashNumber: '' }); }}
+                          onChange={(e) => { setBkashNumber(toAsciiDigits(e.target.value)); setPaymentErrors({ ...paymentErrors, bkashNumber: '' }); }}
                           placeholder={t('senderBkashPlaceholder')}
                           className={`${inputCls(!!paymentErrors.bkashNumber)} focus:ring-pink-400`}
                         />
@@ -1219,7 +1211,7 @@ export default function CheckoutPage() {
                         <input
                           type="text"
                           value={trxId}
-                          onChange={(e) => { setTrxId(e.target.value); setPaymentErrors({ ...paymentErrors, trxId: '' }); }}
+                          onChange={(e) => { setTrxId(toAsciiDigits(e.target.value)); setPaymentErrors({ ...paymentErrors, trxId: '' }); }}
                           placeholder="9F2XQ1ABCD"
                           className={`${inputCls(!!paymentErrors.trxId)} focus:ring-pink-400 uppercase`}
                         />

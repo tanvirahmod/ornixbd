@@ -7,11 +7,12 @@ import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
 import { extractProductCode, productParam } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
-
-const WHATSAPP_NUMBER = '8801410423299'; // 01410423299 without leading 0, with country code
+import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
 
 export default function ProductPage() {
   const { t } = useLanguage();
+  // Admin-configurable order number (Settings → WhatsApp Numbers)
+  const { orderNumber: WHATSAPP_NUMBER } = useWhatsAppNumbers();
   const { productId: rawParam } = useParams<{ productId: string }>();
   // Extract product_code from the end of the URL param (e.g. "drop-shoulder-tee-prd-00012")
   const productCode = rawParam ? extractProductCode(rawParam) : null;
@@ -35,7 +36,7 @@ export default function ProductPage() {
 
       const { data, error } = await supabase
         .from('products')
-        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity)')
+        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity), size_chart_templates(id, name, measurements, created_at, updated_at)')
         .eq('product_code', productCode)
         .maybeSingle();
 
@@ -138,7 +139,7 @@ export default function ProductPage() {
       `🔢 Quantity: ${quantity}`,
       `🔗 ${link}`,
     ].filter(Boolean);
-    const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(lines.join('\n'))}`;
+    const url = waMeLink(WHATSAPP_NUMBER, lines.join('\n'));
     window.open(url, '_blank', 'noopener');
   };
 
@@ -363,6 +364,39 @@ export default function ProductPage() {
                 <p className="text-stone-700 leading-relaxed whitespace-pre-line">{product.description}</p>
               </div>
             )}
+
+            {/* Size guide — measurement chart linked from a reusable template */}
+            {(() => {
+              const m = product.size_chart_templates?.measurements;
+              if (!m?.rows?.length || !m?.sizes?.length) return null;
+              return (
+                <div>
+                  <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2">{t('sizeGuideTitle')}</h3>
+                  <div className="border border-stone-200 rounded-2xl overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-stone-50 border-b border-stone-200">
+                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-stone-500 uppercase tracking-wide">{t('sizeGuideTitle')}</th>
+                          {m.sizes.map((s) => (
+                            <th key={s} className="px-3 py-2.5 text-xs font-semibold text-stone-500 uppercase tracking-wide text-center">{s}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {m.rows.map((row) => (
+                          <tr key={row} className="border-b border-stone-100 last:border-0">
+                            <td className="px-4 py-2.5 font-medium text-stone-800">{row}</td>
+                            {m.sizes.map((s) => (
+                              <td key={s} className="px-3 py-2.5 text-center text-stone-600">{m.values?.[row]?.[s] || '—'}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-[11px] text-stone-400 mt-1.5">{m.note || t('sizeGuideHint')}</p>                </div>
+              );
+            })()}
 
             {/* Sizes */}
             {product.sizes && product.sizes.length > 0 && (

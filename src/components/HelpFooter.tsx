@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Plus, Minus, Instagram, Facebook, MapPin, Phone, Clock } from 'lucide-react';
+import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
 
 interface HelpFooterProps {
   onNavigate: (page: string) => void;
@@ -104,14 +105,18 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 
-const SOCIAL_LINKS = [
-  { label: 'Instagram', href: 'https://www.instagram.com/ornixclothing/', Icon: Instagram },
-  { label: 'Facebook', href: 'https://www.facebook.com/ornixclothing', Icon: Facebook },
-  { label: 'TikTok', href: 'https://www.tiktok.com/@ornix24', Icon: TiktokIcon },
-  { label: 'WhatsApp', href: 'https://wa.me/8801410423299', Icon: WhatsAppIcon },
-];
-
 export default function HelpFooter({ onNavigate }: HelpFooterProps) {
+  // Admin-configurable chat number (Settings → WhatsApp Numbers)
+  const { chatNumber } = useWhatsAppNumbers();
+  const SOCIAL_LINKS = [
+    { label: 'Instagram', href: 'https://www.instagram.com/ornixclothing/', Icon: Instagram },
+    { label: 'Facebook', href: 'https://www.facebook.com/ornixclothing', Icon: Facebook },
+    { label: 'TikTok', href: 'https://www.tiktok.com/@ornix24', Icon: TiktokIcon },
+  ];
+  const socialLinksWithWa = [
+    ...SOCIAL_LINKS,
+    { label: 'WhatsApp', href: waMeLink(chatNumber), Icon: WhatsAppIcon },
+  ];
   return (
     <>
       {/* ── Help / FAQ Section ── */}
@@ -162,7 +167,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
             </p>
             {/* Social icons */}
             <div className="flex items-center gap-4">
-              {SOCIAL_LINKS.map(({ label, href, Icon }) => (
+              {socialLinksWithWa.map(({ label, href, Icon }) => (
                 <a
                   key={label}
                   href={href}
@@ -246,7 +251,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
 
             {/* Social links text */}
             <div className="flex items-center gap-4">
-              {SOCIAL_LINKS.map(({ label, href }) => (
+              {socialLinksWithWa.map(({ label, href }) => (
                 <a
                   key={label}
                   href={href}

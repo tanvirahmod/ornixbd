@@ -1,11 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
-/**
- * The store's WhatsApp number (international format, no leading 0 or +).
- * Kept in sync with ProductPage's WHATSAPP_NUMBER.
- */
-const WHATSAPP_NUMBER = '8801410423299';
+import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
 
 /** Route prefixes where the floating button is suppressed (admin has its own layout, but guard anyway). */
 const HIDDEN_PREFIXES = ['/admin'];
@@ -14,6 +10,8 @@ export default function WhatsAppFloat() {
   const { pathname } = useLocation();
   const [visible, setVisible] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
+  // Admin-configurable chat number (Settings → WhatsApp Numbers)
+  const { chatNumber } = useWhatsAppNumbers();
 
   if (HIDDEN_PREFIXES.some((p) => pathname.startsWith(p))) return null;
 
@@ -39,9 +37,7 @@ export default function WhatsAppFloat() {
     };
   }, [visible]);
 
-  const href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
-    'Hi ORNIX! I have a question about your products.'
-  )}`;
+  const href = waMeLink(chatNumber, 'Hi ORNIX! I have a question about your products.');
 
   return (
     <a

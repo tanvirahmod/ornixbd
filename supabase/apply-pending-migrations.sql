@@ -193,3 +193,448 @@ alter table public.orders
   alter column order_code set default 'ORN-' || upper(substring(gen_random_uuid()::text from 1 for 6));
 
 -- ============ done ============
+-- ============ next batch: admin expansion (profit tracking, stock history, activity log) ============
+-- Same content as supabase/migrations/20260927220000_admin_expansion_profit_stock_logs.sql
+
+-- Cost price per product — powers margin + net profit on the Finance tab
+alter table public.products
+  add column if not exists cost_price numeric(10, 2);
+
+comment on column public.products.cost_price is
+  'What the product costs the merchant (supplier price). Powers margin and net-profit reporting. NULL = unknown.';
+
+-- Business expenses — ads, packaging, rent, courier top-ups…
+create table if not exists public.expenses (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  amount numeric(12, 2) not null check (amount >= 0),
+  note text,
+  spent_at date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+alter table public.expenses enable row level security;
+
+drop policy if exists "expenses fully accessible" on public.expenses;
+create policy "expenses fully accessible"
+  on public.expenses for all to anon, authenticated
+  using (true) with check (true);
+
+comment on table public.expenses is
+  'Business expenses entered in the admin Finance tab; subtracted from gross profit for net profit.';
+
+-- Stock movement history — every stock change with a reason
+create table if not exists public.stock_movements (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references public.products(id) on delete cascade,
+  size text,
+  delta integer not null,
+  reason text not null,
+  note text,
+  admin_id text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists stock_movements_product_idx
+  on public.stock_movements (product_id, created_at desc);
+
+alter table public.stock_movements enable row level security;
+
+drop policy if exists "stock movements fully accessible" on public.stock_movements;
+create policy "stock movements fully accessible"
+  on public.stock_movements for all to anon, authenticated
+  using (true) with check (true);
+
+comment on column public.stock_movements.delta is
+  'Signed change in units: negative = stock left (customer order, manual sell, correction), positive = stock added (restock).';
+
+comment on column public.stock_movements.reason is
+  'Why stock changed: order / manual_sell / restock / cancel_restore / adjustment.';
+
+-- Admin activity log — which admin did what
+create table if not exists public.admin_log (
+  id uuid primary key default gen_random_uuid(),
+  admin_id text not null,
+  action text not null,
+  target text,
+  detail text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists admin_log_created_idx
+  on public.admin_log (created_at desc);
+
+alter table public.admin_log enable row level security;
+
+drop policy if exists "admin log fully accessible" on public.admin_log;
+create policy "admin log fully accessible"
+  on public.admin_log for all to anon, authenticated
+  using (true) with check (true);
+
+comment on table public.admin_log is
+  'Audit trail of admin actions: status changes, Steadfast bookings, deletions, product edits, restocks.';
+
+-- ============ next batch: manual (in-store) orders ============
+-- Same content as supabase/migrations/20260927230000_add_order_source_and_seller.sql
+
+-- 'checkout' (default) for website orders, 'manual' for walk-in purchases
+-- recorded in Admin → Manual Orders.
+alter table public.orders
+  add column if not exists order_source text not null default 'checkout';
+
+-- Staff member who recorded/sold a manual order (e.g. 'admin1' or a name).
+alter table public.orders
+  add column if not exists seller_name text;
+
+comment on column public.orders.order_source is
+  'Where the order came from: checkout (website) or manual (in-store purchase recorded by staff).';
+
+comment on column public.orders.seller_name is
+  'For manual orders: the staff member who made the sale.';
+
+-- ============ next batch: saved sellers (manual orders dropdown) ============
+-- Same content as supabase/migrations/20260928000000_add_sellers_table.sql
+
+create table if not exists public.sellers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+
+alter table public.sellers enable row level security;
+
+drop policy if exists "sellers fully accessible" on public.sellers;
+create policy "sellers fully accessible"
+  on public.sellers for all to anon, authenticated
+  using (true) with check (true);
+
+comment on table public.sellers is
+  'Saved seller names for the Manual Orders dropdown; admins can delete entries.';
+
+-- Backfill: every seller already recorded on an order becomes a saved name
+insert into public.sellers (name)
+select distinct trim(seller_name)
+from public.orders
+where seller_name is not null and trim(seller_name) <> ''
+on conflict (name) do nothing;
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Per-product size charts (measurement tables) with reusable templates.
+--
+-- Many products share identical measurements, so charts live in their own
+-- table and products reference one by id. Editing a template updates every
+-- product that uses it. A product with no reference simply shows no chart.
+--
+-- size_chart_templates.measurements shape (JSONB, rows × sizes):
+--   {
+--     "rows":   ["Chest", "Length"],
+--     "sizes":  ["S", "M", "L", "XL"],
+--     "values": { "Chest":  { "S": "40", "M": "42", "L": "44", "XL": "46" },
+--                 "Length": { "S": "27", "M": "28", "L": "28.5", "XL": "29" } },
+--     "note":   "Measurements in inches · fit: relaxed"   -- optional
+--   }
+-- Values are free text so admins can write "40 in", "28.5", "—", etc.
+-- Run once in Supabase SQL Editor — idempotent.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.size_chart_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  measurements jsonb not null default '{"rows":[],"sizes":[],"values":{}}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.size_chart_templates enable row level security;
+
+drop policy if exists "size_chart_templates fully accessible" on public.size_chart_templates;
+create policy "size_chart_templates fully accessible"
+  on public.size_chart_templates for all to anon, authenticated
+  using (true) with check (true);
+
+comment on table public.size_chart_templates is
+  'Reusable measurement charts (rows × sizes JSONB) referenced by products.';
+
+-- products: link to a chart template (nullable = no chart shown)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'products' AND column_name = 'size_chart_template_id'
+  ) THEN
+    ALTER TABLE public.products
+      ADD COLUMN size_chart_template_id uuid REFERENCES public.size_chart_templates(id)
+        ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- ============ done ============
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SECURITY LOCKDOWN + ADMIN AUTH
+--
+-- Before this migration every table was writable by the anonymous (public)
+-- role — the admin login in the app was decorative. This migration:
+--   1. Adds public.admin_users — the allowlist of Supabase Auth users who
+--      are admins. Create one real user per admin in Supabase Auth
+--      (Dashboard → Authentication → Users → Add user), then insert their
+--      email here. `is_admin()` (SECURITY DEFINER) checks membership.
+--   2. Replaces the wide-open per-table policies with the least surface the
+--      storefront needs, and full access for admins:
+--        • products / product_images / categories / product_sizes /
+--          size_chart_templates / announcements: public SELECT only
+--        • site_settings: public SELECT (checkout reads rates + bKash number)
+--        • coupons: public SELECT restricted to active, non-expired rows
+--          (checkout validates codes client-side today)
+--        • orders: public INSERT only (checkout) + track_order(order_code,
+--          phone_last4) RPC returning the minimal columns the tracking page
+--          shows; no public SELECT/UPDATE/DELETE
+--        • feedback: public INSERT only (contact form); admin reads the rest
+--        • everything else (expenses, stock_movements, admin_log, sellers,
+--          admin_log): admin only
+--   3. Adds checkout RPCs so customers can decrement stock and consume a
+--      coupon without holding UPDATE rights on those tables:
+--        • checkout_decrement_stock(items jsonb)
+--        • checkout_consume_coupon(code text)
+--   4. Locks down the realtime publication to the storefront tables.
+--
+-- IDEMPOTENT — safe to re-run.
+-- ⚠️ Run this AFTER creating your admin users in Supabase Auth, then insert
+--    their emails into public.admin_users (example in the comment below).
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1) Admin allowlist + helper ──
+create table if not exists public.admin_users (
+  email text primary key,
+  created_at timestamptz not null default now()
+);
+
+alter table public.admin_users enable row level security;
+
+drop policy if exists "admin_users readable by admins" on public.admin_users;
+create policy "admin_users readable by admins"
+  on public.admin_users for select to authenticated
+  using (exists (select 1 from public.admin_users a where a.email = auth.jwt() ->> 'email'));
+
+-- SECURITY DEFINER so policies can check admin status without recursive RLS
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select auth.uid() is not null
+     and exists (
+       select 1 from public.admin_users
+       where email = (auth.jwt() ->> 'email')
+     );
+$$;
+
+-- ── 2) Minimal public RPCs ──
+
+-- Order tracking: expose only what the tracking page shows, only when the
+-- caller knows the order code (and optionally the last 4 phone digits).
+create or replace function public.track_order(p_order_code text, p_phone_last4 text default null)
+returns table (
+  order_code text,
+  status text,
+  courier_name text,
+  tracking_code text,
+  created_at timestamptz,
+  product_title text,
+  selected_size text,
+  quantity integer,
+  total_amount numeric,
+  due_amount numeric,
+  customer_phone text
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select o.order_code, o.status::text, o.courier_name, o.tracking_code,
+         o.created_at, o.product_title, o.selected_size,
+         o.quantity, o.total_amount, o.due_amount,
+         case
+           when p_phone_last4 is null then null  -- no phone supplied → don't leak it
+           when right(regexp_replace(o.customer_phone, '[^0-9]', '', 'g'), 4) = right(p_phone_last4, 4)
+             then o.customer_phone
+           else null
+         end as customer_phone
+  from public.orders o
+  where o.order_code = p_order_code
+  limit 1;
+$$;
+
+-- Checkout: decrement stock atomically, never below zero. One row per line
+-- item: [{ "product_id": "…", "size": "L" | null, "quantity": 2 }, …]
+create or replace function public.checkout_decrement_stock(p_items jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  item jsonb;
+  new_stock integer;
+  new_size_stock integer;
+begin
+  for item in select * from jsonb_array_elements(p_items)
+  loop
+    if item ->> 'size' is null or (item ->> 'size') = '' then
+      update public.products
+         set stock_count = greatest(0, stock_count - greatest(1, least((item ->> 'quantity')::int, stock_count)))
+       where id = (item ->> 'product_id')::uuid;
+    else
+      select greatest(0, quantity - greatest(1, least((item ->> 'quantity')::int, quantity)))
+        into new_size_stock
+        from public.product_sizes
+       where product_id = (item ->> 'product_id')::uuid
+         and size = item ->> 'size'
+       limit 1;
+      if found then
+        update public.product_sizes
+           set quantity = new_size_stock
+         where product_id = (item ->> 'product_id')::uuid
+           and size = item ->> 'size';
+        -- keep product-level total in sync
+        select coalesce(sum(quantity), 0) into new_stock
+          from public.product_sizes
+         where product_id = (item ->> 'product_id')::uuid;
+        update public.products
+           set stock_count = new_stock
+         where id = (item ->> 'product_id')::uuid;
+      end if;
+    end if;
+  end loop;
+end;
+$$;
+
+-- Checkout: consume one coupon use (counter increment) without exposing
+-- coupons for public UPDATE.
+create or replace function public.checkout_consume_coupon(p_code text)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.coupons
+     set times_used = coalesce(times_used, 0) + 1
+   where upper(code) = upper(p_code);
+$$;
+
+grant execute on function public.track_order(text, text) to anon, authenticated;
+grant execute on function public.checkout_decrement_stock(jsonb) to anon, authenticated;
+grant execute on function public.checkout_consume_coupon(text) to anon, authenticated;
+
+-- ── 3) Policies ──
+
+-- products
+drop policy if exists "anon_select_products" on products;
+drop policy if exists "anon_insert_products" on products;
+drop policy if exists "anon_update_products" on products;
+drop policy if exists "anon_delete_products" on products;
+create policy "public_read_products" on products for select to anon, authenticated using (true);
+create policy "admin_all_products" on products for all to authenticated using (is_admin()) with check (is_admin());
+
+-- product_images
+drop policy if exists "anon_select_product_images" on product_images;
+drop policy if exists "anon_insert_product_images" on product_images;
+drop policy if exists "anon_update_product_images" on product_images;
+drop policy if exists "anon_delete_product_images" on product_images;
+create policy "public_read_product_images" on product_images for select to anon, authenticated using (true);
+create policy "admin_all_product_images" on product_images for all to authenticated using (is_admin()) with check (is_admin());
+
+-- product_sizes
+drop policy if exists "Allow public read product_sizes" on product_sizes;
+drop policy if exists "Allow public insert product_sizes" on product_sizes;
+drop policy if exists "Allow public update product_sizes" on product_sizes;
+drop policy if exists "Allow public delete product_sizes" on product_sizes;
+create policy "public_read_product_sizes" on product_sizes for select to anon, authenticated using (true);
+create policy "admin_all_product_sizes" on product_sizes for all to authenticated using (is_admin()) with check (is_admin());
+
+-- categories
+drop policy if exists "anon_select_categories" on categories;
+drop policy if exists "anon_insert_categories" on categories;
+drop policy if exists "anon_update_categories" on categories;
+drop policy if exists "anon_delete_categories" on categories;
+create policy "public_read_categories" on categories for select to anon, authenticated using (true);
+create policy "admin_all_categories" on categories for all to authenticated using (is_admin()) with check (is_admin());
+
+-- size_chart_templates (created before policies existed for it)
+drop policy if exists "size_chart_templates fully accessible" on size_chart_templates;
+create policy "public_read_size_charts" on size_chart_templates for select to anon, authenticated using (true);
+create policy "admin_all_size_charts" on size_chart_templates for all to authenticated using (is_admin()) with check (is_admin());
+
+-- announcements
+drop policy if exists "anon_select_announcements" on announcements;
+drop policy if exists "anon_all_announcements" on announcements;
+create policy "public_read_active_announcements" on announcements for select to anon, authenticated using (is_active = true);
+create policy "admin_all_announcements" on announcements for all to authenticated using (is_admin()) with check (is_admin());
+
+-- site_settings (checkout reads courier rates + bKash number)
+drop policy if exists "anon_select_site_settings" on site_settings;
+drop policy if exists "anon_all_site_settings" on site_settings;
+create policy "public_read_site_settings" on site_settings for select to anon, authenticated using (true);
+create policy "admin_all_site_settings" on site_settings for all to authenticated using (is_admin()) with check (is_admin());
+
+-- coupons: checkout validates codes client-side; only active/unexpired are visible
+drop policy if exists "anon_select_coupons" on coupons;
+drop policy if exists "anon_insert_coupons" on coupons;
+drop policy if exists "anon_update_coupons" on coupons;
+drop policy if exists "anon_delete_coupons" on coupons;
+create policy "public_read_active_coupons" on coupons for select to anon, authenticated
+  using (is_active = true and (expires_at is null or expires_at > now()));
+create policy "admin_all_coupons" on coupons for all to authenticated using (is_admin()) with check (is_admin());
+
+-- orders: public can create (checkout) — everything else is admin-only or via RPC
+drop policy if exists "anon_select_orders" on orders;
+drop policy if exists "anon_insert_orders" on orders;
+drop policy if exists "anon_update_orders" on orders;
+drop policy if exists "anon_delete_orders" on orders;
+create policy "public_insert_orders" on orders for insert to anon, authenticated with check (true);
+create policy "admin_all_orders" on orders for all to authenticated using (is_admin()) with check (is_admin());
+
+-- feedback: public contact form submits; reading/managing is admin-only
+drop policy if exists "anon_select_feedback" on feedback;
+drop policy if exists "anon_insert_feedback" on feedback;
+drop policy if exists "anon_update_feedback" on feedback;
+drop policy if exists "anon_delete_feedback" on feedback;
+create policy "public_insert_feedback" on feedback for insert to anon, authenticated with check (true);
+create policy "admin_all_feedback" on feedback for all to authenticated using (is_admin()) with check (is_admin());
+
+-- expenses / stock_movements / admin_log / sellers — admin only
+drop policy if exists "expenses fully accessible" on expenses;
+create policy "admin_all_expenses" on expenses for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "stock movements fully accessible" on stock_movements;
+create policy "admin_all_stock_movements" on stock_movements for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "admin log fully accessible" on admin_log;
+create policy "admin_all_admin_log" on admin_log for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "sellers fully accessible" on sellers;
+create policy "admin_all_sellers" on sellers for all to authenticated using (is_admin()) with check (is_admin());
+
+-- admin_users: governed by the allowlist policy created above
+
+-- ── 4) Realtime: exactly the tables the app subscribes to ──
+-- (announcements/categories on the storefront, orders/feedback in admin,
+--  products + product_sizes for stock sync. Idempotent via exception traps.)
+do $$
+declare
+  t text;
+  tables text[] := array['products', 'product_sizes', 'categories', 'announcements', 'orders', 'feedback'];
+begin
+  foreach t in array tables loop
+    begin
+      execute format('alter publication supabase_realtime drop table public.%I', t);
+    exception when undefined_object then null; -- not in the publication yet
+    end;
+    begin
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    exception when duplicate_object then null; -- already added (re-run)
+    end;
+  end loop;
+end $$;
+
+-- ============ done ============

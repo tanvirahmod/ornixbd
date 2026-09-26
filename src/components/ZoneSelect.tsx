@@ -1,5 +1,6 @@
 import { ChevronDown, MapPin } from 'lucide-react';
 import { useLanguage } from '../lib/LanguageContext';
+import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
 
 /**
  * Delivery zones used to compute the Steadfast courier charge.
@@ -21,9 +22,9 @@ export const DELIVERY_ZONES: Array<{ id: DeliveryZone; districts: string[] }> = 
     id: 'outside_dhaka',
     districts: [
       'Bagerhat', 'Bandarban', 'Barguna', 'Barishal', 'Bhola', 'Bogura', 'Brahmanbaria', 'Chandpur', 'Chattogram',
-      'Chuadanga', 'Cox\u2019s Bazar', 'Cumilla', 'Dinajpur', 'Faridpur', 'Feni', 'Gaibandha', 'Gopalganj', 'Habiganj',
+      'Chuadanga', 'Chapainawabganj', 'Cox\u2019s Bazar', 'Cumilla', 'Dinajpur', 'Faridpur', 'Feni', 'Gaibandha', 'Gopalganj', 'Habiganj',
       'Jamalpur', 'Jashore', 'Jhalokathi', 'Jhenaidah', 'Joypurhat', 'Khagrachhari', 'Khulna', 'Kishoreganj', 'Kurigram',
-      'Kushtia', 'Lakshmipur', 'Lalmonirhat', 'Madaripur', 'Magura', 'Meherpur', 'Moulvibazar', 'Mymensingh', 'Naogaon',
+      'Kushtia', 'Lakshmipur', 'Lalmonirhat', 'Madaripur', 'Magura', 'Meherpur', 'Moulvibazar', 'Mymensingh', 'Naogaon', 'Narail',
       'Natore', 'Netrokona', 'Nilphamari', 'Noakhali', 'Pabna', 'Panchagarh', 'Patuakhali', 'Pirojpur', 'Rajbari',
       'Rajshahi', 'Rangamati', 'Rangpur', 'Satkhira', 'Shariatpur', 'Sherpur', 'Sirajganj', 'Sunamganj', 'Sylhet',
       'Tangail', 'Thakurgaon',
@@ -37,23 +38,6 @@ export function zoneForDistrict(district: string): DeliveryZone | null {
 }
 
 const ALL_DISTRICTS = DELIVERY_ZONES.flatMap((z) => z.districts);
-
-/** Bengali display names (indexes line up with DELIVERY_ZONES districts). */
-const DISTRICT_NAMES_BN: Record<DeliveryZone, string[]> = {
-  dhaka_city: ['ঢাকা সিটি'],
-  dhaka_suburban: [
-    'ঢাকা সাবআরবান', 'গাজীপুর', 'নারায়ণগঞ্জ', 'নরসিংদী', 'সাভার', 'ধামরাই', 'কেরানীগঞ্জ', 'মানিকগঞ্জ', 'মুন্সিগঞ্জ',
-  ],
-  outside_dhaka: [
-    'বাগেরহাট', 'বান্দরবান', 'বরগুনা', 'বরিশাল', 'ভোলা', 'বগুড়া', 'ব্রাহ্মণবাড়িয়া', 'চাঁদপুর', 'চট্টগ্রাম',
-    'চুয়াডাঙ্গা', 'কক্সবাজার', 'কুমিল্লা', 'দিনাজপুর', 'ফরিদপুর', 'ফেনী', 'গাইবান্ধা', 'গোপালগঞ্জ', 'হবিগঞ্জ',
-    'জামালপুর', 'যশোর', 'ঝালকাঠি', 'ঝিনাইদহ', 'জয়পুরহাট', 'খাগড়াছড়ি', 'খুলনা', 'কিশোরগঞ্জ', 'কুড়িগ্রাম',
-    'কুষ্টিয়া', 'লক্ষ্মীপুর', 'লালমনিরহাট', 'মাদারীপুর', 'মাগুরা', 'মেহেরপুর', 'মৌলভীবাজার', 'ময়মনসিংহ', 'নওগাঁ',
-    'নাটোর', 'নেত্রকোণা', 'নীলফামারী', 'নোয়াখালী', 'পাবনা', 'পঞ্চগড়', 'পটুয়াখালী', 'পিরোজপুর', 'রাজবাড়ী',
-    'রাজশাহী', 'রাঙামাটি', 'রংপুর', 'সাতক্ষীরা', 'শরীয়তপুর', 'শেরপুর', 'সিরাজগঞ্জ', 'সুনামগঞ্জ', 'সিলেট',
-    'টাঙ্গাইল', 'ঠাকুরগাঁও',
-  ],
-};
 
 /**
  * District dropdown shown in checkout step 1. The zone drives the Steadfast
@@ -73,12 +57,7 @@ export default function ZoneSelect({ value, onChange, error, required = false }:
     ? { dhaka_city: t('zoneInsideDhaka'), dhaka_suburban: t('zoneDhakaSuburban'), outside_dhaka: t('zoneOutsideDhaka') }
     : { dhaka_city: 'Inside Dhaka', dhaka_suburban: 'Dhaka Suburban', outside_dhaka: 'Outside Dhaka' };
 
-  const nameFor = (zone: DeliveryZone, district: string) => {
-    if (!isBn) return district;
-    const zoneDef = DELIVERY_ZONES.find((z) => z.id === zone);
-    const idx = zoneDef?.districts.indexOf(district) ?? -1;
-    return (idx >= 0 && DISTRICT_NAMES_BN[zone][idx]) || district;
-  };
+  const nameFor = (district: string) => (isBn ? DISTRICT_NAMES_BN[district] ?? district : district);
 
   return (
     <div>
@@ -99,7 +78,7 @@ export default function ZoneSelect({ value, onChange, error, required = false }:
           {DELIVERY_ZONES.map((zone) => (
             <optgroup key={zone.id} label={zoneLabels[zone.id]}>
               {zone.districts.map((d) => (
-                <option key={d} value={d}>{nameFor(zone.id, d)}</option>
+                <option key={d} value={d}>{nameFor(d)}</option>
               ))}
             </optgroup>
           ))}

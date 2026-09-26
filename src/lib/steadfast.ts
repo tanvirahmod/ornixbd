@@ -1,30 +1,57 @@
 // ── Steadfast Courier API client ──
-// Base URL: https://portal.packzy.com/api/v1
-//   (The API lives on Steadfast's portal host "packzy.com" — the same host the
-//   official WordPress plugin documents. portal.steadfast.com.bd does not
-//   resolve in DNS and only serves the merchant web dashboard.)
-//   POST /create_order            → book a consignment
-//   GET  /status_by_trackingcode/{code} → check delivery status
-// Auth headers: Api-Key + Secret-Key.
+// All courier calls go through the `steadfast-proxy` Edge Function
+// (supabase/functions/steadfast-proxy). The API keys live ONLY in Edge
+// Function secrets — they never reach the browser bundle.
 //
-// ⚠️ Security note: these keys live in the merchant's browser session (admin-only pages),
-// which is acceptable for a single-merchant shop. For multi-tenant deployments move these
-// calls into a Supabase Edge Function so the keys never reach any client.
+//   create  → book a consignment (admin session required)
+//   status  → status by tracking code (no auth — the public tracking page uses this)
+//   balance → courier account balance (admin session required)
 
-const BASE_URL = 'https://portal.packzy.com/api/v1';
+import { supabase } from './supabase';
 
-const API_KEY = import.meta.env.VITE_STEADFAST_API_KEY ?? '';
-const SECRET_KEY = import.meta.env.VITE_STEADFAST_SECRET_KEY ?? '';
+const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
-export const steadfastConfigured = Boolean(API_KEY && SECRET_KEY);
+/** True once an Edge Function has been deployed for the proxy. */
+export const steadfastConfigured = Boolean(import.meta.env.VITE_SUPABASE_URL && ANON_KEY);
 
-function headers(): HeadersInit {
-  return {
-    'Api-Key': API_KEY,
-    'Secret-Key': SECRET_KEY,
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
+async function proxy<T extends Record<string, unknown>>(
+  payload: Record<string, unknown>
+): Promise<{ ok: boolean; status: number; data: T; message: string; raw: string }> {
+  // Send the signed-in admin's access token when we have one — the proxy
+  // verifies the admin session from it. Falls back to the anon key for the
+  // public status lookup on the tracking page.
+  let bearer = ANON_KEY;
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData.session?.access_token) bearer = sessionData.session.access_token;
+  } catch {
+    // not signed in — anon bearer is fine for public actions
+  }
+  const res = await fetch(`${FUNCTIONS_URL}/steadfast-proxy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}`, apikey: ANON_KEY },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let data: T = {} as T;
+  let ok = res.ok;
+  let httpStatus = res.status;
+  try {
+    const body = text ? (JSON.parse(text) as Record<string, unknown>) : ({} as Record<string, unknown>);
+    // The proxy wraps upstream responses as { ok, status, data }. Unwrap it;
+    // fall back to the raw body for non-envelope responses.
+    if (body && typeof body === 'object' && 'ok' in body && 'data' in body) {
+      ok = Boolean(body.ok);
+      httpStatus = Number(body.status ?? res.status);
+      data = (body.data ?? {}) as T;
+    } else {
+      data = body as T;
+    }
+  } catch {
+    // non-JSON response — keep raw text for diagnostics
+  }
+  return { ok, status: httpStatus, data, message: (data as { message?: string }).message ?? '', raw: text.slice(0, 300) };
 }
 
 export type SteadfastBookingInput = {
@@ -44,44 +71,29 @@ export type SteadfastBookingResult = {
   message: string;
 };
 
-/** Book a consignment with Steadfast. */
+/** Book a consignment with Steadfast (admin session required by the proxy). */
 export async function createSteadfastConsignment(
   input: SteadfastBookingInput
 ): Promise<SteadfastBookingResult> {
-  if (!steadfastConfigured) {
-    return { ok: false, trackingCode: null, consignmentId: null, message: 'Steadfast API keys are not configured.' };
-  }
-
   try {
-    const res = await fetch(`${BASE_URL}/create_order`, {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({
-        invoice: input.invoice,
-        recipient_name: input.recipient_name,
-        recipient_phone: input.recipient_phone,
-        recipient_address: input.recipient_address,
-        cod_amount: input.cod_amount,
-        weight: input.weight ?? 1.5, // declared parcel weight (kg)
-        note: input.note ?? '',
-      }),
+    const { ok, data, message, status, raw } = await proxy<Record<string, unknown>>({
+      action: 'create',
+      invoice: input.invoice,
+      recipient_name: input.recipient_name,
+      recipient_phone: input.recipient_phone,
+      recipient_address: input.recipient_address,
+      cod_amount: input.cod_amount,
+      weight: input.weight ?? 1.5, // declared parcel weight (kg)
+      note: input.note ?? '',
     });
 
-    const text = await res.text();
-    let data: Record<string, unknown> = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      return { ok: false, trackingCode: null, consignmentId: null, message: res.status === 401
-        ? 'Steadfast rejected the API keys (401 Unauthorized).'
-        : `Unexpected response from Steadfast (HTTP ${res.status}).` };
-    }
-
-    const consignment = (data.consignment ?? {}) as Record<string, unknown>;
+    // Steadfast's create_order response shape has varied: some accounts return
+    // { consignment: { tracking_code, … } }, others flat { tracking_code, … }.
+    const consignment = ((data.consignment as Record<string, unknown> | undefined) ?? data) as Record<string, unknown>;
     const trackingCode = (consignment.tracking_code as string | undefined) ?? null;
     const consignmentId = consignment.consignment_id != null ? String(consignment.consignment_id) : null;
 
-    if (res.ok && trackingCode) {
+    if (ok && trackingCode) {
       return { ok: true, trackingCode, consignmentId, message: (data.message as string) ?? 'Consignment created.' };
     }
 
@@ -89,15 +101,17 @@ export async function createSteadfastConsignment(
     const errMsg =
       (data.message as string | undefined) ??
       (data.error as string | undefined) ??
-      `Steadfast booking failed (HTTP ${res.status}).`;
-    return { ok: false, trackingCode: null, consignmentId: null, message: errMsg };
+      (message || `Steadfast booking failed (HTTP ${status}).`);
+    // Surface the raw body so unexpected shapes are diagnosable from the toast
+    const dump = raw && !data.message && !trackingCode ? ` — ${raw}` : '';
+    return { ok: false, trackingCode: null, consignmentId: null, message: errMsg + dump };
   } catch (err) {
     return {
       ok: false,
       trackingCode: null,
       consignmentId: null,
       message: err instanceof Error && err.message === 'Failed to fetch'
-        ? 'Could not reach Steadfast (network or CORS blocked the request).'
+        ? 'Could not reach the Steadfast proxy (is the Edge Function deployed?).'
         : `Could not reach Steadfast: ${err instanceof Error ? err.message : 'unknown error'}`,
     };
   }
@@ -112,30 +126,19 @@ export type SteadfastStatusResult = {
   notFound?: boolean;
 };
 
-/** Check delivery status by tracking code. */
+/** Check delivery status by tracking code (public — no auth needed). */
 export async function checkSteadfastStatus(trackingCode: string): Promise<SteadfastStatusResult> {
-  if (!steadfastConfigured) {
-    return { ok: false, status: null, message: 'Steadfast API keys are not configured.' };
-  }
-
   try {
-    const res = await fetch(`${BASE_URL}/status_by_trackingcode/${encodeURIComponent(trackingCode)}`, {
-      method: 'GET',
-      headers: headers(),
+    const { ok, data, status: httpStatus, message } = await proxy<Record<string, unknown>>({
+      action: 'status',
+      tracking_code: trackingCode,
     });
 
-    const text = await res.text();
-    let data: Record<string, unknown> = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      if (res.status === 401) {
-        return { ok: false, status: null, notFound: true, message: 'Steadfast has no record of this tracking code (it may have been deleted from the portal).' };
-      }
-      return { ok: false, status: null, message: `Unexpected response from Steadfast (HTTP ${res.status}).` };
+    if (httpStatus === 401) {
+      return { ok: false, status: null, notFound: true, message: 'Steadfast has no record of this tracking code (it may have been deleted from the portal).' };
     }
 
-    if (res.ok && data.delivery_status) {
+    if (ok && data.delivery_status) {
       const status = String(data.delivery_status);
       // Steadfast answers 200 + delivery_status:"unknown" for consignments that
       // no longer exist on the merchant account (e.g. the pickup request was
@@ -145,13 +148,13 @@ export async function checkSteadfastStatus(trackingCode: string): Promise<Steadf
       }
       return { ok: true, status, message: 'ok' };
     }
-    return { ok: false, status: null, message: (data.message as string | undefined) ?? `Status check failed (HTTP ${res.status}).` };
+    return { ok: false, status: null, message: message || `Status check failed (HTTP ${httpStatus}).` };
   } catch (err) {
     return {
       ok: false,
       status: null,
       message: err instanceof Error && err.message === 'Failed to fetch'
-        ? 'Could not reach Steadfast (network or CORS blocked the request).'
+        ? 'Could not reach the Steadfast proxy (is the Edge Function deployed?).'
         : `Could not reach Steadfast: ${err instanceof Error ? err.message : 'unknown error'}`,
     };
   }
@@ -235,4 +238,29 @@ const STAGE_LABEL: Record<SteadfastStage, string> = {
 export function steadfastStageBadge(status: string | null | undefined) {
   const stage = steadfastStageFor(status);
   return stage ? { stage, label: STAGE_LABEL[stage], cls: STAGE_CLS[stage] } : null;
+}
+
+export type SteadfastBalanceResult = {
+  ok: boolean;
+  balance: number | null;
+  message: string;
+};
+
+/** Current Steadfast account balance (how much cash the courier is holding for COD settlement). */
+export async function getSteadfastBalance(): Promise<SteadfastBalanceResult> {
+  try {
+    const { ok, data, status: httpStatus, message } = await proxy<Record<string, unknown>>({ action: 'balance' });
+    if (ok && data.current_balance != null) {
+      return { ok: true, balance: Number(data.current_balance), message: 'ok' };
+    }
+    return { ok: false, balance: null, message: message || `Balance check failed (HTTP ${httpStatus}).` };
+  } catch (err) {
+    return {
+      ok: false,
+      balance: null,
+      message: err instanceof Error && err.message === 'Failed to fetch'
+        ? 'Could not reach the Steadfast proxy (is the Edge Function deployed?).'
+        : `Could not reach Steadfast: ${err instanceof Error ? err.message : 'unknown error'}`,
+    };
+  }
 }

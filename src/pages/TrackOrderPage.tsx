@@ -63,23 +63,42 @@ export default function TrackOrderPage() {
     setOrder(null);
     setSfStatus(null);
 
-    const { data, error: dbError } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('order_code', cleaned)
-      .order('created_at', { ascending: true });
+    // Track via the locked-down RPC (no public SELECT on orders anymore);
+    // fall back to a direct query for databases without the migration yet.
+    let rows: Partial<Order>[] | null = null;
+    let dbError: string | null = null;
+    try {
+      const rpc = await supabase.rpc('track_order', { p_order_code: cleaned, p_phone_last4: phoneLast.trim() || null });
+      if (!rpc.error && rpc.data && (rpc.data as Partial<Order>[]).length > 0) {
+        rows = rpc.data as Partial<Order>[];
+      } else if (rpc.error) {
+        dbError = rpc.error.message;
+      }
+    } catch {
+      // fall through to the legacy query
+    }
+    if (!rows) {
+      const legacy = await supabase
+        .from('orders')
+        .select('*')
+        .eq('order_code', cleaned)
+        .order('created_at', { ascending: true });
+      dbError = legacy.error?.message ?? null;
+      rows = (legacy.data as Partial<Order>[] | null) ?? null;
+    }
 
     setLoading(false);
 
-    if (dbError || !data || data.length === 0) {
+    if (dbError || !rows || rows.length === 0) {
       setError('No order found with that code. Double-check the code from your confirmation screen.');
       return;
     }
 
     // Cart checkouts create one row per item — all share the same code
-    const found: Order = data[0];
+    const found: Order = rows[0] as Order;
     if (phoneLast.trim()) {
-      const digits = found.customer_phone.replace(/\D/g, '');
+      // RPC hides customer_phone when the digits don't match — treat null as a mismatch
+      const digits = (found.customer_phone ?? '').replace(/\D/g, '');
       if (!digits.endsWith(phoneLast.trim())) {
         setError('The last 4 digits don\u2019t match this order code.');
         return;
@@ -268,7 +287,7 @@ export default function TrackOrderPage() {
                     <span className="break-words">{order.customer_address}{order.delivery_zone ? ` · ${order.delivery_zone}` : ''}</span>
                   </p>
                   <p className="flex items-center gap-2 text-sm text-stone-600">
-                    <Phone className="w-4 h-4 text-stone-400 flex-shrink-0" /> {order.customer_phone}
+                    <Phone className="w-4 h-4 text-stone-400 flex-shrink-0" /> {order.customer_phone || '—'}
                   </p>
                   {order.courier_name && (
                     <p className="flex items-center gap-2 text-sm text-stone-600">

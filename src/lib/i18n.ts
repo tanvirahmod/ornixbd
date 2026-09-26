@@ -91,6 +91,8 @@ export type TranslationKey =
   | 'somethingWentWrong'
   | 'feedbackReceived'
   | 'productPageDescriptionTitle'
+ | 'sizeGuideTitle'
+ | 'sizeGuideHint'
   | 'deliveryAcrossBd'
   | 'qualityAssuredShort'
    | 'homeBreadcrumb'
@@ -141,9 +143,6 @@ export type TranslationKey =
  | 'homeDeliveryName'
  | 'homeDeliveryDesc'
  | 'courierEta'
- | 'pickupName'
- | 'pickupDesc'
- | 'pickupEta'
  | 'deliveryCallNote'
  | 'back'
  | 'continueToPayment'
@@ -197,11 +196,16 @@ export type TranslationKey =
  | 'districtLabel'
  | 'districtPlaceholder'
  | 'districtCountHint'
+ | 'thanaLabel'
+ | 'thanaPlaceholder'
+ | 'thanaRequired'
+ | 'thanaLoading'
+ | 'thanaUnavailable'
+ | 'districtFirstPlaceholder'
+ | 'optionalSuffix'
  | 'zoneInsideDhaka'
  | 'zoneDhakaSuburban'
- | 'zoneOutsideDhaka'
- | 'pickupPayTitle'
- | 'pickupPayDesc';
+ | 'zoneOutsideDhaka';
 
 interface TranslationMap {
   [key: string]: string;
@@ -303,6 +307,8 @@ const en: TranslationMap = {
   wrongCaptcha: 'Wrong answer, try again',
   somethingWentWrong: 'Something went wrong. Please try again.',
   productPageDescriptionTitle: 'Description',
+  sizeGuideTitle: 'Size Guide',
+  sizeGuideHint: 'Measurements are approximate and may vary slightly.',
   deliveryAcrossBd: 'Delivery across Bangladesh',
   qualityAssuredShort: 'Quality assured',
   homeBreadcrumb: 'Home',
@@ -353,9 +359,6 @@ const en: TranslationMap = {
   homeDeliveryName: 'Home Delivery — Nationwide Courier',
   homeDeliveryDesc: 'Delivered to your door anywhere in Bangladesh.',
   courierEta: 'Inside Dhaka 1–2 days · Outside Dhaka 3–5 days',
-  pickupName: 'Store Pickup',
-  pickupDesc: 'Collect your order yourself from our pickup point.',
-  pickupEta: 'Ready within 24 hours of confirmation — no delivery fee',
   deliveryCallNote: 'We confirm every order with a quick phone call before dispatch — please keep your phone reachable.',
   back: 'Back',
   continueToPayment: 'Continue to Payment',
@@ -409,11 +412,16 @@ const en: TranslationMap = {
   districtLabel: 'District / Zone',
   districtPlaceholder: 'Select your district…',
   districtCountHint: '{{count}} districts covered — the courier fee is set from your zone.',
+  thanaLabel: 'Thana / Upazilla',
+  thanaPlaceholder: 'Select your thana…',
+  thanaRequired: 'Please select your thana',
+  thanaLoading: 'Loading thanas…',
+  thanaUnavailable: 'Type your thana',
+  districtFirstPlaceholder: 'Pick a district first…',
+  optionalSuffix: '(optional)',
   zoneInsideDhaka: 'Inside Dhaka',
   zoneDhakaSuburban: 'Dhaka Suburban',
   zoneOutsideDhaka: 'Outside Dhaka',
-  pickupPayTitle: 'Pay in full at our store',
-  pickupPayDesc: 'Collect your order at our store and pay the full ৳{{amount}} in cash there.',
 };
 
 // Bengali for the checkout flow (all 3 steps + success screen).
@@ -461,9 +469,6 @@ const bn: TranslationMap = {
   homeDeliveryName: 'হোম ডেলিভারি — সারাদেশে কুরিয়ার',
   homeDeliveryDesc: 'বাংলাদেশের যেকোনো প্রান্তে আপনার দরজায় পৌঁছে যাবে।',
   courierEta: '৩–৪ দিন এর ভেতরে সর্বোচ্চ',
-  pickupName: 'স্টোর পিকআপ',
-  pickupDesc: 'আমাদের পিকআপ পয়েন্ট থেকে নিজে সংগ্রহ করে নিন।',
-  pickupEta: 'কনফার্মের ২৪ ঘণ্টার মধ্যে রেডি — ডেলিভারি চার্জ নেই',
   deliveryCallNote: 'পার্সেল পাঠানোর আগে আমরা প্রতিটি অর্ডার একটি ছোট ফোন কলে কনফার্ম করি — ফোনে যোগাযোগযোগ্য থাকুন।',
   continueToPayment: 'পেমেন্টে এগিয়ে যান',
   paymentHeading: 'পেমেন্ট',
@@ -530,11 +535,18 @@ const bn: TranslationMap = {
   districtLabel: 'জেলা / জোন',
   districtPlaceholder: 'আপনার জেলা নির্বাচন করুন…',
   districtCountHint: '{{count}}টি জেলা কভার করা আছে — কুরিয়ার চার্জ আপনার জোন অনুযায়ী ধার্য হয়।',
+  thanaLabel: 'থানা / উপজেলা',
+  thanaPlaceholder: 'আপনার থানা নির্বাচন করুন…',
+  thanaRequired: 'অনুগ্রহ করে আপনার থানা নির্বাচন করুন',
+  thanaLoading: 'থানা লোড হচ্ছে…',
+  thanaUnavailable: 'আপনার থানা লিখুন',
+  districtFirstPlaceholder: 'আগে জেলা নির্বাচন করুন…',
+  optionalSuffix: '(ঐচ্ছিক)',
   zoneInsideDhaka: 'ঢাকার ভেতরে',
   zoneDhakaSuburban: 'ঢাকা সাবআরবান',
   zoneOutsideDhaka: 'ঢাকার বাইরে',
-  pickupPayTitle: 'আমাদের স্টোরে এসে, পণ্য হাতে নিয়ে সম্পূর্ণ টাকা পরিশোধ করুন',
-  pickupPayDesc: 'আমাদের স্টোর থেকে পণ্য হাতে নেওয়ার সময় পুরো ৳{{amount}} ক্যাশে পরিশোধ করুন।',
+  sizeGuideTitle: 'সাইজ গাইড',
+  sizeGuideHint: 'মাপ কাছাকাছি — সামান্য কমবেশি হতে পারে।',
 };
 
 // Single-language site: English everywhere except the checkout flow,
