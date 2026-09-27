@@ -638,3 +638,309 @@ begin
 end $$;
 
 -- ============ done ============
+
+-- ============ next batch: multi-item sales share one order code ============
+-- Same content as supabase/migrations/20260927210000_order_code_multi_item.sql
+
+-- ── Multi-item purchases share one order code ──
+-- A cart checkout (or a manual sale with several products) inserts one row per
+-- item, all carrying the same order_code. The unique index created when order
+-- codes were introduced would reject the second row with a duplicate-key
+-- error, so it becomes a plain (non-unique) lookup index — order-code lookups
+-- on the track-order page and admin stay just as fast.
+
+drop index if exists public.orders_order_code_key;
+
+create index if not exists orders_order_code_idx on public.orders (order_code);
+
+comment on index public.orders_order_code_idx is
+  'Non-unique by design: several order rows (one multi-item purchase) intentionally share a single order_code.';
+
+-- ============ next batch: Nagad second payment channel ============
+-- Same content as supabase/migrations/20260928010000_add_payment_channel.sql
+
+-- ── Nagad as a second advance-payment channel at checkout ──
+-- payment_channel records which mobile wallet the customer sent the advance
+-- through ('bkash' | 'nagad'). The bKash/Nagad numbers themselves live in
+-- site_settings (checkout_bkash_number / checkout_nagad_number) — no SQL
+-- needed for those; set them in Admin → Settings.
+-- Safe to re-run; the app keeps working even if this migration is pending
+-- (checkout falls back to the pre-channel payload automatically).
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'orders' AND column_name = 'payment_channel'
+  ) THEN
+    alter table public.orders add column payment_channel text;
+    comment on column public.orders.payment_channel is
+      'Mobile wallet the customer used for the advance: bkash or nagad. NULL = bKash (pre-Nagad orders) or no advance required.';
+  END IF;
+END $$;
+
+-- ============ next batch: super admin + per-admin permissions ============
+-- Same content as supabase/migrations/20261001000000_super_admin_permissions.sql
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Super admin + per-admin capability permissions
+--   1. admin_users.role: 'super_admin' | 'admin' (default 'admin').
+--      admin1@ornix.com.bd is seeded as the super admin (idempotent).
+--   2. admin_users.permissions: jsonb map of capability → boolean, e.g.
+--      {"settings": false}. Missing key = allowed (true) by default;
+--      a super admin always has every capability regardless of the map.
+--      Capabilities mirror the admin tabs: products, stock, categories,
+--      orders, manual, finance, coupons, feedback, settings, team.
+--   3. is_super_admin() + admin_has(cap) SECURITY DEFINER helpers.
+--   4. RLS policies rewritten: 'settings'-gated tables (site_settings write,
+--      expenses, admin_log, announcements write) check admin_has('settings');
+--      all other admin policies check is_admin() as before (allowlist alone
+--      still grants baseline access; per-tab hiding is a UI concern).
+--   5. admin_user management RPCs: only super admins may insert/delete rows
+--      in admin_users (via service-side helpers; RLS on admin_users itself
+--      stays read-only for admins, managed by super admin RPCs).
+-- IDEMPOTENT — safe to re-run. Run AFTER admin users exist in Supabase Auth.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1) Role + permissions columns ──
+alter table public.admin_users add column if not exists role text not null default 'admin';
+alter table public.admin_users add column if not exists permissions jsonb not null default '{}'::jsonb;
+alter table public.admin_users add constraint admin_users_role_check
+  check (role in ('super_admin', 'admin')) not valid;
+alter table public.admin_users validate constraint admin_users_role_check;
+
+comment on column public.admin_users.role is
+  'super_admin manages the team and bypasses capability checks; admin has baseline access minus disabled capabilities.';
+comment on column public.admin_users.permissions is
+  'jsonb map capability→boolean. Missing key = allowed. Capabilities: products, stock, categories, orders, manual, finance, coupons, feedback, settings, team.';
+
+-- Seed the super admin (row must match the Supabase Auth user email)
+insert into public.admin_users (email, role)
+values ('admin1@ornix.com.bd', 'super_admin')
+on conflict (email) do update set role = 'super_admin';
+
+-- ── 2) Helpers ──
+create or replace function public.is_super_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select auth.uid() is not null
+     and exists (
+       select 1 from public.admin_users
+       where email = (auth.jwt() ->> 'email')
+         and role = 'super_admin'
+     );
+$$;
+
+create or replace function public.admin_has(p_capability text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select case
+    when auth.uid() is null then false
+    when public.is_super_admin() then true
+    when not exists (
+      select 1 from public.admin_users
+      where email = (auth.jwt() ->> 'email')
+    ) then false  -- not on the allowlist → no admin capabilities at all
+    else coalesce((
+      select (permissions ->> p_capability)::boolean
+      from public.admin_users
+      where email = (auth.jwt() ->> 'email')
+    ), true)  -- allowlisted, capability key unset → allowed by default
+  end;
+$$;
+
+-- ── 3) Team management RPCs (super admin only) ──
+create or replace function public.super_admin_add_admin(p_email text, p_role text default 'admin')
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_super_admin() then
+    raise exception 'Only the super admin can manage admins.';
+  end if;
+  if p_role not in ('super_admin', 'admin') then
+    raise exception 'Role must be super_admin or admin.';
+  end if;
+  insert into public.admin_users (email, role) values (lower(trim(p_email)), p_role)
+  on conflict (email) do update set role = excluded.role;
+end;
+$$;
+
+create or replace function public.super_admin_remove_admin(p_email text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_super_admin() then
+    raise exception 'Only the super admin can manage admins.';
+  end if;
+  if lower(trim(p_email)) = (auth.jwt() ->> 'email') then
+    raise exception 'You cannot remove your own super admin account.';
+  end if;
+  delete from public.admin_users where email = lower(trim(p_email));
+end;
+$$;
+
+create or replace function public.super_admin_set_permissions(p_email text, p_permissions jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_super_admin() then
+    raise exception 'Only the super admin can manage admins.';
+  end if;
+  if exists (select 1 from public.admin_users where email = lower(trim(p_email)) and role = 'super_admin')
+     and lower(trim(p_email)) <> (auth.jwt() ->> 'email') then
+    raise exception 'Another super admin''s capabilities cannot be changed.';
+  end if;
+  update public.admin_users set permissions = p_permissions where email = lower(trim(p_email));
+end;
+$$;
+
+-- ── 4) Policy rewrites for capability-gated tables ──
+-- (is_admin() still gates everything else; these tables additionally require
+--  the 'settings' capability because they power the Settings tab.)
+
+drop policy if exists "admin_all_site_settings" on site_settings;
+create policy "settings_cap_site_settings" on site_settings for all to authenticated
+  using (admin_has('settings')) with check (admin_has('settings'));
+
+drop policy if exists "admin_all_announcements" on announcements;
+create policy "settings_cap_announcements" on announcements for all to authenticated
+  using (admin_has('settings')) with check (admin_has('settings'));
+
+drop policy if exists "admin_all_expenses" on expenses;
+create policy "settings_cap_expenses" on expenses for all to authenticated
+  using (admin_has('settings')) with check (admin_has('settings'));
+
+drop policy if exists "admin_all_admin_log" on admin_log;
+create policy "settings_cap_admin_log" on admin_log for all to authenticated
+  using (admin_has('settings')) with check (admin_has('settings'));
+
+-- ── 5) admin_users itself: admins read the team list; only super admins
+--       (via the RPCs above) change it. ──
+drop policy if exists "super_admin_all_admin_users" on admin_users;
+create policy "super_admin_all_admin_users" on admin_users for all to authenticated
+  using (is_super_admin()) with check (is_super_admin());
+
+-- ============ next batch: admin_me RPC + non-recursive admin_users read policy ============
+-- Same content as supabase/migrations/20261002000000_admin_me_and_read_policy_fix.sql
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Fix: role loading for the admin panel
+--   The original "admin_users readable by admins" policy checked membership
+--   with a subquery on admin_users itself — Postgres detects that as infinite
+--   recursion and errors every app-side SELECT on the table, so the panel
+--   could never read the signed-in admin's role (super admin pill hidden).
+--   1. Replace the recursive policy with one built on is_admin(), which is
+--      SECURITY DEFINER and therefore cannot recurse.
+--   2. Add public.admin_me() — SECURITY DEFINER RPC returning the caller's own
+--      role + permissions without depending on admin_users RLS at all.
+-- IDEMPOTENT — safe to re-run.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── 1) Non-recursive read policy ──
+drop policy if exists "admin_users readable by admins" on public.admin_users;
+create policy "admin_users readable by admins"
+  on public.admin_users for select to authenticated
+  using (public.is_admin());
+
+-- Writes stay super-admin-only (from the team migration; idempotent re-create)
+drop policy if exists "super_admin_all_admin_users" on public.admin_users;
+create policy "super_admin_all_admin_users" on public.admin_users for all to authenticated
+  using (public.is_super_admin()) with check (public.is_super_admin());
+
+-- ── 2) Who am I? — role + permissions for the signed-in admin ──
+create or replace function public.admin_me()
+returns table (role text, permissions jsonb)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select a.role, a.permissions
+  from public.admin_users a
+  where a.email = (auth.jwt() ->> 'email');
+$$;
+
+grant execute on function public.admin_me() to authenticated;
+
+-- Full team list for the super admin's Team sub-tab (empty set for anyone else)
+create or replace function public.super_admin_list_admins()
+returns table (email text, role text, permissions jsonb)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select a.email, a.role, a.permissions
+  from public.admin_users a
+  where public.is_super_admin()
+  order by a.email;
+$$;
+
+grant execute on function public.super_admin_list_admins() to authenticated;
+
+-- ============ next batch: admin activity logging for every admin ============
+-- Same content as supabase/migrations/20261003000000_admin_log_rpc.sql
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Activity logging that works for every admin
+--   Problem: direct INSERTs into admin_log were gated by admin_has('settings'),
+--   so an admin whose Settings capability was disabled could never write their
+--   activity rows (the failure was silent) — the super admin saw only their
+--   own log.
+--   Fix:
+--     1. log_admin_activity() — SECURITY DEFINER RPC any allowlisted admin can
+--        call; it forces admin_id to the caller's own email, so nobody can
+--        forge someone else's trail.
+--     2. A dedicated INSERT policy so self-attributed logging never depends on
+--        the 'settings' capability (reads still require it).
+-- IDEMPOTENT — safe to re-run.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+create or replace function public.log_admin_activity(p_action text, p_target text default null, p_detail text default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+begin
+  v_email := auth.jwt() ->> 'email';
+  if v_email is null then
+    raise exception 'Sign in to record activity.';
+  end if;
+  if not exists (select 1 from public.admin_users where email = v_email) then
+    raise exception 'Only allowlisted admins can record activity.';
+  end if;
+  insert into public.admin_log (admin_id, action, target, detail)
+  values (v_email, p_action, p_target, p_detail);
+end;
+$$;
+
+grant execute on function public.log_admin_activity(text, text, text) to authenticated;
+
+-- INSERT policy: allowlisted admins may log their own activity regardless of
+-- the 'settings' capability (SELECT/UPDATE/DELETE stay settings-gated).
+drop policy if exists "admins_insert_own_admin_log" on public.admin_log;
+create policy "admins_insert_own_admin_log" on public.admin_log
+  for insert to authenticated
+  with check (
+    public.is_admin()
+    and admin_id = (auth.jwt() ->> 'email')
+  );

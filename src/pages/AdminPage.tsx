@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';import {
-  Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler,
+  Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler, ShieldCheck,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
    Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown
 } from 'lucide-react';
@@ -11,8 +11,9 @@ import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
 import ThanaSelect from '../components/ThanaSelect';
 import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, FinCard, FinDelta, DailyBars, EmptyState, ToastStack, nextToastId, type Toast } from '../admin/ui';
 import { printLabels } from '../lib/parcelLabel';
+import { toAsciiDigits } from './CheckoutPage';
 import { printManualOrdersReport, manualOrderInDateRange } from '../lib/manualOrdersReport';
-import { useAdminAuth } from '../lib/useAdminAuth';
+import { useAdminAuth, ALL_CAPABILITIES } from '../lib/useAdminAuth';
 import { useNavigation } from '../lib/navigation';
 import { WHATSAPP_ORDER_KEY, WHATSAPP_CHAT_KEY, normalizeWhatsAppNumber } from '../lib/whatsapp';
 
@@ -76,7 +77,7 @@ const STEADFAST_STAGE_LABELS: Record<SteadfastStage, string> = {
 export default function AdminPage() {
   const onNavigate = useNavigation();
   // ── Supabase Auth login (session + admin allowlist enforced server-side) ──
-  const { authReady, isAuthenticated, adminEmail, signIn, signOut } = useAdminAuth();
+  const { authReady, isAuthenticated, adminEmail, isSuperAdmin, isAdminOf, reloadPermissions, signIn, signOut } = useAdminAuth();
   const [currentAdminId, setCurrentAdminId] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
   const [adminId, setAdminId] = useState('');
@@ -87,6 +88,17 @@ export default function AdminPage() {
   }, [adminEmail]);
 
   const [tab, setTab] = useState<Tab>('products');
+
+  // If the signed-in admin lacks permission for the current tab, fall back to
+  // the first tab they can use (e.g. after the super admin restricts them).
+  useEffect(() => {
+    if (!authReady || !isAuthenticated) return;
+    if (!isAdminOf(tab)) {
+      const fallback = (['products', 'stock', 'categories', 'orders', 'manual', 'finance', 'coupons', 'feedback', 'settings'] as Tab[])
+        .find((t) => isAdminOf(t));
+      if (fallback) setTab(fallback);
+    }
+  }, [authReady, isAuthenticated, tab, isAdminOf]);
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -156,6 +168,20 @@ export default function AdminPage() {
 
   // ── Activity log & stock movement history ──
   const [adminLogs, setAdminLogs] = useState<AdminLog[]>([]);
+  const [activityAdminFilter, setActivityAdminFilter] = useState('all');
+  // ── Settings sub-tabs (organized sections) ──
+  const [settingsTab, setSettingsTab] = useState<'storefront' | 'delivery' | 'inventory' | 'activity' | 'team'>('storefront');
+
+  // ── Team management (super admin only) ──
+  const [teamRows, setTeamRows] = useState<{ email: string; role: 'super_admin' | 'admin'; permissions: Record<string, boolean> }[]>([]);
+  const [teamBusy, setTeamBusy] = useState('');
+  const [newTeamEmail, setNewTeamEmail] = useState('');
+  const [newTeamRole, setNewTeamRole] = useState<'admin' | 'super_admin'>('admin');
+  // Activity log narrowed by the Settings "filter by admin" dropdown
+  const filteredActivityLogs = useMemo(() => {
+    if (activityAdminFilter === 'all') return adminLogs;
+    return adminLogs.filter((l) => (l.admin_id ?? '').trim() === activityAdminFilter);
+  }, [adminLogs, activityAdminFilter]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [movementProductId, setMovementProductId] = useState<string | null>(null);
   const orderStatusRef = useRef<HTMLDivElement | null>(null);
@@ -220,9 +246,12 @@ export default function AdminPage() {
   const [waSaving, setWaSaving] = useState(false);
 
   // ── Manual (in-store) orders ──
+  // One line per product: a sale can mix several products / sizes.
+  type ManualLine = { product_id: string; product_code: string; size: string; quantity: string; amount: string };
+  const [manualLines, setManualLines] = useState<ManualLine[]>([{ product_id: '', product_code: '', size: '', quantity: '1', amount: '' }]);
   const [manualForm, setManualForm] = useState({
-    product_id: '', product_code: '', size: '', quantity: '1',
-    amount: '', seller_name: '', bkash: '', customer_name: '',
+    customer_name: '', customer_phone: '',
+    seller_name: '', bkash: '',
     district: '', thana: '', address: '',
   });
   // ── Size chart templates (reusable measurement charts) ──
@@ -252,6 +281,7 @@ export default function AdminPage() {
   const [merchantId, setMerchantId] = useState('');
   // bKash number shown on checkout for the delivery-fee advance (site_settings)
   const [checkoutBkash, setCheckoutBkash] = useState('');
+  const [checkoutNagad, setCheckoutNagad] = useState('');
   const [labelFrom, setLabelFrom] = useState('');
   const [labelTo, setLabelTo] = useState('');
   const [printingLabels, setPrintingLabels] = useState<string | null>(null); // 'bulk' | order id
@@ -272,7 +302,14 @@ export default function AdminPage() {
   const logAdmin = async (action: string, target?: string | null, detail?: string | null) => {
     if (!currentAdminId) return;
     try {
-      await supabase.from('admin_log').insert({ admin_id: currentAdminId, action, target: target ?? null, detail: detail ?? null });
+      // SECURITY DEFINER RPC: works for every allowlisted admin (a direct
+      // insert is RLS-blocked without the Settings capability) and forces
+      // admin_id to the caller's own email so trails can't be forged.
+      const { error } = await supabase.rpc('log_admin_activity', { p_action: action, p_target: target ?? null, p_detail: detail ?? null });
+      if (error) {
+        console.warn('Activity log insert failed:', error.message);
+        return; // realtime insert will be missing too — but logging never blocks the action
+      }
       setAdminLogs((prev) => [
         { id: `local-${Date.now()}-${Math.random()}`, admin_id: currentAdminId, action, target: target ?? null, detail: detail ?? null, created_at: new Date().toISOString() },
         ...prev,
@@ -295,10 +332,16 @@ export default function AdminPage() {
     }
   };
 
-  // ── Dashboard at-a-glance stats ──
-  const pendingOrders = orders.filter((o) => o.status === 'pending').length;
-  const deliveredOrders = orders.filter((o) => o.status === 'delivered').length;
-  const canceledOrders = orders.filter((o) => o.status === 'canceled').length;
+  // Website orders only — in-store sales have their own tab and must not
+  // clutter the Orders tab (Finance still counts every order).
+  const storeOrders = useMemo(
+    () => orders.filter((o) => o.order_source !== 'manual'),
+    [orders]
+  );
+  // ── Dashboard at-a-glance stats (Orders tab is website orders only) ──
+  const pendingOrders = storeOrders.filter((o) => o.status === 'pending').length;
+  const deliveredOrders = storeOrders.filter((o) => o.status === 'delivered').length;
+  const canceledOrders = storeOrders.filter((o) => o.status === 'canceled').length;
   const manualOrders = orders.filter((o) => o.order_source === 'manual');
   const manualToday = manualOrders.filter((o) => new Date(o.created_at).toDateString() === new Date().toDateString());
   // Dropdown names = saved sellers table + anyone already on an order (de-duped, A→Z)
@@ -361,8 +404,8 @@ export default function AdminPage() {
   const stageCounts: Record<SteadfastStage | 'not_booked', number> = {
     not_booked: 0, booked: 0, in_review: 0, picked_up: 0, in_transit: 0, delivered: 0, cancelled: 0,
   };
-  for (const o of orders) stageCounts[stageOfOrder(o)] += 1;
-  const trackedCount = orders.filter((o) => o.tracking_code).length;
+  for (const o of storeOrders) stageCounts[stageOfOrder(o)] += 1;
+  const trackedCount = storeOrders.filter((o) => o.tracking_code).length;
 
   // ── Inventory aggregates (Finance tab) ──
   const lowStockProducts = useMemo(
@@ -420,7 +463,7 @@ export default function AdminPage() {
     return { collected, collectedCount, pending, pendingCount, returned, returnedCount };
   }, [orders]);
 
-  const filteredOrders = orders.filter((o) => {
+  const filteredOrders = storeOrders.filter((o) => {
     if (orderStatusFilter !== 'all' && o.status !== orderStatusFilter) return false;
     if (deliveryStageFilter !== 'all' && stageOfOrder(o) !== deliveryStageFilter) return false;
     const q = orderSearch.trim().toLowerCase();
@@ -437,7 +480,7 @@ export default function AdminPage() {
 
   // ── Parcel label printing (Steadfast-style stickers) ──
   const ordersForLabels = () =>
-    orders
+    storeOrders
       .filter((o) => o.tracking_code && o.status !== 'canceled')
       .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
@@ -613,6 +656,29 @@ export default function AdminPage() {
     }
     return { count, grossRevenue, deliveryCollected, grossTotal, advance, due, discounts, courierEst, couponSpend };
   }, [financeOrders, products, steadfastRates]);
+
+  // ── In-store (manual) sales for the selected range ──
+  const manualFin = useMemo(() => {
+    const rows = financeOrders.filter((o) => o.order_source === 'manual');
+    let amount = 0;
+    let items = 0;
+    const bySeller = new Map<string, { count: number; amount: number }>();
+    for (const o of rows) {
+      const amt = Number(o.total_amount ?? 0);
+      amount += amt;
+      items += Number(o.quantity ?? 1) || 1;
+      const seller = (o.seller_name ?? '').trim() || 'Unknown';
+      const agg = bySeller.get(seller) ?? { count: 0, amount: 0 };
+      agg.count += 1;
+      agg.amount += amt;
+      bySeller.set(seller, agg);
+    }
+    let topSeller = { name: '', count: 0, amount: 0 };
+    for (const [name, agg] of bySeller) {
+      if (agg.amount > topSeller.amount) topSeller = { name, ...agg };
+    }
+    return { count: rows.length, amount, items, topSeller };
+  }, [financeOrders]);
 
   // ── Profit: product cost + expenses for the selected range ──
   const cogs = useMemo(() => {
@@ -960,6 +1026,16 @@ export default function AdminPage() {
           setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, stock_count: updated.stock_count } : p)));
         }
       )
+      // Live activity trail: every admin's log entries stream in as they act,
+      // so the super admin sees all admins' activity without a refresh.
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'admin_log' },
+        (payload) => {
+          const entry = payload.new as AdminLog;
+          if (!entry?.id) return;
+          setAdminLogs((prev) => (prev.some((l) => l.id === entry.id) ? prev : [entry, ...prev]));
+        }
+      )
       .subscribe();
 
     // Request notification permission
@@ -1041,6 +1117,8 @@ export default function AdminPage() {
       setMerchantId(merchantSetting?.value ?? '');
       const checkoutBkashSetting = settings.find((s) => s.key === 'checkout_bkash_number');
       setCheckoutBkash(checkoutBkashSetting?.value ?? '');
+      const checkoutNagadSetting = settings.find((s) => s.key === 'checkout_nagad_number');
+      setCheckoutNagad(checkoutNagadSetting?.value ?? '');
       const thresholdSetting = settings.find((s) => s.key === 'low_stock_threshold');
       const parsedThreshold = Number(thresholdSetting?.value);
       if (thresholdSetting?.value != null && thresholdSetting.value !== '' && !isNaN(parsedThreshold)) {
@@ -1910,6 +1988,10 @@ export default function AdminPage() {
       showToast('error', 'The checkout bKash number should be a valid BD mobile number (11 digits).');
       return;
     }
+    if (checkoutNagad.trim() && checkoutNagad.replace(/\D/g, '').length < 11) {
+      showToast('error', 'The checkout Nagad number should be a valid BD mobile number (11 digits).');
+      return;
+    }
     setSteadfastSaving(true);
     const entries: Array<{ key: string; label: string; description: string; value: string }> = [
       { key: 'steadfast_rate_dhaka_city', label: 'Steadfast Rate — Inside Dhaka', description: 'Courier charge (৳) for orders delivered inside Dhaka City.', value: steadfastRates.dhaka_city },
@@ -1917,6 +1999,7 @@ export default function AdminPage() {
       { key: 'steadfast_rate_outside_dhaka', label: 'Steadfast Rate — Outside Dhaka', description: 'Courier charge (৳) for deliveries outside Dhaka and its suburbs.', value: steadfastRates.outside_dhaka },
       { key: 'steadfast_merchant_id', label: 'Steadfast Merchant ID', description: 'Shown on printed parcel labels (e.g. 8JFK3PPH). Find it in your Steadfast merchant dashboard.', value: merchantId.trim() },
       { key: 'checkout_bkash_number', label: 'Checkout bKash Number', description: 'Personal bKash number shown on checkout — customers send the delivery-fee advance here.', value: checkoutBkash.trim() },
+      { key: 'checkout_nagad_number', label: 'Checkout Nagad Number', description: 'Personal Nagad number shown on checkout. Leave blank to hide the Nagad option from customers.', value: checkoutNagad.trim() },
     ];
     const errors: string[] = [];
     for (const entry of entries) {
@@ -1929,6 +2012,77 @@ export default function AdminPage() {
       showToast('success', 'Courier rates & payment settings saved.');
     }
     setSteadfastSaving(false);
+  };
+
+  // ── Team management (super admin) ──
+  const fetchTeam = async () => {
+    if (!isSuperAdmin) return;
+    // SECURITY DEFINER RPC — returns the team only for super admins
+    const { data, error } = await supabase.rpc('super_admin_list_admins');
+    if (error) {
+      showToast('error', `Could not load the admin team: ${error.message}`);
+      return;
+    }
+    setTeamRows((data ?? []) as typeof teamRows);
+  };
+
+  useEffect(() => {
+    void fetchTeam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperAdmin]);
+
+  // Refresh the activity log whenever the super admin opens its sub-tab
+  useEffect(() => {
+    if (tab === 'settings' && settingsTab === 'activity') {
+      void fetchAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, settingsTab]);
+
+  const handleAddTeamMember = async () => {
+    const email = newTeamEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      showToast('error', 'Enter a valid email address.');
+      return;
+    }
+    setTeamBusy(email);
+    const { error } = await supabase.rpc('super_admin_add_admin', { p_email: email, p_role: newTeamRole });
+    if (error) {
+      showToast('error', `Could not add admin: ${error.message}`);
+    } else {
+      showToast('success', `${email} added as ${newTeamRole === 'super_admin' ? 'a super admin' : 'an admin'} — they can sign in once you create their password in Supabase (Authentication → Users).`);
+      setNewTeamEmail('');
+      await fetchTeam();
+    }
+    setTeamBusy('');
+  };
+
+  const handleRemoveTeamMember = async (email: string) => {
+    if (!window.confirm(`Remove ${email} from the admin team? They lose panel access immediately.`)) return;
+    setTeamBusy(email);
+    const { error } = await supabase.rpc('super_admin_remove_admin', { p_email: email });
+    if (error) {
+      showToast('error', `Could not remove: ${error.message}`);
+    } else {
+      showToast('success', `${email} removed from the admin team.`);
+      await fetchTeam();
+    }
+    setTeamBusy('');
+  };
+
+  const handleToggleCapability = async (email: string, capability: string, current: boolean) => {
+    const row = teamRows.find((r) => r.email === email);
+    if (!row) return;
+    const next = { ...row.permissions, [capability]: !current };
+    setTeamBusy(email + capability);
+    const { error } = await supabase.rpc('super_admin_set_permissions', { p_email: email, p_permissions: next });
+    if (error) {
+      showToast('error', `Could not update: ${error.message}`);
+    } else {
+      setTeamRows((rows) => rows.map((r) => (r.email === email ? { ...r, permissions: next } : r)));
+      if (email === adminEmail) await reloadPermissions();
+    }
+    setTeamBusy('');
   };
 
   // ── Expenses (Finance tab) ──
@@ -2020,28 +2174,61 @@ export default function AdminPage() {
   };
 
   // ── Manual (in-store) order: save + decrement stock ──
+  // A sale can hold several product lines (e.g. two items in different sizes);
+  // every line becomes its own order row, all sharing one order_code so the
+  // purchase stays traceable as a single sale — same pattern as website checkout.
   const handleSaveManualOrder = async () => {
-    const product = products.find((p) => p.id === manualForm.product_id);
-    if (!product) { showToast('error', 'Pick a product.'); return; }
-    const qty = Math.max(1, Number(manualForm.quantity) || 1);
-    if (!manualForm.amount.trim() || isNaN(Number(manualForm.amount)) || Number(manualForm.amount) < 0) {
-      showToast('error', 'Enter the amount the customer paid.');
-      return;
+    if (manualLines.length === 0) { showToast('error', 'Add at least one product.'); return; }
+
+    // Validate every line up-front so a bad row never half-saves.
+    const resolved: { product: Product; qty: number; amount: number; size: string | null }[] = [];
+    for (let i = 0; i < manualLines.length; i++) {
+      const line = manualLines[i];
+      const label = manualLines.length > 1 ? `Line ${i + 1}: ` : '';
+      const product = products.find((p) => p.id === line.product_id);
+      if (!product) { showToast('error', `${label}pick a product.`); return; }
+      const qty = Math.max(1, Number(line.quantity) || 1);
+      if (!line.amount.trim() || isNaN(Number(line.amount)) || Number(line.amount) < 0) {
+        showToast('error', `${label}enter the amount the customer paid.`); return;
+      }
+      if (product.sizes.length > 0 && !line.size) { showToast('error', `${label}pick a size for ${product.title}.`); return; }
+      resolved.push({ product, qty, amount: Number(line.amount), size: line.size || null });
     }
     const seller = manualForm.seller_name.trim();
     if (!seller) { showToast('error', 'Seller name is required (who recorded this sale).'); return; }
-    if (product.sizes.length > 0 && !manualForm.size) { showToast('error', 'Pick a size for this product.'); return; }
     const bkashDigits = manualForm.bkash.replace(/\D/g, '');
     if (manualForm.bkash.trim() !== '' && bkashDigits.length < 4) {
       showToast('error', 'bKash number needs at least the last 4 digits.');
       return;
     }
-    // Stock guard
-    const sizeEntry = manualForm.size ? product.product_sizes?.find((ps) => ps.size === manualForm.size) : null;
-    const available = sizeEntry ? sizeEntry.quantity : product.stock_count;
-    if (available < qty) {
-      showToast('error', `Not enough stock — only ${available} left${manualForm.size ? ` in size ${manualForm.size}` : ''}.`);
-      return;
+    // Customer phone: optional, but when given it must be a real BD mobile
+    // (orders.customer_phone is NOT NULL — checkout rows always carry one).
+    // Accepts 01712345678 / +8801712345678 / 8801712345678 / Bangla digits.
+    const phoneRaw = manualForm.customer_phone.trim();
+    let phoneDigits = '';
+    if (phoneRaw !== '') {
+      phoneDigits = '0' + toAsciiDigits(phoneRaw).replace(/[\s\-()]/g, '').replace(/^\+?88/, '').replace(/^0+/, '');
+      if (!/^01[3-9]\d{8}$/.test(phoneDigits)) {
+        showToast('error', 'Customer phone must be a valid BD mobile, e.g. 01712345678.');
+        return;
+      }
+    }
+    // Stock guard — aggregate demand per product+size so two lines of the same
+    // item can't sneak past the available quantity.
+    const demand = new Map<string, { product: Product; size: string | null; qty: number }>();
+    for (const r of resolved) {
+      const key = `${r.product.id}|${r.size ?? ''}`;
+      const d = demand.get(key);
+      if (d) d.qty += r.qty;
+      else demand.set(key, { product: r.product, size: r.size, qty: r.qty });
+    }
+    for (const d of demand.values()) {
+      const sizeEntry = d.size ? d.product.product_sizes?.find((ps) => ps.size === d.size) : null;
+      const available = sizeEntry ? sizeEntry.quantity : d.product.stock_count;
+      if (available < d.qty) {
+        showToast('error', `Not enough stock for ${d.product.title} — only ${available} left${d.size ? ` in size ${d.size}` : ''}.`);
+        return;
+      }
     }
 
     setManualSaving(true);
@@ -2060,76 +2247,117 @@ export default function AdminPage() {
       }
     }
 
-    const amount = Number(manualForm.amount);
     const customer = manualForm.customer_name.trim() || 'Walk-in customer';
     // Optional delivery details — composed into the order's address line:
     // "detail, thana, district" (kept as "In-store purchase" when left blank).
     const addressParts = [manualForm.address.trim(), manualForm.thana.trim(), manualForm.district].filter(Boolean);
     const composedAddress = addressParts.length ? addressParts.join(', ') : 'In-store purchase';
     const manualZone = manualForm.district ? zoneForDistrict(manualForm.district) : null;
-    const { data: inserted, error } = await supabase
-      .from('orders')
-      .insert({
-        order_code: 'ORN-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
-        product_id: product.id,
-        product_title: product.title,
-        product_code: product.product_code,
-        selected_size: manualForm.size || null,
-        quantity: qty,
-        customer_name: customer,
-        customer_phone: bkashDigits || '—',
-        customer_address: composedAddress,
-        subtotal: amount,
-        delivery_fee: 0,
-        discount_amount: 0,
-        total_amount: amount,
-        payment_method: 'in_store',
-        advance_amount: amount,
-        due_amount: 0,
-        courier_name: 'Store Pickup',
-        delivery_zone: manualZone,
-        status: 'delivered',
-        delivered: true,
-        order_source: 'manual',
-        seller_name: seller,
-        bkash_number: bkashDigits || null,
-      })
-      .select()
-      .single();
+    const orderCode = `ORN-${Array.from(crypto.getRandomValues(new Uint8Array(4)))
+      .map((b) => b.toString(36).padStart(2, '0'))
+      .join('')
+      .slice(0, 6)
+      .toUpperCase()}`;
 
-    if (error || !inserted) {
-      const missing = error?.message.includes('order_source') || error?.message.includes('seller_name');
+    const inserted: Order[] = [];
+    let firstError: string | null = null;
+    for (const r of resolved) {
+      const { data, error } = await supabase
+        .from('orders')
+        .insert({
+          order_code: orderCode,
+          product_id: r.product.id,
+          product_title: r.product.title,
+          product_code: r.product.product_code,
+          selected_size: r.size,
+          quantity: r.qty,
+          customer_name: customer,
+          customer_phone: phoneDigits || '—',
+          customer_address: composedAddress,
+          subtotal: r.amount,
+          delivery_fee: 0,
+          discount_amount: 0,
+          total_amount: r.amount,
+          payment_method: 'in_store',
+          advance_amount: r.amount,
+          due_amount: 0,
+          courier_name: 'Store Pickup',
+          delivery_zone: manualZone,
+          status: 'delivered',
+          delivered: true,
+          order_source: 'manual',
+          seller_name: seller,
+          bkash_number: bkashDigits || null,
+        })
+        .select()
+        .single();
+      if (error || !data) { firstError = error?.message ?? 'unknown error'; break; }
+      inserted.push(data as Order);
+    }
+
+    if (firstError || inserted.length === 0) {
+      const missing = firstError?.includes('order_source') || firstError?.includes('seller_name');
       showToast('error', missing
         ? 'Could not save — run the manual-orders SQL migration first (adds order_source / seller_name).'
-        : `Failed to save: ${error?.message ?? 'unknown error'}`);
+        : `Failed to save: ${firstError ?? 'unknown error'}`);
       setManualSaving(false);
       return;
     }
 
-    // Stock: decrement total and size quantity
-    const newStock = Math.max(0, product.stock_count - qty);
-    await supabase.from('products').update({ stock_count: newStock }).eq('id', product.id);
-    if (sizeEntry) {
-      await supabase.from('product_sizes')
-        .update({ quantity: Math.max(0, sizeEntry.quantity - qty) })
-        .eq('product_id', product.id)
-        .eq('size', manualForm.size);
+    // Stock: decrement totals and size quantities. Aggregate per product first
+    // (a product can appear on two lines, e.g. M and L of the same shirt).
+    const byProduct = new Map<string, { product: Product; totalQty: number; amount: number; sizeDeltas: { size: string; qty: number }[] }>();
+    for (const r of resolved) {
+      const agg = byProduct.get(r.product.id);
+      if (agg) {
+        agg.totalQty += r.qty;
+        agg.amount += r.amount;
+        if (r.size) {
+          const existing = agg.sizeDeltas.find((sd) => sd.size === r.size);
+          if (existing) existing.qty += r.qty;
+          else agg.sizeDeltas.push({ size: r.size, qty: r.qty });
+        }
+      } else {
+        byProduct.set(r.product.id, {
+          product: r.product, totalQty: r.qty, amount: r.amount,
+          sizeDeltas: r.size ? [{ size: r.size, qty: r.qty }] : [],
+        });
+      }
     }
-    void stockDelta(product.id, manualForm.size || null, -qty, 'in_store_sale', `Manual order by ${seller}`);
-    void logAdmin('manual_order', inserted.id, `${product.title}${manualForm.size ? ` (${manualForm.size})` : ''} × ${qty} · ৳${amount} · seller ${seller}`);
+    for (const agg of byProduct.values()) {
+      const newStock = Math.max(0, agg.product.stock_count - agg.totalQty);
+      await supabase.from('products').update({ stock_count: newStock }).eq('id', agg.product.id);
+      for (const sd of agg.sizeDeltas) {
+        const entry = agg.product.product_sizes?.find((ps) => ps.size === sd.size);
+        if (entry) {
+          await supabase.from('product_sizes')
+            .update({ quantity: Math.max(0, entry.quantity - sd.qty) })
+            .eq('product_id', agg.product.id)
+            .eq('size', sd.size);
+        }
+      }
+      void stockDelta(agg.product.id, agg.sizeDeltas.length === 1 ? agg.sizeDeltas[0].size : null, -agg.totalQty, 'in_store_sale', `Manual order by ${seller}`);
+      void logAdmin('manual_order', inserted.find((o) => o.product_id === agg.product.id)?.id ?? null, `${agg.product.title}${agg.sizeDeltas.length === 1 && agg.sizeDeltas[0].size ? ` (${agg.sizeDeltas[0].size})` : ''} × ${agg.totalQty} · ৳${agg.amount} · seller ${seller}`);
+    }
 
-    setOrders((prev) => [inserted as Order, ...prev]);
-    setNotifications((prev) => [inserted as Order, ...prev]);
+    const saleTotal = resolved.reduce((s, r) => s + r.amount, 0);
+    setOrders((prev) => [...inserted, ...prev]);
+    setNotifications((prev) => [...inserted, ...prev]);
     setProducts((prev) => prev.map((p) => {
-      if (p.id !== product.id) return p;
-      const newSizes = sizeEntry && p.product_sizes
-        ? p.product_sizes.map((ps) => (ps.size === manualForm.size ? { ...ps, quantity: Math.max(0, ps.quantity - qty) } : ps))
-        : p.product_sizes;
-      return { ...p, stock_count: newStock, product_sizes: newSizes };
+      const agg = byProduct.get(p.id);
+      if (!agg) return p;
+      let newSizes = p.product_sizes;
+      for (const sd of agg.sizeDeltas) {
+        if (newSizes) {
+          newSizes = newSizes.map((ps) => (ps.size === sd.size ? { ...ps, quantity: Math.max(0, ps.quantity - sd.qty) } : ps));
+        }
+      }
+      return { ...p, stock_count: Math.max(0, p.stock_count - agg.totalQty), product_sizes: newSizes };
     }));
-    setManualForm(f => ({ ...f, product_id: '', product_code: '', size: '', quantity: '1', amount: '', bkash: '', customer_name: '', district: '', thana: '', address: '' }));
+    setManualLines([{ product_id: '', product_code: '', size: '', quantity: '1', amount: '' }]);
+    setManualForm(f => ({ ...f, customer_name: '', customer_phone: '', bkash: '', district: '', thana: '', address: '' }));
     setManualSaving(false);
-    showToast('success', `In-store sale recorded — ৳${amount.toLocaleString('en-IN')} · ${product.title} × ${qty}.`);
+    showToast('success', `In-store sale recorded — ৳${saleTotal.toLocaleString('en-IN')} · ${inserted.length} item${inserted.length === 1 ? '' : 's'}.`);
   };
 
   // ── Saved sellers: remove a name from the dropdown (does not touch past orders) ──
@@ -2320,16 +2548,16 @@ export default function AdminPage() {
       <div className="bg-white border-b border-stone-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
           {([
-            { key: 'products' as Tab, label: 'Products', icon: <Package className="w-4 h-4" />, count: products.length },
-            { key: 'stock' as Tab, label: 'Stock', icon: <Package className="w-4 h-4" />, count: lowStockCount },
-            { key: 'categories' as Tab, label: 'Categories', icon: <Tag className="w-4 h-4" />, count: categories.length },
-            { key: 'orders' as Tab, label: 'Orders', icon: <ShoppingBag className="w-4 h-4" />, count: orders.length, highlight: pendingOrders > 0 ? `${pendingOrders} pending` : undefined },
-            { key: 'manual' as Tab, label: 'Manual Orders', icon: <Store className="w-4 h-4" />, count: manualOrders.length },
-            { key: 'finance' as Tab, label: 'Finance', icon: <Banknote className="w-4 h-4" /> },
-            { key: 'coupons' as Tab, label: 'Coupons', icon: <Percent className="w-4 h-4" />, count: couponsUnavailable ? undefined : coupons.length },
-            { key: 'feedback' as Tab, label: 'Feedback', icon: <MessageSquare className="w-4 h-4" />, count: feedbackList.length, badge: unreadFeedback },
-            { key: 'settings' as Tab, label: 'Settings', icon: <Settings className="w-4 h-4" />, count: undefined },
-          ]).map((t) => (
+            { key: 'products' as Tab, label: 'Products', icon: <Package className="w-4 h-4" />, count: products.length, cap: 'products' as const },
+            { key: 'stock' as Tab, label: 'Stock', icon: <Package className="w-4 h-4" />, count: lowStockCount, cap: 'stock' as const },
+            { key: 'categories' as Tab, label: 'Categories', icon: <Tag className="w-4 h-4" />, count: categories.length, cap: 'categories' as const },
+            { key: 'orders' as Tab, label: 'Orders', icon: <ShoppingBag className="w-4 h-4" />, count: storeOrders.length, highlight: pendingOrders > 0 ? `${pendingOrders} pending` : undefined, cap: 'orders' as const },
+            { key: 'manual' as Tab, label: 'Manual Orders', icon: <Store className="w-4 h-4" />, count: manualOrders.length, cap: 'manual' as const },
+            { key: 'finance' as Tab, label: 'Finance', icon: <Banknote className="w-4 h-4" />, cap: 'finance' as const },
+            { key: 'coupons' as Tab, label: 'Coupons', icon: <Percent className="w-4 h-4" />, count: couponsUnavailable ? undefined : coupons.length, cap: 'coupons' as const },
+            { key: 'feedback' as Tab, label: 'Feedback', icon: <MessageSquare className="w-4 h-4" />, count: feedbackList.length, badge: unreadFeedback, cap: 'feedback' as const },
+            { key: 'settings' as Tab, label: 'Settings', icon: <Settings className="w-4 h-4" />, count: undefined, cap: 'settings' as const },
+          ]).filter((t) => isAdminOf(t.cap)).map((t) => (
             <button key={t.key} onClick={() => setTab(t.key)}
               title={t.highlight ? t.highlight : undefined}
               className={`relative flex items-center gap-2 px-4 sm:px-5 py-4 text-sm font-semibold transition-all whitespace-nowrap border-b-2 ${
@@ -3067,7 +3295,7 @@ export default function AdminPage() {
             {filteredOrders.length === 0 ? (
               <EmptyState
                 icon={<ShoppingBag className="w-6 h-6" />}
-                title={orders.length === 0 ? 'No orders yet' : 'No orders match your filters.'}
+                title={storeOrders.length === 0 ? 'No orders yet' : 'No orders match your filters.'}
                 hint={orders.length === 0 ? 'New orders will appear here in real time.' : 'Try a different search term or status filter.'}
               />
             ) : (
@@ -3083,8 +3311,10 @@ export default function AdminPage() {
                           ? 'border-l-red-300'
                           : 'border-l-emerald-400'
                     }`}>
-                      {/* Header: customer identity + status + actions */}
-                      <div className="flex items-start justify-between gap-3">
+                      {/* Header: customer identity + status + actions.
+                          Stacks on mobile so the customer name never gets
+                          squeezed by the status pill / status dropdown. */}
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
                         <div className="flex items-center gap-3 min-w-0">
                           <input
                             type="checkbox"
@@ -3312,6 +3542,12 @@ export default function AdminPage() {
                           <p className={ORD_LBL}>TrxID</p>
                           <p className="font-medium text-stone-800 text-sm truncate">{order.trx_id ?? '—'}</p>
                         </div>
+                        {order.payment_channel === 'nagad' && (
+                          <div>
+                            <p className={ORD_LBL}>Channel</p>
+                            <p className="font-medium text-orange-600 text-sm">Nagad</p>
+                          </div>
+                        )}
                         <div>
                           <p className={ORD_LBL}>Payment</p>
                           <p className="font-medium text-stone-800 text-sm">
@@ -3405,17 +3641,12 @@ export default function AdminPage() {
           const knownSellersFiltered = sellerDropdownOpen && manualForm.seller_name.trim()
             ? knownSellers.filter((s) => s.name.toLowerCase().includes(manualForm.seller_name.trim().toLowerCase()))
             : knownSellers;
-          const selectedProduct = products.find((p) => p.id === manualForm.product_id) ?? null;
-          const unitPrice = selectedProduct
-            ? (selectedProduct.discount_price != null && selectedProduct.discount_price < selectedProduct.price
-              ? Number(selectedProduct.discount_price)
-              : Number(selectedProduct.price))
-            : 0;
-          const selectedSizeEntry = selectedProduct && manualForm.size
-            ? selectedProduct.product_sizes?.find((ps) => ps.size === manualForm.size)
-            : null;
-          const available = selectedSizeEntry ? selectedSizeEntry.quantity : (selectedProduct?.stock_count ?? 0);
-          const manualTotal = manualForm.quantity && unitPrice ? unitPrice * (Number(manualForm.quantity) || 0) : 0;
+          const unitPriceOf = (p: Product | undefined | null) =>
+            p ? (p.discount_price != null && p.discount_price < p.price ? Number(p.discount_price) : Number(p.price)) : 0;
+          const saleTotal = manualLines.reduce((s, l) => {
+            const p = products.find((x) => x.id === l.product_id);
+            return s + (l.amount.trim() !== '' && !isNaN(Number(l.amount)) ? Number(l.amount) : unitPriceOf(p) * (Number(l.quantity) || 0));
+          }, 0);
           const manualHistory = [...manualOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
           const todaySum = manualToday.reduce((s, o) => s + Number(o.total_amount ?? 0), 0);
           return (
@@ -3433,90 +3664,131 @@ export default function AdminPage() {
               {/* Entry form */}
               <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
                 <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 mb-4">New in-store sale</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <div className="sm:col-span-2 lg:col-span-1">
-                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Product *</label>
-                    <select
-                      value={manualForm.product_id}
-                      onChange={(e) => {
-                        const p = products.find((x) => x.id === e.target.value);
-                        setManualForm((f) => {
-                          const unit = p ? (p.discount_price != null && p.discount_price < p.price ? p.discount_price : p.price) : null;
-                          const qty = Math.max(1, Number(f.quantity) || 1);
-                          return {
-                            ...f,
-                            product_id: e.target.value,
-                            product_code: p?.product_code ?? '',
-                            size: '',
-                            amount: unit != null ? String(unit * qty) : f.amount,
-                          };
-                        });
-                      }}
-                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
-                    >
-                      <option value="">Select a product…</option>
-                      {[...products].sort((a, b) => a.title.localeCompare(b.title)).map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.title} — ৳{Number(p.discount_price ?? p.price).toFixed(0)} ({p.stock_count} in stock)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Product code</label>
-                    <input
-                      type="text"
-                      value={manualForm.product_code}
-                      readOnly
-                      placeholder="Auto from product"
-                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono bg-stone-50 text-stone-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Size {selectedProduct && selectedProduct.sizes.length > 0 ? '*' : ''}</label>
-                    <select
-                      value={manualForm.size}
-                      onChange={(e) => setManualForm((f) => ({ ...f, size: e.target.value }))}
-                      disabled={!selectedProduct || selectedProduct.sizes.length === 0}
-                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white disabled:bg-stone-50 disabled:text-stone-400"
-                    >
-                      <option value="">{selectedProduct && selectedProduct.sizes.length > 0 ? 'Select size…' : '—'}</option>
-                      {(selectedProduct?.sizes ?? []).map((size) => {
-                        const qty = selectedProduct?.product_sizes?.find((ps) => ps.size === size)?.quantity ?? 0;
-                        return (
-                          <option key={size} value={size} disabled={qty <= 0}>
-                            {size} ({qty} left)
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Quantity *</label>
-                    <input
-                      type="number" min="1" value={manualForm.quantity}
-                      onChange={(e) => {
-                        setManualForm((f) => {
-                          const prevQty = Math.max(1, Number(f.quantity) || 1);
-                          const newQty = Math.max(1, Number(e.target.value) || 1);
-                          // Auto-fill the amount while it still holds the auto value
-                          // (unit × qty); never clobber a manually-edited amount.
-                          const wasAuto = f.amount === '' || Number(f.amount) === unitPrice * prevQty;
-                          return { ...f, quantity: e.target.value, amount: unitPrice > 0 && wasAuto ? String(unitPrice * newQty) : f.amount };
-                        });
-                      }}
-                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Amount (৳) *</label>
-                    <input
-                      type="number" min="0" value={manualForm.amount}
-                      onChange={(e) => setManualForm((f) => ({ ...f, amount: e.target.value }))}
-                      placeholder={unitPrice ? `e.g. ${unitPrice * (Number(manualForm.quantity) || 1)}` : 'What the customer paid'}
-                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                    />
-                  </div>
+                {/* Product lines — one row per product so a customer can buy several different items */}
+                <div className="space-y-3 mb-4">
+                  {manualLines.map((line, idx) => {
+                    const lineProduct = products.find((p) => p.id === line.product_id) ?? null;
+                    const lineUnit = unitPriceOf(lineProduct);
+                    const lineQty = Math.max(1, Number(line.quantity) || 1);
+                    const lineSizeEntry = lineProduct && line.size
+                      ? lineProduct.product_sizes?.find((ps) => ps.size === line.size)
+                      : null;
+                    const lineAvailable = lineSizeEntry ? lineSizeEntry.quantity : (lineProduct?.stock_count ?? 0);
+                    const updateLine = (patch: Partial<ManualLine>) =>
+                      setManualLines((lines) => lines.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+                    return (
+                    <div key={idx} className="rounded-2xl border border-stone-100 bg-stone-50/60 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Item {idx + 1}</p>
+                        {manualLines.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setManualLines((lines) => lines.filter((_, i) => i !== idx))}
+                            title="Remove this item"
+                            className="p-1.5 text-stone-300 hover:text-red-500 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                        </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div className="sm:col-span-2">
+                        <label className="block text-sm font-medium text-stone-700 mb-1.5">Product *</label>
+                        <select
+                          value={line.product_id}
+                          onChange={(e) => {
+                            const p = products.find((x) => x.id === e.target.value);
+                            const unit = unitPriceOf(p);
+                            updateLine({
+                              product_id: e.target.value,
+                              product_code: p?.product_code ?? '',
+                              size: '',
+                              amount: unit > 0 ? String(unit * lineQty) : '',
+                            });
+                          }}
+                          className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                        >
+                          <option value="">Select a product…</option>
+                          {[...products].sort((a, b) => a.title.localeCompare(b.title)).map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.title} — ৳{Number(p.discount_price ?? p.price).toFixed(0)} ({p.stock_count} in stock)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 mb-1.5">Size {lineProduct && lineProduct.sizes.length > 0 ? '*' : ''}</label>
+                        <select
+                          value={line.size}
+                          onChange={(e) => updateLine({ size: e.target.value })}
+                          disabled={!lineProduct || lineProduct.sizes.length === 0}
+                          className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white disabled:bg-stone-50 disabled:text-stone-400"
+                        >
+                          <option value="">{lineProduct && lineProduct.sizes.length > 0 ? 'Select size…' : '—'}</option>
+                          {(lineProduct?.sizes ?? []).map((size) => {
+                            const qty = lineProduct?.product_sizes?.find((ps) => ps.size === size)?.quantity ?? 0;
+                            return (
+                              <option key={size} value={size} disabled={qty <= 0}>
+                                {size} ({qty} left)
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 mb-1.5">Product code</label>
+                        <input
+                          type="text"
+                          value={line.product_code}
+                          readOnly
+                          placeholder="Auto from product"
+                          className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono bg-stone-50 text-stone-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 mb-1.5">Quantity *</label>
+                        <input
+                          type="number" min="1" value={line.quantity}
+                          onChange={(e) => {
+                            const prevQty = lineQty;
+                            const newQty = Math.max(1, Number(e.target.value) || 1);
+                            // Auto-fill the amount while it still holds the auto value
+                            // (unit × qty); never clobber a manually-edited amount.
+                            const wasAuto = line.amount === '' || Number(line.amount) === lineUnit * prevQty;
+                            updateLine({ quantity: e.target.value, amount: lineUnit > 0 && wasAuto ? String(lineUnit * newQty) : line.amount });
+                          }}
+                          className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 mb-1.5">Amount (৳) *</label>
+                        <input
+                          type="number" min="0" value={line.amount}
+                          onChange={(e) => updateLine({ amount: e.target.value })}
+                          placeholder={lineUnit ? `e.g. ${lineUnit * lineQty}` : 'What the customer paid'}
+                          className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                        />
+                      </div>
+                      </div>
+                      {lineProduct && (
+                        <p className="text-sm text-stone-500 mt-3">
+                          Stock available: <span className={`font-bold ${lineAvailable >= lineQty ? 'text-emerald-600' : 'text-red-500'}`}>{lineAvailable}</span>
+                        </p>
+                      )}
+                    </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => setManualLines((lines) => [...lines, { product_id: '', product_code: '', size: '', quantity: '1', amount: '' }])}
+                    className="flex items-center gap-1.5 text-sm font-semibold text-brand-600 hover:text-brand-500 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" /> Add another product
+                  </button>
+                </div>
+
+                {/* Customer, seller & delivery details — shared across every item in the sale */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4 border-t border-stone-100">
                   <div className="relative">
                     <label className="block text-sm font-medium text-stone-700 mb-1.5">Seller name *</label>
                     <input
@@ -3563,6 +3835,17 @@ export default function AdminPage() {
                       onChange={(e) => setManualForm((f) => ({ ...f, customer_name: e.target.value }))}
                       placeholder="Defaults to Walk-in customer"
                       className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                      Customer phone <span className="text-stone-400 font-normal">(optional)</span>
+                    </label>
+                    <input
+                      type="tel" value={manualForm.customer_phone}
+                      onChange={(e) => setManualForm((f) => ({ ...f, customer_phone: toAsciiDigits(e.target.value) }))}
+                      placeholder="e.g. 01712345678"
+                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
                     />
                   </div>
                   <div>
@@ -3621,18 +3904,18 @@ export default function AdminPage() {
                 </div>
                 <div className="flex flex-wrap items-center gap-4 mt-5 pt-4 border-t border-stone-100">
                   <p className="text-sm text-stone-500">
-                    {selectedProduct ? (
+                    {manualLines.some((l) => l.product_id) ? (
                       <>
-                        Stock available: <span className={`font-bold ${available >= (Number(manualForm.quantity) || 1) ? 'text-emerald-600' : 'text-red-500'}`}>{available}</span>
-                        {manualTotal > 0 && <> · Sale total: <span className="font-bold text-stone-900">৳{manualTotal.toLocaleString('en-IN')}</span></>}
+                        {manualLines.filter((l) => l.product_id).length} item{manualLines.filter((l) => l.product_id).length === 1 ? '' : 's'} in this sale
+                        {saleTotal > 0 && <> · Sale total: <span className="font-bold text-stone-900">৳{saleTotal.toLocaleString('en-IN')}</span></>}
                       </>
                     ) : (
-                      'Pick a product to see stock and price.'
+                      'Add the products the customer bought.'
                     )}
                   </p>
                   <button
                     onClick={() => void handleSaveManualOrder()}
-                    disabled={manualSaving || !manualForm.product_id}
+                    disabled={manualSaving || !manualLines.some((l) => l.product_id)}
                     className="ml-auto flex items-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white font-semibold px-5 py-2.5 rounded-xl transition-all shadow-sm"
                   >
                     {manualSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Store className="w-4 h-4" />}
@@ -3862,6 +4145,29 @@ export default function AdminPage() {
                 <FinCard label="To collect on delivery" value={formatBDT(finStats.due)} sub="Customer pays the courier" tone={finStats.due > 0 ? 'amber' : 'stone'} icon={Clock} />
                 <FinCard label="Delivery fees charged" value={formatBDT(finStats.deliveryCollected)} sub="Added to customer bills" tone="sky" icon={Truck} />
                 <FinCard label="Discounts given" value={`−${formatBDT(finStats.discounts)}`} sub={`${Object.keys(finStats.couponSpend).length} coupon(s) used`} tone="amber" icon={Percent} />
+              </div>
+            </div>
+
+            {/* In-store sales — walk-in purchases recorded by sellers */}
+            <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-5">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                    <Store className="w-3.5 h-3.5" /> In-store sales · Manual orders
+                  </p>
+                  <p className="text-sm text-stone-500 mt-0.5">
+                    Products sold in the shop {finRange === 'all' ? 'all time' : 'in the selected range'} — how much and how many.
+                  </p>
+                </div>
+                <button onClick={() => setTab('manual')} className="text-xs font-semibold text-brand-600 hover:text-brand-500 transition-colors">
+                  Open Manual Orders →
+                </button>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <FinCard label="Amount sold" value={formatBDT(manualFin.amount)} sub={`${manualFin.count} sale${manualFin.count === 1 ? '' : 's'} recorded`} tone="emerald" icon={Banknote} />
+                <FinCard label="Items sold" value={String(manualFin.items)} sub="Total units sold in store" tone="sky" icon={Package} />
+                <FinCard label="Top seller" value={manualFin.topSeller.name || '—'} sub={manualFin.topSeller.name ? `${manualFin.topSeller.count} sale(s) · ${formatBDT(manualFin.topSeller.amount)}` : 'No sales in this range'} tone="brand" icon={Users} />
+                <FinCard label="Share of revenue" value={`${finStats.grossRevenue > 0 ? Math.round((manualFin.amount / (manualFin.amount + finStats.grossRevenue)) * 100) : 0}%`} sub="In-store vs website revenue" tone="stone" icon={TrendingUp} />
               </div>
             </div>
 
@@ -4532,7 +4838,30 @@ export default function AdminPage() {
 
          {/* ── Settings tab ── */}
          {tab === 'settings' && (
-           <div className="space-y-8">
+           <div className="space-y-6">
+             {/* Settings sub-tab navigation */}
+             <div className="flex flex-wrap gap-2 bg-white rounded-2xl border border-stone-100 shadow-sm p-2">
+               {([
+                 { id: 'storefront' as const, label: 'Storefront', icon: <Image className="w-4 h-4" /> },
+                 { id: 'delivery' as const, label: 'Delivery & Payments', icon: <Truck className="w-4 h-4" /> },
+                 { id: 'inventory' as const, label: 'Inventory', icon: <Package className="w-4 h-4" /> },
+                 { id: 'activity' as const, label: 'Activity Log', icon: <Clock className="w-4 h-4" /> },
+                 ...(isSuperAdmin ? [{ id: 'team' as const, label: 'Admin Team', icon: <Users className="w-4 h-4" /> }] : []),
+               ]).map((st) => (
+                 <button
+                   key={st.id}
+                   onClick={() => setSettingsTab(st.id)}
+                   className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                     settingsTab === st.id ? 'bg-stone-900 text-white shadow-md' : 'text-stone-600 hover:bg-stone-100'
+                   }`}
+                 >
+                   {st.icon} {st.label}
+                 </button>
+               ))}
+             </div>
+
+             {settingsTab === 'inventory' && (
+             <>
              {/* ── Finance & inventory settings ── */}
              <div>
                <h2 className="font-display text-xl font-bold text-stone-900">Finance &amp; Inventory</h2>
@@ -4561,6 +4890,11 @@ export default function AdminPage() {
                </div>
              </div>
 
+             </>
+             )}
+
+             {settingsTab === 'storefront' && (
+             <>
              {/* ── WhatsApp numbers ── */}
              <div>
                <h2 className="font-display text-xl font-bold text-stone-900">WhatsApp Numbers</h2>
@@ -4602,19 +4936,49 @@ export default function AdminPage() {
                </div>
              </div>
 
+             </>
+             )}
+
+             {settingsTab === 'activity' && (
+             <>
              {/* ── Admin activity log ── */}
              <div>
-               <h2 className="font-display text-xl font-bold text-stone-900">Admin Activity Log</h2>
-               <p className="text-sm text-stone-500 mt-1">Who did what — status changes, bookings, deletions, product edits, stock changes. Newest first.</p>
+               <div className="flex flex-wrap items-center justify-between gap-3">
+                 <div>
+                   <h2 className="font-display text-xl font-bold text-stone-900">Admin Activity Log</h2>
+                   <p className="text-sm text-stone-500 mt-1">Who did what — status changes, bookings, deletions, product edits, stock changes. Newest first.</p>
+                 </div>
+                 <div className="flex items-center gap-2">
+                   <label className="text-sm font-medium text-stone-700">Filter by admin</label>
+                   <select
+                     value={activityAdminFilter}
+                     onChange={(e) => setActivityAdminFilter(e.target.value)}
+                     className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                   >
+                     <option value="all">All admins</option>
+                     {[...new Set(adminLogs.map((l) => (l.admin_id ?? '').trim()).filter(Boolean))]
+                       .sort((a, b) => a.localeCompare(b))
+                       .map((admin) => (
+                         <option key={admin} value={admin}>{admin}</option>
+                       ))}
+                   </select>
+                 </div>
+               </div>
                {adminLogs.length === 0 ? (
                  <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4">
                    <p className="text-sm text-stone-400">
                      No activity recorded yet. Actions start appearing once the admin-expansion SQL migration is applied and admins use the panel.
                    </p>
                  </div>
+               ) : filteredActivityLogs.length === 0 ? (
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4">
+                   <p className="text-sm text-stone-400">
+                     No activity by "{activityAdminFilter}" in the loaded log — try another admin or "All admins".
+                   </p>
+                 </div>
                ) : (
                  <div className="bg-white rounded-2xl shadow-sm border border-stone-100 divide-y divide-stone-100 mt-4 max-h-96 overflow-y-auto">
-                   {adminLogs.slice(0, 80).map((log) => (
+                   {filteredActivityLogs.slice(0, 80).map((log) => (
                      <div key={log.id} className="flex items-center gap-3 px-4 py-2.5">
                        <span className="text-[10px] font-bold uppercase bg-stone-900 text-white px-2 py-0.5 rounded-md flex-shrink-0">{log.admin_id}</span>
                        <span className="text-xs font-semibold text-brand-600 flex-shrink-0">{log.action.replace(/_/g, ' ')}</span>
@@ -4624,9 +4988,19 @@ export default function AdminPage() {
                        </span>
                      </div>
                    ))}
+                   {filteredActivityLogs.length > 80 && (
+                     <div className="px-4 py-2 text-[11px] text-stone-400">
+                       Showing newest 80 of {filteredActivityLogs.length} matching entries — filter by admin to narrow further.
+                     </div>
+                   )}
                  </div>
                )}
              </div>
+             </>
+             )}
+
+             {settingsTab === 'storefront' && (
+             <>
              {/* ── Announcement Bar section ── */}
              <div>
                <div className="flex items-center justify-between mb-4">
@@ -4744,6 +5118,11 @@ export default function AdminPage() {
                </div>
              </div>
 
+             </>
+             )}
+
+             {settingsTab === 'delivery' && (
+             <>
              {/* ── Steadfast courier rates + checkout payment ── */}
              <div className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden">
                <div className="px-6 py-5 border-b border-stone-100">
@@ -4795,6 +5174,17 @@ export default function AdminPage() {
                    />
                    <p className="text-xs text-stone-400 mt-1">Shown on checkout as the personal bKash number customers send the delivery-fee advance to. Falls back to the built-in placeholder if left blank.</p>
                  </div>
+                 <div>
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Checkout Nagad number (advance payment)</label>
+                   <input
+                     type="tel"
+                     value={checkoutNagad}
+                     onChange={(e) => setCheckoutNagad(e.target.value)}
+                     placeholder="e.g. 01812-345678"
+                     className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
+                   />
+                   <p className="text-xs text-stone-400 mt-1">Adds a bKash / Nagad switch on checkout and shows this as the personal Nagad number. Leave blank to offer bKash only.</p>
+                 </div>
                  <button onClick={handleSaveSteadfastRates} disabled={steadfastSaving}
                    className="flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm">
                    {steadfastSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -4802,6 +5192,113 @@ export default function AdminPage() {
                  </button>
                </div>
              </div>
+             </>
+             )}
+
+             {settingsTab === 'team' && isSuperAdmin && (
+               <div className="space-y-4">
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6">
+                   <h3 className="font-display text-lg font-bold text-stone-900">Add an admin</h3>
+                   <p className="text-sm text-stone-500 mt-0.5">
+                     The email must already exist as a user in Supabase (Dashboard → Authentication → Users) with a password — access is granted here.
+                   </p>
+                   <div className="flex flex-wrap items-end gap-3 mt-4">
+                     <div className="flex-1 min-w-[220px]">
+                       <label className="block text-sm font-medium text-stone-700 mb-1.5">Email</label>
+                       <input
+                         type="email"
+                         value={newTeamEmail}
+                         onChange={(e) => setNewTeamEmail(e.target.value)}
+                         placeholder="admin2@ornix.com.bd"
+                         className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                       />
+                     </div>
+                     <div>
+                       <label className="block text-sm font-medium text-stone-700 mb-1.5">Role</label>
+                       <select
+                         value={newTeamRole}
+                         onChange={(e) => setNewTeamRole(e.target.value as 'admin' | 'super_admin')}
+                         className="border border-stone-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                       >
+                         <option value="admin">Admin</option>
+                         <option value="super_admin">Super admin</option>
+                       </select>
+                     </div>
+                     <button
+                       onClick={() => void handleAddTeamMember()}
+                       disabled={teamBusy !== '' && teamBusy === newTeamEmail.trim().toLowerCase()}
+                       className="flex items-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-semibold px-4 py-2.5 rounded-xl transition-all shadow-sm"
+                     >
+                       {teamBusy !== '' && teamBusy === newTeamEmail.trim().toLowerCase() ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                       Add admin
+                     </button>
+                   </div>
+                 </div>
+
+                 <div className="space-y-3">
+                   {teamRows.map((row) => (
+                     <div key={row.email} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
+                       <div className="flex flex-wrap items-center justify-between gap-3">
+                         <div className="flex items-center gap-3 min-w-0">
+                           <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                             row.role === 'super_admin' ? 'bg-purple-100 text-purple-600' : 'bg-stone-100 text-stone-500'
+                           }`}>
+                             <ShieldCheck className="w-4.5 h-4.5" />
+                           </div>
+                           <div className="min-w-0">
+                             <p className="font-semibold text-stone-900 text-sm truncate">{row.email}</p>
+                             <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                               row.role === 'super_admin' ? 'bg-purple-100 text-purple-600' : 'bg-stone-100 text-stone-500'
+                             }`}>
+                               {row.role === 'super_admin' ? 'Super admin' : 'Admin'}
+                             </span>
+                           </div>
+                         </div>
+                         {row.email !== adminEmail && (
+                           <button
+                             onClick={() => void handleRemoveTeamMember(row.email)}
+                             disabled={teamBusy === row.email}
+                             title="Remove from the admin team"
+                             className="p-2 text-stone-300 hover:text-red-500 disabled:opacity-40 transition-colors"
+                           >
+                             {teamBusy === row.email ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                           </button>
+                         )}
+                       </div>
+                       {row.role === 'super_admin' ? (
+                         <p className="text-xs text-stone-400 mt-3">Super admins have full access to every tab and manage this team.</p>
+                       ) : (
+                         <div className="mt-4 pt-4 border-t border-stone-100">
+                           <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">Tab access</p>
+                           <div className="flex flex-wrap gap-2">
+                             {ALL_CAPABILITIES.filter((c) => c.key !== 'team').map((c) => {
+                               const allowed = row.permissions[c.key] !== false;
+                               return (
+                                 <button
+                                   key={c.key}
+                                   onClick={() => void handleToggleCapability(row.email, c.key, allowed)}
+                                   disabled={teamBusy === row.email + c.key}
+                                   title={allowed ? `Click to hide ${c.label} from ${row.email}` : `Click to allow ${c.label} for ${row.email}`}
+                                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all disabled:opacity-50 ${
+                                     allowed
+                                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                       : 'bg-stone-100 text-stone-400 border border-stone-200 hover:bg-stone-200'
+                                   }`}
+                                 >
+                                   {allowed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                                   {c.label}
+                                 </button>
+                               );
+                             })}
+                           </div>
+                           <p className="text-[11px] text-stone-400 mt-2">Green = tab visible & writes allowed. Grey = hidden and blocked server-side too.</p>
+                         </div>
+                       )}
+                     </div>
+                   ))}
+                 </div>
+               </div>
+             )}
            </div>
          )}
        </div>

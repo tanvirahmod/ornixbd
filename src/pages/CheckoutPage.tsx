@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Check, ChevronRight, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash,
   ShieldCheck, ShoppingBag, Truck, Tag, X, Pencil, Banknote, AlertTriangle,
@@ -23,6 +23,29 @@ const FULL_ADVANCE_THRESHOLD = 1500;
 const BKASH_NUMBER = '01700-000000';
 
 type PaymentChoice = 'advance' | 'full';
+type PayChannel = 'bkash' | 'nagad';
+
+// Brand theming per wallet: bKash pink, Nagad orange.
+const CHANNEL_THEME = {
+  bkash: {
+    box: 'bg-gradient-to-br from-pink-50 to-rose-50 border border-pink-200',
+    soft: 'border-pink-100',
+    text: 'text-pink-600',
+    iconText: 'text-pink-600',
+    chip: 'text-pink-600 hover:text-pink-700 bg-pink-100 hover:bg-pink-200',
+    hover: 'hover:bg-pink-100',
+    focus: 'focus:ring-pink-400',
+  },
+  nagad: {
+    box: 'bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200',
+    soft: 'border-orange-100',
+    text: 'text-orange-600',
+    iconText: 'text-orange-500',
+    chip: 'text-orange-600 hover:text-orange-700 bg-orange-100 hover:bg-orange-200',
+    hover: 'hover:bg-orange-100',
+    focus: 'focus:ring-orange-400',
+  },
+} as const;
 type CheckoutStep = 1 | 2 | 3;
 type DeliveryZone = 'dhaka_city' | 'dhaka_suburban' | 'outside_dhaka';
 
@@ -30,7 +53,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const CHECKOUT_STORAGE_KEY = 'ornix_checkout_v2';
 
-function loadPersistedCheckout(): { name: string; phone: string; address: string; deliveryDistrict: string; deliveryThana: string; paymentChoice: PaymentChoice; bkashNumber: string; trxId: string } | null {
+function loadPersistedCheckout(): { name: string; phone: string; address: string; deliveryDistrict: string; deliveryThana: string; paymentChoice: PaymentChoice; payChannel: PayChannel; bkashNumber: string; trxId: string } | null {
   try {
     const raw = window.sessionStorage.getItem(CHECKOUT_STORAGE_KEY);
     if (!raw) return null;
@@ -43,6 +66,7 @@ function loadPersistedCheckout(): { name: string; phone: string; address: string
       deliveryThana: typeof parsed.deliveryThana === 'string' ? parsed.deliveryThana : '',
       address: typeof parsed.address === 'string' ? parsed.address : '',
       paymentChoice: parsed.paymentChoice === 'full' ? 'full' : 'advance',
+      payChannel: parsed.payChannel === 'nagad' ? 'nagad' : 'bkash',
       bkashNumber: typeof parsed.bkashNumber === 'string' ? parsed.bkashNumber : '',
       trxId: typeof parsed.trxId === 'string' ? parsed.trxId : '',
     };
@@ -101,6 +125,8 @@ export default function CheckoutPage() {
   });
   const [errors, setErrors] = useState({ name: '', phone: '', address: '', deliveryDistrict: '', deliveryThana: '' });
   const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>(persisted?.paymentChoice ?? 'advance');
+  const [payChannel, setPayChannel] = useState<PayChannel>(persisted?.payChannel ?? 'bkash');
+  const [wallets, setWallets] = useState<{ bkash: string; nagad: string }>({ bkash: BKASH_NUMBER, nagad: '' });
   const [bkashNumber, setBkashNumber] = useState(persisted?.bkashNumber ?? '');
   const [trxId, setTrxId] = useState(persisted?.trxId ?? '');
   const [paymentErrors, setPaymentErrors] = useState({ bkashNumber: '', trxId: '' });
@@ -126,16 +152,15 @@ export default function CheckoutPage() {
     try {
       window.sessionStorage.setItem(
         CHECKOUT_STORAGE_KEY,
-        JSON.stringify({ ...form, paymentChoice, bkashNumber, trxId })
+        JSON.stringify({ ...form, paymentChoice, payChannel, bkashNumber, trxId })
       );
     } catch {
       // storage unavailable — the form just won't persist across reloads
     }
-  }, [form, paymentChoice, bkashNumber, trxId]);
+  }, [form, paymentChoice, payChannel, bkashNumber, trxId]);
 
-  // ── Steadfast courier charges + the bKash number to pay the advance to, editable in Admin → Settings ──
+  // ── Steadfast courier charges + the bKash/Nagad numbers to pay the advance to, editable in Admin → Settings ──
   const [zoneRates, setZoneRates] = useState<Record<DeliveryZone, number> | null>(null);
-  const [payToBkash, setPayToBkash] = useState(BKASH_NUMBER);
   useEffect(() => {
     async function fetchZoneRates() {
       const { data } = await supabase.from('site_settings').select('key, value');
@@ -150,10 +175,23 @@ export default function CheckoutPage() {
         outside_dhaka: pick('steadfast_rate_outside_dhaka', 130),
       });
       const bkashRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_bkash_number');
-      setPayToBkash(bkashRow?.value?.trim() || BKASH_NUMBER);
+      const nagadRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_nagad_number');
+      setWallets({
+        bkash: bkashRow?.value?.trim() || BKASH_NUMBER,
+        nagad: nagadRow?.value?.trim() || '',
+      });
     }
     fetchZoneRates();
   }, []);
+  // bKash is always available; Nagad appears once the admin saves a Nagad number.
+  const payChannels = useMemo(() => {
+    const out: PayChannel[] = ['bkash'];
+    if (wallets.nagad) out.push('nagad');
+    return out;
+  }, [wallets.nagad]);
+  const effectiveChannel: PayChannel = payChannels.includes(payChannel) ? payChannel : 'bkash';
+  const payToWallet = effectiveChannel === 'nagad' ? wallets.nagad : wallets.bkash;
+  const channelLabel = effectiveChannel === 'nagad' ? t('payChannelNagad') : t('payChannelBkash');
 
   useEffect(() => {
     async function fetchProduct() {
@@ -364,8 +402,8 @@ export default function CheckoutPage() {
     if (advanceAmount > 0 && !noAdvanceRequired) {
       if (!bkashNumber.trim()) next.bkashNumber = t('bkashNumberRequired');
       else if (!isValidBdMobile(bkashNumber)) next.bkashNumber = t('bkashNumberInvalid');
-      if (!trxId.trim()) next.trxId = t('trxIdRequired');
-      else if (!/^[A-Za-z0-9]{6,20}$/.test(toAsciiDigits(trxId.trim()))) next.trxId = t('trxIdInvalid');
+      if (!trxId.trim()) next.trxId = t('trxIdRequired', { channel: channelLabel });
+      else if (!/^[A-Za-z0-9]{6,20}$/.test(toAsciiDigits(trxId.trim()))) next.trxId = t('trxIdInvalid', { channel: channelLabel });
     }
     setPaymentErrors(next);
     const agreed = agreeTerms || fullAdvanceRequired;
@@ -436,6 +474,9 @@ export default function CheckoutPage() {
       delivery_zone: form.deliveryDistrict || null,
       bkash_number: advanceAmount > 0 && !noAdvanceRequired ? bkashNumber.trim() : null,
       trx_id: advanceAmount > 0 && !noAdvanceRequired ? trxId.trim() : null,
+      // Which mobile wallet the advance was sent through (bKash or Nagad).
+      // Column may not exist yet — the payload fallback chain below handles that.
+      payment_channel: advanceAmount > 0 && !noAdvanceRequired ? effectiveChannel : null,
     };
 
     // Fall back to progressively fewer columns for older schemas
@@ -660,11 +701,11 @@ export default function CheckoutPage() {
           </div>
           <p className="text-xs text-stone-400 mb-8 flex items-center justify-center gap-1.5 text-left">
             {noAdvanceRequired ? (
-              <><Banknote className="w-3.5 h-3.5 flex-shrink-0 text-emerald-500" /> {t('codOnlyDesc', { total: total.toFixed(0) })}</>
+              <><Banknote className="w-3.5 h-3.5 flex-shrink-0 text-emerald-500" /> {t('codOnlyDesc', { total: total.toFixed(0), channel: channelLabel })}</>
             ) : paymentChoice === 'full' ? (
-              <><ShieldCheck className="w-3.5 h-3.5 flex-shrink-0 text-emerald-500" /> {t('payFullNowDesc', { total: total.toFixed(0) })}</>
+              <><ShieldCheck className="w-3.5 h-3.5 flex-shrink-0 text-emerald-500" /> {t('payFullNowDesc', { total: total.toFixed(0), channel: channelLabel })}</>
             ) : (
-              <><Wallet className="w-3.5 h-3.5 flex-shrink-0 text-pink-500" /> {t('payDeliveryNowDesc', { advance: round2(advanceAmount).toFixed(0), due: dueAmount.toFixed(0) })}</>
+              <><Wallet className={`w-3.5 h-3.5 flex-shrink-0 ${CHANNEL_THEME[effectiveChannel].iconText}`} /> {t('payDeliveryNowDesc', { advance: round2(advanceAmount).toFixed(0), due: dueAmount.toFixed(0), channel: channelLabel })}</>
             )}
           </p>
           <button
@@ -701,7 +742,7 @@ export default function CheckoutPage() {
           : 'border-stone-200 bg-white hover:border-stone-300'
     }`;
 
-  const paymentOptions = [
+  const paymentOptions = (channelName: string) => [
     {
       id: 'advance' as PaymentChoice,
       icon: noAdvanceRequired ? <Banknote className="w-5 h-5" /> : <Wallet className="w-5 h-5" />,
@@ -709,10 +750,10 @@ export default function CheckoutPage() {
         ? t('codOnlyTitle')
         : t('payDeliveryNowTitle'),
       desc: noAdvanceRequired
-        ? t('codOnlyDesc', { total: total.toFixed(0) })
+        ? t('codOnlyDesc', { total: total.toFixed(0), channel: channelName })
         : deliveryFee === 0
-          ? t('payNothingNowDesc', { due: total.toFixed(0) })
-          : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0) }),
+          ? t('payNothingNowDesc', { due: total.toFixed(0), channel: channelName })
+          : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0), channel: channelName }),
       disabled: fullAdvanceRequired,
       advance: noAdvanceRequired ? 0 : deliveryFee,
       due: noAdvanceRequired ? total : round2(total - deliveryFee),
@@ -721,7 +762,7 @@ export default function CheckoutPage() {
       id: 'full' as PaymentChoice,
       icon: <ShieldCheck className="w-5 h-5" />,
       title: t('payFullNowTitle'),
-      desc: t('payFullNowDesc', { total: total.toFixed(0) }),
+      desc: t('payFullNowDesc', { total: total.toFixed(0), channel: channelName }),
       disabled: noAdvanceRequired,
       advance: total,
       due: 0,
@@ -1101,7 +1142,7 @@ export default function CheckoutPage() {
 
                   {/* Payment options */}
                   <div className="space-y-3">
-                    {paymentOptions.map((option) => {
+                    {paymentOptions(channelLabel).map((option) => {
                       const selected = paymentChoice === option.id;
                       return (
                         <button
@@ -1138,35 +1179,58 @@ export default function CheckoutPage() {
 
                   {/* Advance instructions (only when something must be sent now) */}
                   {advanceAmount > 0 ? (
-                    <div className="bg-gradient-to-br from-pink-50 to-rose-50 border border-pink-200 rounded-2xl p-4 space-y-3">
+                    <div className={`${CHANNEL_THEME[effectiveChannel].box} rounded-2xl p-4 space-y-3`}>
                       <h3 className="font-bold text-stone-800 text-sm flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-pink-600" /> {t('paymentInstructionsTitle')}
+                        <Wallet className={`w-4 h-4 ${CHANNEL_THEME[effectiveChannel].iconText}`} /> {t('paymentInstructionsTitle')}
                       </h3>
-                      <p className="text-sm text-stone-600 leading-relaxed">{t('sendMoneyInstruction')}</p>
-                      <div className="flex items-center justify-between gap-3 bg-white/80 border border-pink-100 rounded-xl px-4 py-3">
-                        <span className="text-xs font-semibold text-stone-500">{t('bkashPersonalLabel')}</span>
+                      {payChannels.length > 1 && (
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-stone-500">{t('payChannelLabel')}</span>
+                          <div className={`flex gap-1 bg-white/80 ${CHANNEL_THEME[effectiveChannel].soft} rounded-xl p-1`}>
+                            {payChannels.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => setPayChannel(c)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                                  effectiveChannel === c
+                                    ? 'bg-brand-500 text-white shadow-sm'
+                                    : `text-stone-500 ${CHANNEL_THEME[effectiveChannel].hover}`
+                                }`}
+                              >
+                                {c === 'nagad' ? t('payChannelNagad') : t('payChannelBkash')}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <p className="text-sm text-stone-600 leading-relaxed">{t('sendMoneyInstruction', { channel: channelLabel })}</p>
+                      <div className={`flex items-center justify-between gap-3 bg-white/80 ${CHANNEL_THEME[effectiveChannel].soft} rounded-xl px-4 py-3`}>
+                        <span className="text-xs font-semibold text-stone-500">
+                          {effectiveChannel === 'nagad' ? t('nagadPersonalLabel') : t('bkashPersonalLabel')}
+                        </span>
                         <span className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-pink-600">{payToBkash}</span>
+                          <span className={`font-mono font-bold ${CHANNEL_THEME[effectiveChannel].text}`}>{payToWallet}</span>
                           <button
                             type="button"
                             onClick={() => {
-                              navigator.clipboard?.writeText(payToBkash.replace(/[^0-9]/g, '')).then(() => {
+                              navigator.clipboard?.writeText(payToWallet.replace(/[^0-9]/g, '')).then(() => {
                                 setBkashCopied(true);
                                 window.setTimeout(() => setBkashCopied(false), 2000);
                               }).catch(() => { /* clipboard unavailable */ });
                             }}
-                            className="text-[11px] font-bold text-pink-600 hover:text-pink-700 bg-pink-100 hover:bg-pink-200 px-2 py-1 rounded-lg transition-colors"
+                            className={`text-[11px] font-bold ${CHANNEL_THEME[effectiveChannel].chip} px-2 py-1 rounded-lg transition-colors`}
                           >
                             {bkashCopied ? t('copiedShort') : t('copyShort')}
                           </button>
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div className="bg-white/80 border border-pink-100 rounded-xl px-4 py-2.5">
+                        <div className={`bg-white/80 ${CHANNEL_THEME[effectiveChannel].soft} rounded-xl px-4 py-2.5`}>
                           <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">{t('advanceAmountLabel')}</p>
                           <p className="font-bold text-stone-900">৳{advanceAmount.toFixed(0)}</p>
                         </div>
-                        <div className="bg-white/80 border border-pink-100 rounded-xl px-4 py-2.5">
+                        <div className={`bg-white/80 ${CHANNEL_THEME[effectiveChannel].soft} rounded-xl px-4 py-2.5`}>
                           <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">{t('dueOnDeliveryLabel')}</p>
                           <p className="font-bold text-stone-900">{dueAmount === 0 ? '৳0' : `৳${dueAmount.toFixed(0)}`}</p>
                         </div>
@@ -1177,12 +1241,12 @@ export default function CheckoutPage() {
                       <p className="flex items-center gap-2 text-sm text-emerald-700 font-bold">
                         <Banknote className="w-4 h-4" /> {t('codOnlyTitle')}
                       </p>
-                      <p className="text-sm text-emerald-700/90">{t('codOnlyDesc', { total: total.toFixed(0) })}</p>
+                      <p className="text-sm text-emerald-700/90">{t('codOnlyDesc', { total: total.toFixed(0), channel: channelLabel })}</p>
                       <p className="text-xs text-emerald-600/80">{t('codNote')}</p>
                     </div>
                   ) : (
                     <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-sm text-emerald-700 font-medium">
-                      {t('payNothingNowDesc', { due: dueAmount.toFixed(0) })}
+                      {t('payNothingNowDesc', { due: dueAmount.toFixed(0), channel: channelLabel })}
                     </div>
                   )}
 
@@ -1191,14 +1255,14 @@ export default function CheckoutPage() {
                     <>
                       <div>
                         <label className="block text-sm font-medium text-stone-700 mb-1.5">
-                          <span className="flex items-center gap-1.5"><Phone className="w-4 h-4" /> {t('senderBkashLabel')}</span>
+                          <span className="flex items-center gap-1.5"><Phone className="w-4 h-4" /> {t('senderBkashLabel', { channel: channelLabel })}</span>
                         </label>
                         <input
                           type="tel"
                           value={bkashNumber}
                           onChange={(e) => { setBkashNumber(toAsciiDigits(e.target.value)); setPaymentErrors({ ...paymentErrors, bkashNumber: '' }); }}
                           placeholder={t('senderBkashPlaceholder')}
-                          className={`${inputCls(!!paymentErrors.bkashNumber)} focus:ring-pink-400`}
+                          className={`${inputCls(!!paymentErrors.bkashNumber)} ${CHANNEL_THEME[effectiveChannel].focus}`}
                         />
                         {paymentErrors.bkashNumber && <p className="text-xs text-red-500 mt-1">{paymentErrors.bkashNumber}</p>}
                         <p className="text-xs text-stone-400 mt-1.5">{t('senderBkashHint')}</p>
@@ -1213,7 +1277,7 @@ export default function CheckoutPage() {
                           value={trxId}
                           onChange={(e) => { setTrxId(toAsciiDigits(e.target.value)); setPaymentErrors({ ...paymentErrors, trxId: '' }); }}
                           placeholder="9F2XQ1ABCD"
-                          className={`${inputCls(!!paymentErrors.trxId)} focus:ring-pink-400 uppercase`}
+                          className={`${inputCls(!!paymentErrors.trxId)} ${CHANNEL_THEME[effectiveChannel].focus} uppercase`}
                         />
                         {paymentErrors.trxId && <p className="text-xs text-red-500 mt-1">{paymentErrors.trxId}</p>}
                       </div>

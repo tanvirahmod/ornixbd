@@ -101,6 +101,8 @@ export type Order = {
   customer_address: string;
   bkash_number: string | null;
   trx_id: string | null;
+  /** Which mobile wallet the advance was sent through: 'bkash' | 'nagad' (not yet migrated — may be null). */
+  payment_channel: 'bkash' | 'nagad' | null;
   subtotal: number | null;
   delivery_fee: number | null;
   discount_amount: number | null;
