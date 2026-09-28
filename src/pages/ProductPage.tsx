@@ -5,17 +5,21 @@ import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
-import { extractProductCode, productParam } from '../lib/utils';
+import { extractProductCodeCandidates, productParam } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
+
+// One shared select for every product lookup on this page.
+const PRODUCT_SELECT = '*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity), size_chart_templates(id, name, measurements, created_at, updated_at)';
 
 export default function ProductPage() {
   const { t } = useLanguage();
   // Admin-configurable order number (Settings → WhatsApp Numbers)
   const { orderNumber: WHATSAPP_NUMBER } = useWhatsAppNumbers();
   const { productId: rawParam } = useParams<{ productId: string }>();
-  // Extract product_code from the end of the URL param (e.g. "drop-shoulder-tee-prd-00012")
-  const productCode = rawParam ? extractProductCode(rawParam) : null;
+  // product_code is parsed from the end of the URL param (e.g. "drop-shoulder-
+  // tee-prd-00012" or a custom code like "ferari-jacket-r0yal304"); code-less
+  // products fall back to the trailing uuid id (see fetchProduct below).
   const onNavigate = useNavigation();
   const { addItem } = useCart();
   const [product, setProduct] = useState<Product | null>(null);
@@ -29,30 +33,55 @@ export default function ProductPage() {
 
   useEffect(() => {
     async function fetchProduct() {
-      if (!productCode) {
+      if (!rawParam) {
         setLoading(false);
         return;
       }
 
-      const { data, error } = await supabase
-        .from('products')
-        .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity), size_chart_templates(id, name, measurements, created_at, updated_at)')
-        .eq('product_code', productCode)
-        .maybeSingle();
-
-      if (!error && data) {
-        const sorted = {
+      const apply = (data: Product | null) => {
+        if (!data) return;
+        setProduct({
           ...data,
           product_images: (data.product_images as Product['product_images'])?.sort(
             (a, b) => a.display_order - b.display_order
           ),
-        };
-        setProduct(sorted);
+        });
+      };
+
+      // 1) By product code — generated (`PRD-00001`) or custom (`R0YAL304`,
+      //    even one that itself contains a hyphen, e.g. `NX-001`).
+      for (const code of extractProductCodeCandidates(rawParam)) {
+        const { data } = await supabase
+          .from('products')
+          .select(PRODUCT_SELECT)
+          .eq('product_code', code)
+          .maybeSingle();
+        if (data) {
+          apply(data as Product);
+          setLoading(false);
+          return;
+        }
       }
+
+      // 2) Fallback for products without a code: the link ends in the uuid id.
+      const idMatch = rawParam.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+      if (idMatch) {
+        const { data } = await supabase
+          .from('products')
+          .select(PRODUCT_SELECT)
+          .eq('id', idMatch[1])
+          .maybeSingle();
+        if (data) {
+          apply(data as Product);
+          setLoading(false);
+          return;
+        }
+      }
+
       setLoading(false);
     }
     fetchProduct();
-  }, [productCode]);
+  }, [rawParam]);
 
   useEffect(() => {
     if (!product) return;

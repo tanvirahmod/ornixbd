@@ -8,7 +8,6 @@ export type TranslationKey =
   | 'premiumFashion'
   | 'shopCollection'
   | 'explore'
-  | 'freeDelivery'
   | 'qualityGuaranteed'
   | 'bkashPayment'
    | 'allProducts'
@@ -113,7 +112,6 @@ export type TranslationKey =
    | 'clearCart'
    | 'removeItem'
    | 'subtotal'
-   | 'freeDeliveryShort'
    | 'proceedToCheckout'
    | 'sizeLabel'
    | 'qtyLabel'
@@ -152,7 +150,6 @@ export type TranslationKey =
  | 'payNothingNowDesc'
  | 'payFullNowTitle'
  | 'payFullNowDesc'
- | 'fullAdvanceRequiredNote'
  | 'paymentInstructionsTitle'
  | 'sendMoneyInstruction'
  | 'bkashPersonalLabel'
@@ -226,7 +223,6 @@ const en: TranslationMap = {
     'Premium fashion crafted in Bangladesh. Quality fabrics, modern designs, delivered to your door across the country.',
   shopCollection: 'Shop Collection',
   explore: 'Explore',
-  freeDelivery: 'Free delivery over ৳1000',
   qualityGuaranteed: 'Quality guaranteed',
   bkashPayment: 'bKash payment',
   allProducts: 'All Products',
@@ -332,7 +328,6 @@ const en: TranslationMap = {
   clearCart: 'Clear cart',
   removeItem: 'Remove item',
   subtotal: 'Subtotal',
-  freeDeliveryShort: 'Free',
   proceedToCheckout: 'Proceed to Checkout',
   sizeLabel: 'Size',
   qtyLabel: 'Qty',
@@ -372,7 +367,6 @@ const en: TranslationMap = {
   payNothingNowDesc: 'Nothing to pay now — just pay ৳{{due}} in cash when your parcel arrives.',
   payFullNowTitle: 'Pay full amount in advance',
   payFullNowDesc: 'Send the full ৳{{total}} now via {{channel}} — nothing to pay on delivery.',
-  fullAdvanceRequiredNote: 'Orders of ৳{{threshold}} or more must be paid fully in advance.',
   paymentInstructionsTitle: 'How to pay the advance',
   sendMoneyInstruction: 'Send Money (not Cash Out) the advance amount to our personal {{channel}} number below, then enter your {{channel}} number and the TrxID from the confirmation SMS.',
   bkashPersonalLabel: 'bKash (Personal)',
@@ -439,7 +433,6 @@ const bn: TranslationMap = {
   brandName: 'অরনিক্স',
   home: 'হোম',
   continueShopping: 'কেনাকাটা চালিয়ে যান',
-  freeDeliveryShort: 'ফ্রি',
   sizeLabel: 'সাইজ',
   qtyLabel: 'পরিমাণ',
   itemsCountOne: '১টি আইটেম',
@@ -485,7 +478,6 @@ const bn: TranslationMap = {
   payNothingNowDesc: 'এখন কিছু দিতে হবে না — পার্সেল হাতে পেয়ে ৳{{due}} ক্যাশে দিন।',
   payFullNowTitle: 'পুরো টাকা এখনই পরিশোধ করুন',
   payFullNowDesc: 'এখনই {{channel}}-এ পুরো ৳{{total}} পাঠান — ডেলিভারিতে কিছুই দিতে হবে না।',
-  fullAdvanceRequiredNote: '৳{{threshold}} বা তার বেশি মূল্যের অর্ডার সম্পূর্ণ অগ্রিমে দিতে হয়।',
   paymentInstructionsTitle: 'অগ্রিম টাকা পাঠানোর নিয়ম',
   sendMoneyInstruction: 'নিচের পার্সোনাল {{channel}} নম্বরে Send Money (Cash Out নয়) করে অগ্রিম টাকা পাঠান, তারপর আপনার {{channel}} নম্বর ও কনফার্মেশন এসএমএস-এর TrxID লিখুন।',
   bkashPersonalLabel: 'বিকাশ (পার্সোনাল)',

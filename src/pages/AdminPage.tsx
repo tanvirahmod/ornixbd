@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';import {
   Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler, ShieldCheck,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown
+   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown, KeyRound
 } from 'lucide-react';
 import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon, AdminLog, StockMovement, Expense, Seller, SizeChartTemplate } from '../lib/supabase';
 import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
@@ -10,10 +10,11 @@ import { zoneForDistrict, DELIVERY_ZONES, type DeliveryZone } from '../component
 import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
 import ThanaSelect from '../components/ThanaSelect';
 import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, FinCard, FinDelta, DailyBars, EmptyState, ToastStack, nextToastId, type Toast } from '../admin/ui';
-import { printLabels } from '../lib/parcelLabel';
+import { printLabels, type StickersPerPage } from '../lib/parcelLabel';
 import { toAsciiDigits } from './CheckoutPage';
 import { printManualOrdersReport, manualOrderInDateRange } from '../lib/manualOrdersReport';
 import { useAdminAuth, ALL_CAPABILITIES } from '../lib/useAdminAuth';
+import { setAdminEmail, setAdminPassword, adminAddAdmin, adminDeleteAdmin } from '../lib/adminAuthManager';
 import { useNavigation } from '../lib/navigation';
 import { WHATSAPP_ORDER_KEY, WHATSAPP_CHAT_KEY, normalizeWhatsAppNumber } from '../lib/whatsapp';
 
@@ -176,7 +177,14 @@ export default function AdminPage() {
   const [teamRows, setTeamRows] = useState<{ email: string; role: 'super_admin' | 'admin'; permissions: Record<string, boolean> }[]>([]);
   const [teamBusy, setTeamBusy] = useState('');
   const [newTeamEmail, setNewTeamEmail] = useState('');
+  const [newTeamPassword, setNewTeamPassword] = useState('');
+  const [newTeamShowPassword, setNewTeamShowPassword] = useState(false);
   const [newTeamRole, setNewTeamRole] = useState<'admin' | 'super_admin'>('admin');
+  // Credential editor — one admin and one mode (email | password) open at a time.
+  const [credEdit, setCredEdit] = useState<{ email: string; mode: 'email' | 'password' } | null>(null);
+  const [credNewEmail, setCredNewEmail] = useState('');
+  const [credNewPassword, setCredNewPassword] = useState('');
+  const [credShowPassword, setCredShowPassword] = useState(false);
   // Activity log narrowed by the Settings "filter by admin" dropdown
   const filteredActivityLogs = useMemo(() => {
     if (activityAdminFilter === 'all') return adminLogs;
@@ -190,6 +198,22 @@ export default function AdminPage() {
   const [expandedFeedback, setExpandedFeedback] = useState<string | null>(null);
   const [deleteFeedbackConfirm, setDeleteFeedbackConfirm] = useState<string | null>(null);
   const [cancelOrderConfirm, setCancelOrderConfirm] = useState<string | null>(null);
+  // Cancel everything sharing the confirmed order's order_code — for cart
+  // purchases that's every item of the cart, for single-item orders just the row.
+  const handleCancelOrderConfirm = async () => {
+    const firstId = cancelOrderConfirm;
+    setCancelOrderConfirm(null);
+    if (!firstId) return;
+    const source = orders.find((x) => x.id === firstId);
+    if (!source) return;
+    const rows = source.order_code
+      ? orders.filter((o) => o.order_code === source.order_code)
+      : [source];
+    for (const row of rows) {
+      if (row.status !== 'canceled') await applyOrderStatus(row.id, 'canceled');
+    }
+    if (rows.length > 1) showToast('info', `Canceled all ${rows.length} items of ${source.order_code}.`);
+  };
   const [deleteOrderConfirm, setDeleteOrderConfirm] = useState<string | null>(null);
   const [deletingOrder, setDeletingOrder] = useState<string | null>(null);
 
@@ -252,6 +276,12 @@ export default function AdminPage() {
   const [manualForm, setManualForm] = useState({
     customer_name: '', customer_phone: '',
     seller_name: '', bkash: '',
+    // Which mobile wallet the customer paid through (bKash or Nagad).
+    payment_channel: 'bkash' as 'bkash' | 'nagad',
+    // 'full' = everything settled in store (sale final) · 'delivery_only' =
+    // customer paid just the delivery charge; the product amount is collected
+    // on delivery (COD via Steadfast) so the sale stays pending until shipped.
+    payment_mode: 'full' as 'full' | 'delivery_only',
     district: '', thana: '', address: '',
   });
   // ── Size chart templates (reusable measurement charts) ──
@@ -277,6 +307,11 @@ export default function AdminPage() {
   const [reportFrom, setReportFrom] = useState('');
   const [reportTo, setReportTo] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
+  // Manual-orders history (grouped, Orders-tab-style cards)
+  const [manualStatusFilter, setManualStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [manualQuery, setManualQuery] = useState('');
+  const [manualGroupsOpen, setManualGroupsOpen] = useState<Set<string>>(new Set()); // expanded multi-item sales, by order_code
+  const [manualStatusOpen, setManualStatusOpen] = useState<string | null>(null); // status dropdown per group
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const [merchantId, setMerchantId] = useState('');
   // bKash number shown on checkout for the delivery-fee advance (site_settings)
@@ -284,7 +319,9 @@ export default function AdminPage() {
   const [checkoutNagad, setCheckoutNagad] = useState('');
   const [labelFrom, setLabelFrom] = useState('');
   const [labelTo, setLabelTo] = useState('');
-  const [printingLabels, setPrintingLabels] = useState<string | null>(null); // 'bulk' | order id
+  const [printingLabels, setPrintingLabels] = useState<string | null>(null); // 'bulk' | group key
+  // A4 sticker-sheet density for parcel label printing (9/12/16 per page).
+  const [stickersPerPage, setStickersPerPage] = useState<StickersPerPage>(12);
   const [steadfastSaving, setSteadfastSaving] = useState(false);
 
   // ── Toasts ──
@@ -338,12 +375,101 @@ export default function AdminPage() {
     () => orders.filter((o) => o.order_source !== 'manual'),
     [orders]
   );
-  // ── Dashboard at-a-glance stats (Orders tab is website orders only) ──
-  const pendingOrders = storeOrders.filter((o) => o.status === 'pending').length;
-  const deliveredOrders = storeOrders.filter((o) => o.status === 'delivered').length;
-  const canceledOrders = storeOrders.filter((o) => o.status === 'canceled').length;
+
+  // ── Store orders grouped by purchase ──
+  // A multi-item cart checkout inserts one row per item, all sharing one
+  // order_code. The Orders tab shows ONE card per purchase (like a receipt);
+  // the rows ride along as the card's item list.
+  type StoreGroup = {
+    code: string;
+    key: string;
+    rows: Order[];
+    createdAt: string;
+    total: number;
+    due: number;
+    status: OrderStatus;
+  };
+  const storeGroups: StoreGroup[] = useMemo(() => {
+    const map = new Map<string, StoreGroup>();
+    for (const o of [...storeOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))) {
+      const code = o.order_code ?? o.id;
+      let g = map.get(code);
+      if (!g) {
+        map.set(code, g = { code, key: code, rows: [], createdAt: o.created_at, total: 0, due: 0, status: o.status });
+      }
+      g.rows.push(o);
+      g.total += Number(o.total_amount ?? 0);
+      g.due += Number(o.due_amount ?? 0);
+      // A purchase is canceled only if every row is; any other mix keeps the
+      // latest non-canceled status so partially-shipped carts still show up.
+      if (o.status !== 'canceled') g.status = o.status;
+      if (o.created_at < g.createdAt) g.createdAt = o.created_at;
+    }
+    return [...map.values()];
+  }, [storeOrders]);
+
+  // ── Dashboard at-a-glance stats (Orders tab is website orders only, one purchase = one order) ──
+  const pendingOrders = storeGroups.filter((g) => g.status === 'pending').length;
+  const deliveredOrders = storeGroups.filter((g) => g.status === 'delivered').length;
+  const canceledOrders = storeGroups.filter((g) => g.status === 'canceled').length;
   const manualOrders = orders.filter((o) => o.order_source === 'manual');
   const manualToday = manualOrders.filter((o) => new Date(o.created_at).toDateString() === new Date().toDateString());
+
+  // ── Manual-orders history: group multi-row sales by order_code so each
+  // purchase renders as one card (mirroring the Orders tab's per-order look). ──
+  type ManualGroup = {
+    code: string;
+    key: string;
+    rows: Order[];
+    customer: string;
+    phone: string;
+    seller: string | null;
+    address: string;
+    createdAt: string;
+    total: number;
+    status: OrderStatus;
+  };
+  const manualGroups: ManualGroup[] = useMemo(() => {
+    const map = new Map<string, ManualGroup>();
+    for (const o of [...manualOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))) {
+      const code = o.order_code ?? o.id;
+      let g = map.get(code);
+      if (!g) {
+        map.set(code, g = {
+          code,
+          key: code,
+          rows: [],
+          customer: o.customer_name,
+          phone: o.customer_phone,
+          seller: o.seller_name ?? null,
+          address: o.customer_address,
+          createdAt: o.created_at,
+          total: 0,
+          status: o.status,
+        });
+      }
+      g.rows.push(o);
+      g.total += Number(o.total_amount ?? 0);
+      if (g.status !== 'canceled' && o.status === 'canceled') g.status = 'canceled'; // any canceled row cancels the sale
+      if (o.created_at < g.createdAt) g.createdAt = o.created_at;
+    }
+    return [...map.values()];
+  }, [manualOrders]);
+  const manualSearchable = (g: ManualGroup) =>
+    [g.code, g.customer, g.phone, g.seller ?? '', ...g.rows.map((r) => `${r.product_title} ${r.product_code ?? ''}`)]
+      .join(' ')
+      .toLowerCase();
+  const manualStatusCounts: Record<'all' | OrderStatus, number> = {
+    all: manualGroups.length,
+    pending: manualGroups.filter((g) => g.status === 'pending').length,
+    delivered: manualGroups.filter((g) => g.status === 'delivered').length,
+    canceled: manualGroups.filter((g) => g.status === 'canceled').length,
+  };
+  const manualFilteredGroups = manualGroups.filter((g) => {
+    if (manualStatusFilter !== 'all' && g.status !== manualStatusFilter) return false;
+    const q = manualQuery.trim().toLowerCase();
+    return !q || manualSearchable(g).includes(q);
+  });
   // Dropdown names = saved sellers table + anyone already on an order (de-duped, A→Z)
   const knownSellers = useMemo(() => {
     const seen = new Set<string>();
@@ -394,18 +520,24 @@ export default function AdminPage() {
   );
 
   // ── Steadfast delivery pipeline counts (booked → in review → picked up → in transit → delivered) ──
-  const stageOfOrder = (o: Order): SteadfastStage | 'not_booked' => {
-    if (o.tracking_code) {
-      const b = steadfastStageBadge(o.steadfast_status);
-      return b ? b.stage : 'booked';
+  // Per PURCHASE: a group's stage comes from its shared tracking code (all rows
+  // of a cart booking share one code; legacy per-row bookings keep their own).
+  const stageOfGroup = (g: StoreGroup): SteadfastStage | 'not_booked' => {
+    const codes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+    if (codes.length === 0) return g.status === 'canceled' ? 'cancelled' : 'not_booked';
+    // Prefer the live status of any row; fall back to 'booked'.
+    for (const r of g.rows) {
+      if (!r.tracking_code) continue;
+      const b = steadfastStageBadge(r.steadfast_status);
+      if (b) return b.stage;
     }
-    return o.status === 'canceled' ? 'cancelled' : 'not_booked';
-    };
+    return 'booked';
+  };
   const stageCounts: Record<SteadfastStage | 'not_booked', number> = {
     not_booked: 0, booked: 0, in_review: 0, picked_up: 0, in_transit: 0, delivered: 0, cancelled: 0,
   };
-  for (const o of storeOrders) stageCounts[stageOfOrder(o)] += 1;
-  const trackedCount = storeOrders.filter((o) => o.tracking_code).length;
+  for (const g of storeGroups) stageCounts[stageOfGroup(g)] += 1;
+  const trackedCount = storeGroups.filter((g) => g.rows.some((r) => r.tracking_code)).length;
 
   // ── Inventory aggregates (Finance tab) ──
   const lowStockProducts = useMemo(
@@ -463,26 +595,40 @@ export default function AdminPage() {
     return { collected, collectedCount, pending, pendingCount, returned, returnedCount };
   }, [orders]);
 
-  const filteredOrders = storeOrders.filter((o) => {
-    if (orderStatusFilter !== 'all' && o.status !== orderStatusFilter) return false;
-    if (deliveryStageFilter !== 'all' && stageOfOrder(o) !== deliveryStageFilter) return false;
+  const filteredGroups = storeGroups.filter((g) => {
+    if (orderStatusFilter !== 'all' && g.status !== orderStatusFilter) return false;
+    if (deliveryStageFilter !== 'all' && stageOfGroup(g) !== deliveryStageFilter) return false;
     const q = orderSearch.trim().toLowerCase();
     if (!q) return true;
-    return (
+    // Search matches any row of the purchase (any item, code, phone…).
+    return g.rows.some((o) =>
       (o.customer_name ?? '').toLowerCase().includes(q) ||
       (o.customer_phone ?? '').toLowerCase().includes(q) ||
       (o.product_title ?? '').toLowerCase().includes(q) ||
       (o.product_code ?? '').toLowerCase().includes(q) ||
       (o.bkash_number ?? '').toLowerCase().includes(q) ||
-      (o.trx_id ?? '').toLowerCase().includes(q)
+      (o.trx_id ?? '').toLowerCase().includes(q) ||
+      g.code.toLowerCase().includes(q)
     );
   });
 
   // ── Parcel label printing (Steadfast-style stickers) ──
-  const ordersForLabels = () =>
-    storeOrders
-      .filter((o) => o.tracking_code && o.status !== 'canceled')
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  // One label per PARCEL, not per order row: multi-item purchases share one
+  // tracking code, so dedupe by it. The kept row's COD is bumped to the whole
+  // purchase's outstanding amount so the sticker's cash strip is correct.
+  const ordersForLabels = () => {
+    const seenCodes = new Set<string>();
+    const out: Order[] = [];
+    for (const o of storeOrders.filter((x) => x.tracking_code && x.status !== 'canceled').sort((a, b) => (a.created_at < b.created_at ? 1 : -1))) {
+      const code = o.tracking_code!;
+      if (seenCodes.has(code)) continue;
+      seenCodes.add(code);
+      const siblings = storeOrders.filter((x) => x.tracking_code === code && x.status !== 'canceled');
+      const groupDue = siblings.reduce((s, r) => s + Number(r.due_amount ?? r.total_amount ?? 0), 0);
+      out.push({ ...o, due_amount: groupDue });
+    }
+    return out;
+  };
 
   const labelCount = ordersForLabels().length;
 
@@ -538,27 +684,17 @@ export default function AdminPage() {
     }
     setPrintingLabels('bulk');
     try {
-      await printLabels(list, merchantId.trim() || null);
-      showToast('success', `Sent ${list.length} label${list.length === 1 ? '' : 's'} to the print dialog (${label}).`);
+      await printLabels(list, merchantId.trim() || null, stickersPerPage);
+      showToast('success', `Sent ${list.length} sticker${list.length === 1 ? '' : 's'} to the print dialog — A4, ${stickersPerPage} per page (${label}).`);
     } catch (err) {
       showToast('error', err instanceof Error ? err.message : 'Printing failed.');
     }
     setPrintingLabels(null);
   };
 
-  const handlePrintOrderLabel = async (order: Order) => {
-    setPrintingLabels(order.id);
-    try {
-      await printLabels([order], merchantId.trim() || null);
-    } catch (err) {
-      showToast('error', err instanceof Error ? err.message : 'Printing failed.');
-    }
-    setPrintingLabels(null);
-  };
-
-  const orderTotalPages = Math.max(1, Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE));
+  const orderTotalPages = Math.max(1, Math.ceil(filteredGroups.length / ORDER_PAGE_SIZE));
   const orderSafePage = Math.min(orderPage, orderTotalPages);
-  const pagedOrders = filteredOrders.slice(
+  const pagedGroups = filteredGroups.slice(
     (orderSafePage - 1) * ORDER_PAGE_SIZE,
     orderSafePage * ORDER_PAGE_SIZE
   );
@@ -907,18 +1043,30 @@ export default function AdminPage() {
     const CONCURRENCY = 4;
     let failed = 0;
     const deletedPickups: string[] = []; // orders whose consignment vanished from Steadfast
-    const queue = [...tracked];
-    // Each worker pulls its own items until the queue drains. The optional
-    // chaining on tracking_code guards the empty-queue case that used to throw
-    // and leave the "Checking…" spinner stuck forever.
+    // Multi-item purchases share one tracking code — check each unique code
+    // once, then fan the result out to every row carrying it.
+    const codes = [...new Set(tracked.map((o) => o.tracking_code!))];
+    const rowsByCode = new Map<string, Order[]>();
+    for (const o of tracked) {
+      const g = rowsByCode.get(o.tracking_code!);
+      if (g) g.push(o);
+      else rowsByCode.set(o.tracking_code!, [o]);
+    }
+    const queue = [...codes];
+    // Each worker pulls its own codes until the queue drains.
     const worker = async () => {
       while (queue.length > 0) {
-        const o = queue.shift();
-        if (!o?.tracking_code) return;
-        const res = await checkSteadfastStatus(o.tracking_code);
-        if (res.ok && res.status) updates.set(o.id, res.status);
-        else if (res.notFound) deletedPickups.push(o.id);
-        else failed += 1;
+        const code = queue.shift();
+        if (!code) return;
+        const res = await checkSteadfastStatus(code);
+        const rows = rowsByCode.get(code) ?? [];
+        if (res.ok && res.status) {
+          for (const o of rows) updates.set(o.id, res.status);
+        } else if (res.notFound) {
+          for (const o of rows) deletedPickups.push(o.id);
+        } else {
+          failed += 1;
+        }
       }
     };
     try {
@@ -1463,16 +1611,6 @@ export default function AdminPage() {
     }
   };
 
-  const setOrderStatus = (orderId: string, status: OrderStatus) => {
-    setOrderStatusOpen(null);
-    if (status === 'canceled') {
-      // Destructive action — confirm in-app instead of window.confirm
-      setCancelOrderConfirm(orderId);
-      return;
-    }
-    void applyOrderStatus(orderId, status);
-  };
-
   const applyOrderStatus = async (orderId: string, status: OrderStatus, opts?: { via?: string }) => {
     setUpdatingDelivery(orderId);
     void logAdmin('order_status', orderId, `${status}${opts?.via ? ` (${opts.via})` : ''}`);
@@ -1501,36 +1639,104 @@ export default function AdminPage() {
   const handleDeleteOrder = async (orderId: string) => {
     setDeletingOrder(orderId);
     void logAdmin('order_delete', orderId);
-    const { error } = await supabase.from('orders').delete().eq('id', orderId);
+    // Delete every row of the purchase (multi-item carts share one order_code)
+    // so no orphan item rows linger in Finance or the analytics.
+    const source = orders.find((o) => o.id === orderId);
+    const ids = source && source.order_code
+      ? orders.filter((o) => o.order_code === source.order_code).map((o) => o.id)
+      : [orderId];
+    const { error } = await supabase.from('orders').delete().in('id', ids);
     if (error) {
       showToast('error', `Failed to delete order: ${error.message}`);
       setDeletingOrder(null);
       return;
     }
-    setOrders((prev) => prev.filter((o) => o.id !== orderId));
-    setNotifications((prev) => prev.filter((n) => n.id !== orderId));
+    const idSet = new Set(ids);
+    setOrders((prev) => prev.filter((o) => !idSet.has(o.id)));
+    setNotifications((prev) => prev.filter((n) => !idSet.has(n.id)));
     setDeleteOrderConfirm(null);
     setDeletingOrder(null);
-    showToast('success', 'Order deleted.');
+    showToast('success', ids.length > 1 ? `Sale deleted (${ids.length} items).` : 'Order deleted.');
   };
 
   // ── Bulk order actions ──
-  const toggleOrderSelection = (id: string) => {
+  // Select/deselect every row of a purchase (bulk actions operate on row ids).
+  const toggleGroupSelection = (g: StoreGroup) => {
     setSelectedOrderIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const allIn = g.rows.every((o) => next.has(o.id));
+      for (const o of g.rows) allIn ? next.delete(o.id) : next.add(o.id);
       return next;
     });
   };
 
-  const allVisibleSelected = filteredOrders.length > 0 && filteredOrders.every((o) => selectedOrderIds.has(o.id));
+  // Status for every row of a purchase (the card's dropdown).
+  const setGroupStatus = (g: StoreGroup, status: OrderStatus) => {
+    setOrderStatusOpen(null);
+    if (status === 'canceled') {
+      // Destructive — the confirm modal cancels every row sharing the code.
+      setCancelOrderConfirm(g.rows[0]?.id ?? null);
+      return;
+    }
+    for (const row of g.rows) {
+      if (row.status !== status) void applyOrderStatus(row.id, status);
+    }
+  };
+
+  // Refresh the Steadfast status of a purchase: one API call per unique
+  // tracking code, the result applied to every row carrying that code.
+  const handleRefreshGroupStatus = async (g: StoreGroup) => {
+    const codes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+    if (codes.length === 0) return;
+    setCheckingSteadfast(g.key);
+    try {
+      for (const code of codes) {
+        const result = await checkSteadfastStatus(code);
+        const rows = g.rows.filter((r) => r.tracking_code === code);
+        if (result.ok && result.status) {
+          const ids = new Set(rows.map((r) => r.id));
+          setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, steadfast_status: result.status } : o)));
+          showToast('success', `Steadfast status: ${steadfastStatusMeta(result.status)?.label ?? result.status}`);
+          if (result.status === 'delivered') {
+            for (const r of rows) if (r.status !== 'delivered') await applyOrderStatus(r.id, 'delivered');
+          }
+        } else if (result.notFound) {
+          const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', rows.map((r) => r.id));
+          if (error) {
+            showToast('error', `Steadfast has no record of ${code}, but clearing it failed: ${error.message}`);
+          } else {
+            const ids = new Set(rows.map((r) => r.id));
+            setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+            showToast('info', `Steadfast has no record of ${code} — those rows are unbooked again.`);
+          }
+        } else {
+          showToast('error', result.message);
+        }
+      }
+    } finally {
+      setCheckingSteadfast(null);
+    }
+  };
+
+  // Print ONE sticker for the purchase (whole cart's COD on the cash strip).
+  const handlePrintGroupLabel = async (g: StoreGroup) => {
+    setPrintingLabels(g.key);
+    try {
+      const first = g.rows[0];
+      await printLabels([{ ...first, due_amount: g.due }], merchantId.trim() || null, stickersPerPage);
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Printing failed.');
+    }
+    setPrintingLabels(null);
+  };
+
+  const allVisibleSelected = filteredGroups.length > 0 && filteredGroups.every((g) => g.rows.every((o) => selectedOrderIds.has(o.id)));
 
   const toggleSelectAllVisible = () => {
     setSelectedOrderIds((prev) => {
       const next = new Set(prev);
-      if (allVisibleSelected) filteredOrders.forEach((o) => next.delete(o.id));
-      else filteredOrders.forEach((o) => next.add(o.id));
+      if (allVisibleSelected) filteredGroups.forEach((g) => g.rows.forEach((o) => next.delete(o.id)));
+      else filteredGroups.forEach((g) => g.rows.forEach((o) => next.add(o.id)));
       return next;
     });
   };
@@ -1552,6 +1758,53 @@ export default function AdminPage() {
     setBulkBusy(null);
   };
 
+  // ── Steadfast booking for cart orders ──
+  // A multi-item checkout shares one order_code across its rows; Steadfast must
+  // receive ONE consignment per purchase (all items in the note), not one per
+  // row. This helper books a single parcel for a group of rows and writes the
+  // tracking code back to every row.
+  const bookCartConsignment = async (rows: Order[]): Promise<string | null> => {
+    if (rows.length === 0) return null;
+    const phone = rows[0].customer_phone;
+    if (!/^01[3-9]\d{8}$/.test(phone)) {
+      showToast('error', `${rows[0].order_code ?? 'Order'}: Steadfast needs a valid 11-digit customer phone to book a pickup.`);
+      return null;
+    }
+    // Combined item description — every item, size, qty and product code.
+    const itemDesc = rows
+      .map((r) => {
+        const sizePart = r.selected_size ? ` (Size ${r.selected_size})` : '';
+        const qtyPart = r.quantity > 1 ? ` × ${r.quantity}` : '';
+        const codePart = r.product_code ? ` [${r.product_code}]` : '';
+        return `${r.product_title}${sizePart}${qtyPart}${codePart}`;
+      })
+      .join(' + ');
+    // COD = everything still due across the purchase.
+    const codAmount = Math.max(0, rows.reduce((s, r) => s + Number(r.due_amount ?? r.total_amount ?? 0), 0));
+    const result = await createSteadfastConsignment({
+      invoice: rows[0].order_code || rows[0].id.slice(0, 12),
+      recipient_name: rows[0].customer_name || 'Customer',
+      recipient_phone: phone,
+      recipient_address: rows[0].customer_address,
+      cod_amount: codAmount,
+      weight: 0.5, // default declared parcel weight (kg)
+      note: itemDesc,
+    });
+    if (!result.ok || !result.trackingCode) {
+      showToast('error', `${rows[0].order_code ?? rows[0].id.slice(0, 8)}: ${result.message}`);
+      return null;
+    }
+    const code = result.trackingCode;
+    const { error } = await supabase.from('orders').update({ tracking_code: code }).in('id', rows.map((r) => r.id));
+    if (error) {
+      showToast('error', `Booked with Steadfast (${code}) but saving to the order failed: ${error.message}`);
+      return null;
+    }
+    setOrders((prev) => prev.map((o) => (rows.some((r) => r.id === o.id) ? { ...o, tracking_code: code } : o)));
+    void logAdmin('steadfast_book', rows[0].id, `${rows[0].order_code ?? ''} (${rows.length} item${rows.length === 1 ? '' : 's'}, single parcel) · Tracking ${code} · COD ৳${codAmount}`);
+    return code;
+  };
+
   const bulkBookSteadfast = async () => {
     const targets = orders.filter((o) => selectedOrderIds.has(o.id) && !o.tracking_code && o.status !== 'canceled' && o.courier_name !== 'Store Pickup');
     if (targets.length === 0) {
@@ -1559,38 +1812,21 @@ export default function AdminPage() {
       return;
     }
     setBulkBusy('book');
+    // Group rows by purchase (order_code) so a multi-item cart books as ONE
+    // consignment with all items in the note.
+    const groups = new Map<string, Order[]>();
+    for (const o of targets) {
+      const key = o.order_code || o.id;
+      const g = groups.get(key);
+      if (g) g.push(o);
+      else groups.set(key, [o]);
+    }
     let ok = 0;
     let failed = 0;
-    for (const order of targets) {
-      const due = order.due_amount != null ? Number(order.due_amount) : null;
-      const total = order.total_amount != null ? Number(order.total_amount) : null;
-      const codAmount = Math.max(0, due ?? total ?? 0);
-      const sizePart = order.selected_size ? ` (Size ${order.selected_size})` : '';
-      const qtyPart = order.quantity > 1 ? ` × ${order.quantity}` : '';
-      const codePart = order.product_code ? ` [${order.product_code}]` : '';
-      const result = await createSteadfastConsignment({
-        invoice: order.order_code || order.id.slice(0, 12),
-        recipient_name: order.customer_name || 'Customer',
-        recipient_phone: order.customer_phone,
-        recipient_address: order.customer_address,
-        cod_amount: codAmount,
-        weight: 1.5, // declared parcel weight in kg (matches single booking)
-        note: `${order.product_title}${sizePart}${qtyPart}${codePart}`,
-      });
-      if (result.ok && result.trackingCode) {
-        const { error } = await supabase.from('orders').update({ tracking_code: result.trackingCode }).eq('id', order.id);
-        if (!error) {
-          const code = result.trackingCode;
-          setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, tracking_code: code } : o)));
-          void logAdmin('steadfast_book', order.id, `Tracking ${code} · COD ৳${codAmount}`);
-          ok += 1;
-        } else {
-          failed += 1;
-        }
-      } else {
-        failed += 1;
-        showToast('error', `${order.order_code ?? order.id.slice(0, 8)}: ${result.message}`);
-      }
+    for (const rows of groups.values()) {
+      const code = await bookCartConsignment(rows);
+      if (code) ok += 1;
+      else failed += 1;
     }
     if (ok > 0) showToast('success', `Booked ${ok} pickup${ok === 1 ? '' : 's'} with Steadfast.${failed > 0 ? ` ${failed} failed.` : ''}`);
     setSelectedOrderIds(new Set());
@@ -1615,76 +1851,140 @@ export default function AdminPage() {
     setBulkBusy(null);
   };
 
-  // Book the parcel with Steadfast and store the tracking code on the order
+  // Book the parcel with Steadfast and store the tracking code on the order.
+  // Multi-item carts share one order_code → ONE consignment with every item
+  // in the note (same path as the bulk booking above).
   const handleSendToSteadfast = async (order: Order) => {
     if (order.tracking_code) return;
+    const rows = order.order_code
+      ? orders.filter((o) => o.order_code === order.order_code && !o.tracking_code && o.status !== 'canceled')
+      : [order];
     setSendingToSteadfast(order.id);
-    const due = order.due_amount != null ? Number(order.due_amount) : null;
-    const total = order.total_amount != null ? Number(order.total_amount) : null;
-    const codAmount = Math.max(0, due ?? total ?? 0);
+    const code = await bookCartConsignment(rows.length > 0 ? rows : [order]);
+    if (code) {
+      showToast('success', `Booked one Steadfast pickup for ${rows.length} item${rows.length === 1 ? '' : 's'} — tracking code ${code}`);
+    }
+    setSendingToSteadfast(null);
+  };
 
-    // Maps onto the Steadfast app's "New consignment" form:
-    // required = phone, name, address, COD · optional = invoice, note.
-    // App-only fields (area, alt phone, email, weight, item description,
-    // exchange toggle) are unsupported by the API → ignored.
-    const sizePart = order.selected_size ? ` (Size ${order.selected_size})` : '';
-    const qtyPart = order.quantity > 1 ? ` × ${order.quantity}` : '';
-    const codePart = order.product_code ? ` [${order.product_code}]` : '';
+  // Pull the latest delivery status for one order's tracking code
+  // ── Manual-order groups: Steadfast booking + status changes. A multi-item
+  // sale shares one order_code; booking/printing/canceling work on the group. ──
+
+  // Book ONE Steadfast consignment for the whole sale — all items travel as a
+  // single parcel with one tracking code shared by every row (Steadfast bills
+  // per consignment, so a multi-item sale costs one pickup, not several).
+  const handleBookManualGroup = async (g: ManualGroup) => {
+    const targets = g.rows.filter((r) => !r.tracking_code && r.status !== 'canceled');
+    if (targets.length === 0) {
+      showToast('info', 'Every item in this sale is already booked or canceled.');
+      return;
+    }
+    // Steadfast rejects consignments without a real 11-digit mobile — the
+    // customer phone is optional in the manual form, so check before booking.
+    const phone = targets[0].customer_phone;
+    if (!/^01[3-9]\d{8}$/.test(phone)) {
+      showToast('error', 'Steadfast needs a valid 11-digit customer phone (e.g. 01712345678) to book a pickup.');
+      return;
+    }
+    setSendingToSteadfast(g.key);
+    // Combined item description for the note; address from the first row
+    // (all rows of a sale share customer + address by construction).
+    const itemDesc = targets
+      .map((r) => {
+        const sizePart = r.selected_size ? ` (Size ${r.selected_size})` : '';
+        const qtyPart = r.quantity > 1 ? ` × ${r.quantity}` : '';
+        const codePart = r.product_code ? ` [${r.product_code}]` : '';
+        return `${r.product_title}${sizePart}${qtyPart}${codePart}`;
+      })
+      .join(' + ');
+    // COD = what's still due across the unbooked rows (0 for fully-paid sales).
+    const codAmount = Math.max(0, targets.reduce((s, r) => s + Number(r.due_amount ?? r.total_amount ?? 0), 0));
     const result = await createSteadfastConsignment({
-      invoice: order.order_code || order.id.slice(0, 12),
-      recipient_name: order.customer_name || 'Customer',
-      recipient_phone: order.customer_phone,
-      recipient_address: order.customer_address,
+      invoice: g.code,
+      recipient_name: targets[0].customer_name || 'Customer',
+      recipient_phone: phone,
+      recipient_address: targets[0].customer_address,
       cod_amount: codAmount,
-      weight: 1.5, // declared parcel weight in kg
-      note: `${order.product_title}${sizePart}${qtyPart}${codePart}`,
+      weight: 0.5, // default declared parcel weight (kg)
+      note: itemDesc,
     });
-
     if (result.ok && result.trackingCode) {
-      void logAdmin('steadfast_book', order.id, `Tracking ${result.trackingCode} · COD ৳${codAmount}`);
-      const { error } = await supabase
-        .from('orders')
-        .update({ tracking_code: result.trackingCode })
-        .eq('id', order.id);
+      // One tracking code, written back to every row of the sale.
+      const code = result.trackingCode;
+      const { error } = await supabase.from('orders').update({ tracking_code: code }).in('id', targets.map((r) => r.id));
       if (error) {
-        showToast('error', `Booked with Steadfast (${result.trackingCode}) but saving to the order failed: ${error.message}`);
+        showToast('error', `Booked with Steadfast (${code}) but saving to the sale failed: ${error.message}`);
       } else {
-        setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, tracking_code: result.trackingCode } : o)));
-        showToast('success', `Booked with Steadfast — tracking code ${result.trackingCode}`);
+        setOrders((prev) => prev.map((o) => (targets.some((t) => t.id === o.id) ? { ...o, tracking_code: code } : o)));
+        showToast('success', `Booked one Steadfast pickup for ${g.code} — tracking code ${code}${codAmount > 0 ? ` · COD ৳${codAmount.toLocaleString('en-IN')}` : ' · no COD (paid in store)'}`);
       }
+      void logAdmin('steadfast_book', targets[0].id, `Manual sale ${g.code} (${targets.length} item${targets.length === 1 ? '' : 's'}, single parcel) · Tracking ${code} · COD ৳${codAmount}`);
     } else {
       showToast('error', result.message);
     }
     setSendingToSteadfast(null);
   };
 
-  // Pull the latest delivery status for one order's tracking code
-  const handleCheckSteadfastStatus = async (order: Order) => {
-    if (!order.tracking_code) return;
-    setCheckingSteadfast(order.id);
-    const result = await checkSteadfastStatus(order.tracking_code);
+  // Print ONE sticker per sale — all rows share the single tracking code,
+  // so printing one per row would waste identical labels.
+  const handlePrintManualGroup = async (g: ManualGroup) => {
+    setPrintingLabels(g.key);
+    try {
+      // The sticker renders one row; override its due amount with the whole
+      // sale's outstanding total so the COD strip shows what the rider collects.
+      const groupDue = g.rows.reduce((s, r) => s + Number(r.due_amount ?? r.total_amount ?? 0), 0);
+      const labelRow: Order = { ...g.rows[0], due_amount: groupDue };
+      await printLabels([labelRow], merchantId.trim() || null, stickersPerPage);
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Printing failed.');
+    }
+    setPrintingLabels(null);
+  };
+
+  // Pull the latest Steadfast status for the sale's shared tracking code and
+  // apply it to every row (one parcel → one status).
+  const handleRefreshManualGroup = async (g: ManualGroup) => {
+    const code = g.rows.find((r) => r.tracking_code)?.tracking_code;
+    if (!code) return;
+    setCheckingSteadfast(g.key);
+    const result = await checkSteadfastStatus(code);
     if (result.ok && result.status) {
-      // Keep in memory only — re-fetchable from Steadfast anytime via the refresh button
-      setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, steadfast_status: result.status } : o)));
+      const ids = new Set(g.rows.map((r) => r.id));
+      setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, steadfast_status: result.status } : o)));
       showToast('success', `Steadfast status: ${steadfastStatusMeta(result.status)?.label ?? result.status}`);
-      // Convenience: a confirmed Steadfast delivery can flip the local order too
-      if (result.status === 'delivered' && order.status !== 'delivered') {
-        await applyOrderStatus(order.id, 'delivered');
+      // A confirmed delivery flips the whole sale.
+      if (result.status === 'delivered') {
+        for (const r of g.rows) if (r.status !== 'delivered') await applyOrderStatus(r.id, 'delivered');
       }
     } else if (result.notFound) {
-      // The consignment no longer exists on Steadfast (deleted from their
-      // portal) — drop the stale tracking code so the order can be re-booked.
-      const { error } = await supabase.from('orders').update({ tracking_code: null }).eq('id', order.id);
+      // Consignment deleted from Steadfast's portal — unbook the whole sale.
+      const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', g.rows.map((r) => r.id));
       if (error) {
         showToast('error', `Steadfast has no record of this tracking code, but clearing it failed: ${error.message}`);
       } else {
-        setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, tracking_code: null, steadfast_status: null } : o)));
-        showToast('info', 'Steadfast has no record of this pickup (it was likely deleted from their portal). The order is now unbooked — you can book it again.');
+        const ids = new Set(g.rows.map((r) => r.id));
+        setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+        showToast('info', 'Steadfast has no record of this pickup — the sale is unbooked and can be booked again.');
       }
     } else {
       showToast('error', result.message);
     }
     setCheckingSteadfast(null);
+  };
+
+  // Status for every row of the sale (the Orders-tab dropdown, group-wide).
+  const setManualGroupStatus = (g: ManualGroup, status: OrderStatus) => {
+    setManualStatusOpen(null);
+    if (status === 'canceled') {
+      // Destructive — reuse the shared confirm modal; the click handler
+      // cancels every row sharing the sale's order_code.
+      setCancelOrderConfirm(g.rows[0]?.id ?? null);
+      return;
+    }
+    for (const row of g.rows) {
+      if (row.status !== status) void applyOrderStatus(row.id, status);
+    }
   };
 
   const handleSellProduct = async (productId: string, size: string | null, currentQty: number) => {
@@ -2039,35 +2339,103 @@ export default function AdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, settingsTab]);
 
+  /** Result of a team call through the Edge Function — false when it isn't deployed yet. */
+  const callEdge = async (
+    fn: () => Promise<{ ok: boolean; message: string; notDeployed?: boolean }>
+  ): Promise<boolean> => {
+    const res = await fn();
+    if (!res.ok && res.notDeployed) {
+      showToast('error', 'The credential manager is not deployed yet. Run: supabase functions deploy admin-auth-manager (in the project root, with Supabase access token).');
+      return false;
+    }
+    if (!res.ok) showToast('error', res.message);
+    else showToast('success', res.message);
+    return res.ok;
+  };
+
   const handleAddTeamMember = async () => {
     const email = newTeamEmail.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       showToast('error', 'Enter a valid email address.');
       return;
     }
+    if (newTeamPassword.trim().length < 6) {
+      showToast('error', 'Set a password of at least 6 characters — the new admin signs in with it right away.');
+      return;
+    }
     setTeamBusy(email);
-    const { error } = await supabase.rpc('super_admin_add_admin', { p_email: email, p_role: newTeamRole });
-    if (error) {
-      showToast('error', `Could not add admin: ${error.message}`);
-    } else {
-      showToast('success', `${email} added as ${newTeamRole === 'super_admin' ? 'a super admin' : 'an admin'} — they can sign in once you create their password in Supabase (Authentication → Users).`);
+    // Preferred path: one call creates the login AND adds them to the team.
+    const viaEdge = await callEdge(() => adminAddAdmin(email, newTeamPassword, newTeamRole));
+    if (!viaEdge) {
+      // Fallback: allowlist-only RPC (login user must then be made in the Dashboard).
+      const { error } = await supabase.rpc('super_admin_add_admin', { p_email: email, p_role: newTeamRole });
+      if (error) showToast('error', `Could not add admin: ${error.message}`);
+      else showToast('success', `${email} added to the team — they can sign in once you create their login in Supabase (Authentication → Users).`);
+    }
+    if (viaEdge) {
       setNewTeamEmail('');
+      setNewTeamPassword('');
+    }
+    void logAdmin('admin_add', email, `role: ${newTeamRole}`);
+    await fetchTeam();
+    setTeamBusy('');
+  };
+
+  const handleRemoveTeamMember = async (email: string) => {
+    if (!window.confirm(`Delete ${email}'s admin login and remove them from the team? They lose panel access immediately and can no longer sign in.`)) return;
+    setTeamBusy(email);
+    // Preferred path: delete the auth user AND the allowlist row in one go.
+    const viaEdge = await callEdge(() => adminDeleteAdmin(email));
+    if (!viaEdge) {
+      // Fallback: allowlist-only RPC (auth user then remains in the Dashboard).
+      const { error } = await supabase.rpc('super_admin_remove_admin', { p_email: email });
+      if (error) showToast('error', `Could not remove: ${error.message}`);
+      else showToast('success', `${email} removed from the team — delete their login in Supabase (Authentication → Users) to fully revoke it.`);
+    }
+    void logAdmin('admin_remove', email, null);
+    await fetchTeam();
+    setTeamBusy('');
+  };
+
+  /** Change another admin's login email (their ID for signing in). */
+  const handleSetAdminEmail = async (email: string) => {
+    const newEmail = credNewEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      showToast('error', 'Enter a valid new email address.');
+      return;
+    }
+    setTeamBusy(email);
+    const done = await callEdge(() => setAdminEmail(email, newEmail));
+    if (done) {
+      setCredEdit(null);
+      setCredNewEmail('');
+      void logAdmin('admin_set_login', email, `changed to ${newEmail}`);
       await fetchTeam();
     }
     setTeamBusy('');
   };
 
-  const handleRemoveTeamMember = async (email: string) => {
-    if (!window.confirm(`Remove ${email} from the admin team? They lose panel access immediately.`)) return;
+  /** Set a new password for another admin. */
+  const handleSetAdminPassword = async (email: string) => {
+    if (credNewPassword.length < 6) {
+      showToast('error', 'Password must be at least 6 characters.');
+      return;
+    }
     setTeamBusy(email);
-    const { error } = await supabase.rpc('super_admin_remove_admin', { p_email: email });
-    if (error) {
-      showToast('error', `Could not remove: ${error.message}`);
-    } else {
-      showToast('success', `${email} removed from the admin team.`);
-      await fetchTeam();
+    const done = await callEdge(() => setAdminPassword(email, credNewPassword));
+    if (done) {
+      setCredNewPassword('');
+      setCredShowPassword(false);
+      void logAdmin('admin_set_password', email, null);
     }
     setTeamBusy('');
+  };
+
+  const openCredEditor = (email: string, mode: 'email' | 'password') => {
+    setCredEdit((cur) => (cur && cur.email === email && cur.mode === mode ? null : { email, mode }));
+    setCredNewEmail('');
+    setCredNewPassword('');
+    setCredShowPassword(false);
   };
 
   const handleToggleCapability = async (email: string, capability: string, current: boolean) => {
@@ -2198,7 +2566,7 @@ export default function AdminPage() {
     if (!seller) { showToast('error', 'Seller name is required (who recorded this sale).'); return; }
     const bkashDigits = manualForm.bkash.replace(/\D/g, '');
     if (manualForm.bkash.trim() !== '' && bkashDigits.length < 4) {
-      showToast('error', 'bKash number needs at least the last 4 digits.');
+      showToast('error', `${manualForm.payment_channel === 'nagad' ? 'Nagad' : 'bKash'} number needs at least the last 4 digits.`);
       return;
     }
     // Customer phone: optional, but when given it must be a real BD mobile
@@ -2210,6 +2578,24 @@ export default function AdminPage() {
       phoneDigits = '0' + toAsciiDigits(phoneRaw).replace(/[\s\-()]/g, '').replace(/^\+?88/, '').replace(/^0+/, '');
       if (!/^01[3-9]\d{8}$/.test(phoneDigits)) {
         showToast('error', 'Customer phone must be a valid BD mobile, e.g. 01712345678.');
+        return;
+      }
+    }
+    // Delivery-charge-only sales ship via Steadfast, so they need the same
+    // details a website order has: real phone, address, district (the district
+    // also sets the courier charge collected in store).
+    const deliveryOnly = manualForm.payment_mode === 'delivery_only';
+    if (deliveryOnly) {
+      if (!/^01[3-9]\d{8}$/.test(phoneDigits)) {
+        showToast('error', 'Delivery-charge-only sales need the customer\u2019s full phone (Steadfast pickup).');
+        return;
+      }
+      if (!manualForm.address.trim()) {
+        showToast('error', 'Enter the customer\u2019s address \u2014 this sale will be shipped.');
+        return;
+      }
+      if (!manualForm.district) {
+        showToast('error', 'Pick the customer\u2019s district \u2014 it sets the delivery charge collected now.');
         return;
       }
     }
@@ -2253,6 +2639,23 @@ export default function AdminPage() {
     const addressParts = [manualForm.address.trim(), manualForm.thana.trim(), manualForm.district].filter(Boolean);
     const composedAddress = addressParts.length ? addressParts.join(', ') : 'In-store purchase';
     const manualZone = manualForm.district ? zoneForDistrict(manualForm.district) : null;
+    const saleTotal = resolved.reduce((s, r) => s + r.amount, 0);
+    // Charge collected in store (delivery-charge-only mode): the zone rate for
+    // the customer's district, recorded on the first row so the sale's totals add up.
+    const collectedFee = deliveryOnly && manualZone ? Math.max(0, Number(steadfastRates[manualZone as DeliveryZone]) || 0) : 0;
+    // Per-row money split. 'full' → everything settled in store (delivered).
+    // 'delivery_only' → the customer paid just the delivery charge (recorded as
+    // the first row's advance); the product amount stays due and is collected
+    // by Steadfast on delivery, so the sale stays pending until it ships.
+    const rowMoney = (r: (typeof resolved)[number], i: number) =>
+      deliveryOnly
+        ? {
+            delivery_fee: i === 0 ? collectedFee : 0,
+            total_amount: r.amount + (i === 0 ? collectedFee : 0),
+            advance_amount: i === 0 ? collectedFee : 0,
+            due_amount: r.amount,
+          }
+        : { delivery_fee: 0, total_amount: r.amount, advance_amount: r.amount, due_amount: 0 };
     const orderCode = `ORN-${Array.from(crypto.getRandomValues(new Uint8Array(4)))
       .map((b) => b.toString(36).padStart(2, '0'))
       .join('')
@@ -2261,7 +2664,7 @@ export default function AdminPage() {
 
     const inserted: Order[] = [];
     let firstError: string | null = null;
-    for (const r of resolved) {
+    for (const [idx, r] of resolved.entries()) {
       const { data, error } = await supabase
         .from('orders')
         .insert({
@@ -2275,22 +2678,51 @@ export default function AdminPage() {
           customer_phone: phoneDigits || '—',
           customer_address: composedAddress,
           subtotal: r.amount,
-          delivery_fee: 0,
+          ...rowMoney(r, idx),
           discount_amount: 0,
-          total_amount: r.amount,
-          payment_method: 'in_store',
-          advance_amount: r.amount,
-          due_amount: 0,
-          courier_name: 'Store Pickup',
+          payment_method: deliveryOnly ? 'advance_partial' : 'in_store',
+          courier_name: deliveryOnly ? 'Home Delivery' : 'Store Pickup',
           delivery_zone: manualZone,
-          status: 'delivered',
-          delivered: true,
+          status: deliveryOnly ? 'pending' : 'delivered',
+          delivered: !deliveryOnly,
           order_source: 'manual',
           seller_name: seller,
           bkash_number: bkashDigits || null,
+          payment_channel: manualForm.payment_channel,
         })
         .select()
         .single();
+      // Older databases may not have orders.payment_channel yet — retry the
+      // same row without the column so the sale still goes through.
+      if (error && error.message.includes('payment_channel')) {
+        const retry = await supabase
+          .from('orders')
+          .insert({
+            order_code: orderCode,
+            product_id: r.product.id,
+            product_title: r.product.title,
+            product_code: r.product.product_code,
+            selected_size: r.size,
+            quantity: r.qty,
+            customer_name: customer,
+            customer_phone: phoneDigits || '—',
+            customer_address: composedAddress,
+            subtotal: r.amount,
+            ...rowMoney(r, idx),
+            discount_amount: 0,
+            payment_method: deliveryOnly ? 'advance_partial' : 'in_store',
+            courier_name: deliveryOnly ? 'Home Delivery' : 'Store Pickup',
+            delivery_zone: manualZone,
+            status: deliveryOnly ? 'pending' : 'delivered',
+            delivered: !deliveryOnly,
+            order_source: 'manual',
+            seller_name: seller,
+            bkash_number: bkashDigits || null,
+          })
+          .select()
+          .single();
+        if (!retry.error && retry.data) { inserted.push(retry.data as Order); continue; }
+      }
       if (error || !data) { firstError = error?.message ?? 'unknown error'; break; }
       inserted.push(data as Order);
     }
@@ -2340,7 +2772,6 @@ export default function AdminPage() {
       void logAdmin('manual_order', inserted.find((o) => o.product_id === agg.product.id)?.id ?? null, `${agg.product.title}${agg.sizeDeltas.length === 1 && agg.sizeDeltas[0].size ? ` (${agg.sizeDeltas[0].size})` : ''} × ${agg.totalQty} · ৳${agg.amount} · seller ${seller}`);
     }
 
-    const saleTotal = resolved.reduce((s, r) => s + r.amount, 0);
     setOrders((prev) => [...inserted, ...prev]);
     setNotifications((prev) => [...inserted, ...prev]);
     setProducts((prev) => prev.map((p) => {
@@ -2355,9 +2786,11 @@ export default function AdminPage() {
       return { ...p, stock_count: Math.max(0, p.stock_count - agg.totalQty), product_sizes: newSizes };
     }));
     setManualLines([{ product_id: '', product_code: '', size: '', quantity: '1', amount: '' }]);
-    setManualForm(f => ({ ...f, customer_name: '', customer_phone: '', bkash: '', district: '', thana: '', address: '' }));
+    setManualForm(f => ({ ...f, customer_name: '', customer_phone: '', bkash: '', payment_channel: 'bkash', payment_mode: 'full', district: '', thana: '', address: '' }));
     setManualSaving(false);
-    showToast('success', `In-store sale recorded — ৳${saleTotal.toLocaleString('en-IN')} · ${inserted.length} item${inserted.length === 1 ? '' : 's'}.`);
+    showToast('success', deliveryOnly
+      ? `Sale recorded — ৳${collectedFee.toLocaleString('en-IN')} delivery charge collected · ৳${saleTotal.toLocaleString('en-IN')} due on delivery (${inserted.length} item${inserted.length === 1 ? '' : 's'}).`
+      : `In-store sale recorded — ৳${saleTotal.toLocaleString('en-IN')} · ${inserted.length} item${inserted.length === 1 ? '' : 's'}.`);
   };
 
   // ── Saved sellers: remove a name from the dropdown (does not touch past orders) ──
@@ -3109,7 +3542,7 @@ export default function AdminPage() {
             {/* Status filter bar */}
             <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
               {([
-                { key: 'all' as const, label: 'All', count: orders.length, cls: 'bg-stone-900 text-white border-stone-900' },
+                { key: 'all' as const, label: 'All', count: storeGroups.length, cls: 'bg-stone-900 text-white border-stone-900' },
                 { key: 'pending' as const, label: 'Pending', count: pendingOrders, cls: 'bg-amber-500 text-white border-amber-500' },
                 { key: 'delivered' as const, label: 'Delivered', count: deliveredOrders, cls: 'bg-emerald-500 text-white border-emerald-500' },
                 { key: 'canceled' as const, label: 'Canceled', count: canceledOrders, cls: 'bg-red-500 text-white border-red-500' },
@@ -3196,8 +3629,26 @@ export default function AdminPage() {
               <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-4 mb-6">
                 <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                   <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
-                    <Printer className="w-3.5 h-3.5" /> Print parcel labels ({labelCount} booked)
+                    <Printer className="w-3.5 h-3.5" /> Print parcel stickers ({labelCount} booked)
                   </p>
+                  {/* A4 sticker-sheet density: stickers per page */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">A4 · per page</span>
+                    {([9, 12, 16] as StickersPerPage[]).map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => setStickersPerPage(n)}
+                        title={`${n} stickers per A4 page`}
+                        className={`w-9 h-7 rounded-lg text-xs font-bold transition-all ${
+                          stickersPerPage === n
+                            ? 'bg-brand-500 text-white shadow-sm'
+                            : 'bg-stone-100 text-stone-500 hover:bg-stone-200'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
                   <div className="flex gap-2 flex-wrap">
                     <button
                       onClick={() => void handlePrintLabels(ordersInDateRange(dayOffsetISO(0), dayOffsetISO(0)), 'today')}
@@ -3292,22 +3743,25 @@ export default function AdminPage() {
               </div>
             )}
 
-            {filteredOrders.length === 0 ? (
+            {filteredGroups.length === 0 ? (
               <EmptyState
                 icon={<ShoppingBag className="w-6 h-6" />}
-                title={storeOrders.length === 0 ? 'No orders yet' : 'No orders match your filters.'}
-                hint={orders.length === 0 ? 'New orders will appear here in real time.' : 'Try a different search term or status filter.'}
+                title={storeGroups.length === 0 ? 'No orders yet' : 'No orders match your filters.'}
+                hint={storeGroups.length === 0 ? 'New orders will appear here in real time.' : 'Try a different search term or status filter.'}
               />
             ) : (
               <>
               <div className="space-y-2" ref={orderStatusRef}>
-                {pagedOrders.map((order) => {
-                  const pricing = getOrderPricing(order);
+                {pagedGroups.map((g) => {
+                  const firstRow = g.rows[0];
+                  const sharedCodes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+                  const booked = sharedCodes.length > 0;
+                  const stageInfo = booked ? steadfastStageBadge(g.rows.find((r) => r.steadfast_status)?.steadfast_status) : null;
                   return (
-                    <div key={order.id} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
-                      order.status === 'pending'
+                    <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
+                      g.status === 'pending'
                         ? 'border-l-amber-400'
-                        : order.status === 'canceled'
+                        : g.status === 'canceled'
                           ? 'border-l-red-300'
                           : 'border-l-emerald-400'
                     }`}>
@@ -3318,63 +3772,64 @@ export default function AdminPage() {
                         <div className="flex items-center gap-3 min-w-0">
                           <input
                             type="checkbox"
-                            checked={selectedOrderIds.has(order.id)}
-                            onChange={() => toggleOrderSelection(order.id)}
-                            title="Select for bulk actions"
+                            checked={g.rows.every((o) => selectedOrderIds.has(o.id))}
+                            onChange={() => toggleGroupSelection(g)}
+                            title="Select the whole purchase for bulk actions"
                             className="w-4 h-4 accent-brand-500 flex-shrink-0 cursor-pointer"
                           />
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm ${
-                            order.status === 'delivered'
+                            g.status === 'delivered'
                               ? 'bg-emerald-100 text-emerald-700'
-                              : order.status === 'canceled'
+                              : g.status === 'canceled'
                                 ? 'bg-red-100 text-red-500'
                                 : 'bg-amber-100 text-amber-700'
                           }`}>
-                            {(order.customer_name || '?').trim().charAt(0).toUpperCase()}
+                            {(firstRow.customer_name || '?').trim().charAt(0).toUpperCase()}
                           </div>
                           <div className="min-w-0">
-                            <p className="font-semibold text-stone-900 truncate">{order.customer_name || 'Unknown customer'}</p>
-                            <a href={`tel:${order.customer_phone}`} className="text-xs text-stone-500 hover:text-brand-600 transition-colors">
-                              {order.customer_phone}
+                            <p className="font-semibold text-stone-900 truncate">{firstRow.customer_name || 'Unknown customer'}</p>
+                            <a href={`tel:${firstRow.customer_phone}`} className="text-xs text-stone-500 hover:text-brand-600 transition-colors">
+                              {firstRow.customer_phone}
                             </a>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="font-mono text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
                           <span className="hidden md:block text-xs text-stone-400">
-                            {new Date(order.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            {new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </span>
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[order.status]}`}>
-                            {order.status === 'delivered'
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                            {g.status === 'delivered'
                               ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
-                              : order.status === 'canceled'
+                              : g.status === 'canceled'
                                 ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
                                 : <><Clock className="w-3.5 h-3.5" /> Pending</>}
                           </span>
                           <div className="relative">
                             <button
-                              onClick={() => setOrderStatusOpen(orderStatusOpen === order.id ? null : order.id)}
-                              disabled={updatingDelivery === order.id}
+                              onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
+                              disabled={updatingDelivery === g.key}
                               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-60 ${
-                                order.status === 'delivered'
+                                g.status === 'delivered'
                                   ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                                  : order.status === 'canceled'
+                                  : g.status === 'canceled'
                                     ? 'bg-red-100 text-red-600 hover:bg-red-200'
                                     : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
                               }`}
                             >
-                              {updatingDelivery === order.id ? (
+                              {updatingDelivery === g.key ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : order.status === 'delivered' ? (
+                              ) : g.status === 'delivered' ? (
                                 <Truck className="w-3.5 h-3.5" />
-                              ) : order.status === 'canceled' ? (
+                              ) : g.status === 'canceled' ? (
                                 <XCircle className="w-3.5 h-3.5" />
                               ) : (
                                 <Clock className="w-3.5 h-3.5" />
                               )}
-                              {order.status === 'delivered' ? 'Delivered' : order.status === 'canceled' ? 'Canceled' : 'Pending'}
-                              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${orderStatusOpen === order.id ? 'rotate-180' : ''}`} />
+                              {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${orderStatusOpen === g.key ? 'rotate-180' : ''}`} />
                             </button>
-                            {orderStatusOpen === order.id && (
+                            {orderStatusOpen === g.key && (
                               <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
                                 {([
                                   { value: 'pending' as OrderStatus, label: 'Pending', icon: <Clock className="w-4 h-4" />, activeCls: 'bg-amber-50 text-amber-700' },
@@ -3383,19 +3838,19 @@ export default function AdminPage() {
                                 ]).map((opt) => (
                                   <button
                                     key={opt.value}
-                                    onClick={() => setOrderStatus(order.id, opt.value)}
+                                    onClick={() => setGroupStatus(g, opt.value)}
                                     className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
-                                      order.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                                      g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
                                     }`}
                                   >
                                     {opt.icon}
                                     {opt.label}
-                                    {order.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
+                                    {g.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
                                   </button>
                                 ))}
                                 <div className="border-t border-stone-100 my-1" />
                                 <button
-                                  onClick={() => { setOrderStatusOpen(null); setDeleteOrderConfirm(order.id); }}
+                                  onClick={() => { setOrderStatusOpen(null); setDeleteOrderConfirm(g.rows[0]?.id ?? null); }}
                                   className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -3406,50 +3861,62 @@ export default function AdminPage() {
                           </div>
                         </div>
                       </div>
-                      {/* Order line: product + variant */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap text-sm">
-                        <span className="font-semibold text-stone-800">{order.product_title}</span>
-                        {order.product_code && (
-                          <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">{order.product_code}</span>
-                        )}
-                        {order.selected_size && (
-                          <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">Size: {order.selected_size}</span>
-                        )}
-                        <span className="text-[11px] text-stone-400">Qty: {order.quantity ?? 1}</span>
-                        {order.delivery_zone && (
-                          <span className="text-[11px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-2 py-0.5 rounded-full flex items-center gap-1">
-                            <MapPin className="w-3 h-3" /> {order.delivery_zone}
+
+                      {/* Items — one line per product of the purchase */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 space-y-1.5">
+                        {firstRow.delivery_zone && (
+                          <span className="text-[11px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                            <MapPin className="w-3 h-3" /> {firstRow.delivery_zone}
                           </span>
                         )}
+                        {g.rows.map((row) => (
+                          <div key={row.id} className="flex items-center gap-2 flex-wrap text-sm">
+                            <span className="font-semibold text-stone-800">{row.product_title}</span>
+                            {row.product_code && (
+                              <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">{row.product_code}</span>
+                            )}
+                            {row.selected_size && (
+                              <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
+                            )}
+                            <span className="text-[11px] text-stone-400">Qty: {row.quantity ?? 1}</span>
+                            <span className="ml-auto text-xs font-semibold text-stone-600">
+                              ৳{Number(row.total_amount ?? 0).toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        ))}
                       </div>
 
-                      {/* Courier: Steadfast booking + live status */}
+                      {/* Courier: booking + live status (one parcel per purchase) */}
                       <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap">
-                        {order.tracking_code ? (
+                        {booked ? (
                           <>
+                            {sharedCodes.map((code) => (
+                              <button
+                                key={code}
+                                onClick={() => {
+                                  navigator.clipboard?.writeText(code)
+                                    .then(() => showToast('success', `Tracking code ${code} copied.`))
+                                    .catch(() => showToast('info', `Tracking code: ${code}`));
+                                }}
+                                title="Click to copy tracking code"
+                                className="flex items-center gap-1.5 text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
+                              >
+                                <Truck className="w-3.5 h-3.5" /> {code}
+                              </button>
+                            ))}
+                            {stageInfo && (
+                              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${stageInfo.cls}`}>{stageInfo.label}</span>
+                            )}
                             <button
-                              onClick={() => {
-                                navigator.clipboard?.writeText(order.tracking_code!)
-                                  .then(() => showToast('success', `Tracking code ${order.tracking_code} copied.`))
-                                  .catch(() => showToast('info', `Tracking code: ${order.tracking_code}`));
-                              }}
-                              title="Click to copy tracking code"
-                              className="flex items-center gap-1.5 text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
-                            >
-                              <Truck className="w-3.5 h-3.5" /> {order.tracking_code}
-                            </button>
-                            <button
-                              onClick={() => handleCheckSteadfastStatus(order)}
-                              disabled={checkingSteadfast === order.id}
+                              onClick={() => void handleRefreshGroupStatus(g)}
+                              disabled={checkingSteadfast === g.key}
                               className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
                             >
-                              {checkingSteadfast === order.id
-                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                : <RefreshCw className="w-3.5 h-3.5" />}
+                              {checkingSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                               Refresh status
                             </button>
                             <a
-                              href={`https://steadfast.com.bd/t/${order.tracking_code}`}
+                              href={`https://steadfast.com.bd/t/${sharedCodes[0]}`}
                               target="_blank"
                               rel="noreferrer"
                               className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
@@ -3457,30 +3924,26 @@ export default function AdminPage() {
                               Track ↗
                             </a>
                             <button
-                              onClick={() => void handlePrintOrderLabel(order)}
-                              disabled={printingLabels === order.id}
-                              title="Print the Steadfast parcel sticker for this order"
+                              onClick={() => void handlePrintGroupLabel(g)}
+                              disabled={printingLabels === g.key}
+                              title="Print the Steadfast parcel sticker for this purchase"
                               className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
                             >
-                              {printingLabels === order.id
-                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                : <Printer className="w-3.5 h-3.5" />}
+                              {printingLabels === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                               Print label
                             </button>
                           </>
-                        ) : order.status === 'canceled' ? (
+                        ) : g.status === 'canceled' ? (
                           <span className="text-xs text-stone-400">Not booked with Steadfast</span>
                         ) : steadfastConfigured ? (
                           <button
-                            onClick={() => handleSendToSteadfast(order)}
-                            disabled={sendingToSteadfast === order.id}
-                            title={order.courier_name === 'Store Pickup' ? 'Store-pickup order — no courier booking needed' : undefined}
+                            onClick={() => void handleSendToSteadfast(firstRow)}
+                            disabled={sendingToSteadfast === g.key}
+                            title="Book one pickup for all items of this purchase"
                             className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-3 py-1.5 rounded-full disabled:opacity-60 transition-all"
                           >
-                            {sendingToSteadfast === order.id
-                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              : <Truck className="w-3.5 h-3.5" />}
-                            {sendingToSteadfast === order.id ? 'Booking…' : 'Book Steadfast pickup'}
+                            {sendingToSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                            {sendingToSteadfast === g.key ? 'Booking…' : 'Book Steadfast pickup'}
                           </button>
                         ) : (
                           <span className="text-xs text-stone-400">Steadfast API keys not configured — add them to .env to book pickups.</span>
@@ -3488,8 +3951,7 @@ export default function AdminPage() {
                       </div>
 
                       {/* Delivery pipeline tracker (only for booked parcels) */}
-                      {order.tracking_code && (() => {
-                        const stageInfo = steadfastStageBadge(order.steadfast_status);
+                      {booked && (() => {
                         const stage = stageInfo?.stage ?? 'booked';
                         const activeIdx = stage === 'cancelled' ? -1 : STEADFAST_STAGE_ORDER.indexOf(stage as SteadfastStage);
                         return (
@@ -3526,60 +3988,60 @@ export default function AdminPage() {
                       <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-3">
                         <div>
                           <p className={ORD_LBL}>Total</p>
-                          <p className="font-bold text-stone-900 text-sm">{order.total_amount != null ? `৳${Number(order.total_amount).toFixed(0)}` : `৳${pricing.total.toFixed(0)}`}</p>
+                          <p className="font-bold text-stone-900 text-sm">৳{g.total.toLocaleString('en-IN')}</p>
                         </div>
                         <div>
                           <p className={ORD_LBL}>Due</p>
-                          <p className={`font-bold text-sm ${order.due_amount != null && Number(order.due_amount) > 0 ? 'text-amber-600' : 'text-stone-900'}`}>
-                            {order.due_amount != null ? `৳${Number(order.due_amount).toFixed(0)}` : '—'}
+                          <p className={`font-bold text-sm ${g.due > 0 ? 'text-amber-600' : 'text-stone-900'}`}>
+                            ৳{g.due.toLocaleString('en-IN')}
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>bKash</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">{order.bkash_number ?? '—'}</p>
+                          <p className={ORD_LBL}>Wallet</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">
+                            {(() => {
+                              const payer = g.rows.find((r) => r.bkash_number);
+                              return payer
+                                ? `${payer.payment_channel === 'nagad' ? 'Nagad' : 'bKash'} ${payer.bkash_number!}`
+                                : '—';
+                            })()}
+                          </p>
                         </div>
                         <div>
                           <p className={ORD_LBL}>TrxID</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">{order.trx_id ?? '—'}</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">
+                            {g.rows.find((r) => r.trx_id)?.trx_id ?? '—'}
+                          </p>
                         </div>
-                        {order.payment_channel === 'nagad' && (
-                          <div>
-                            <p className={ORD_LBL}>Channel</p>
-                            <p className="font-medium text-orange-600 text-sm">Nagad</p>
-                          </div>
-                        )}
                         <div>
                           <p className={ORD_LBL}>Payment</p>
                           <p className="font-medium text-stone-800 text-sm">
-                            {order.payment_method === 'in_store' || order.order_source === 'manual'
-                              ? 'In-store sale'
-                              : order.payment_method === 'full_advance'
+                            {firstRow.payment_method === 'full_advance'
                               ? 'Full advance'
-                              : order.payment_method === 'advance_partial'
+                              : firstRow.payment_method === 'advance_partial'
                                 ? 'COD + advance'
-                                : order.payment_method === 'cash_on_delivery'
+                                : firstRow.payment_method === 'cash_on_delivery'
                                   ? 'Cash on delivery'
-                                  : allNoAdvance([order.product_code], products)
+                                  : allNoAdvance(g.rows.map((r) => r.product_code), products)
                                     ? 'Cash on delivery'
                                     : '—'}
-                            {order.advance_amount != null && Number(order.advance_amount) > 0 ? ` (৳${Number(order.advance_amount).toFixed(0)})` : ''}
+                            {g.rows.some((r) => r.advance_amount != null && Number(r.advance_amount) > 0)
+                              ? ` (৳${Math.max(...g.rows.map((r) => Number(r.advance_amount ?? 0))).toFixed(0)})`
+                              : ''}
                           </p>
                         </div>
                         <div>
                           <p className={ORD_LBL}>Delivery</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">{order.courier_name ?? '—'}</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">{firstRow.courier_name ?? '—'}</p>
                         </div>
-                        {order.order_source === 'manual' && (
-                          <div>
-                            <p className={ORD_LBL}>Sold by</p>
-                            <p className="font-medium text-stone-800 text-sm">{order.seller_name ?? '—'}</p>
-                          </div>
-                        )}
-                        {order.coupon_code && (
+                        {g.rows.some((r) => r.coupon_code) && (
                           <div>
                             <p className={ORD_LBL}>Coupon</p>
                             <p className="font-medium text-emerald-600 text-sm">
-                              {order.coupon_code}{order.discount_amount != null ? ` (−৳${Number(order.discount_amount).toFixed(0)})` : ''}
+                              {g.rows.find((r) => r.coupon_code)?.coupon_code}
+                              {firstRow.discount_amount != null && Number(firstRow.discount_amount) > 0
+                                ? ` (−৳${Number(firstRow.discount_amount).toFixed(0)})`
+                                : ''}
                             </p>
                           </div>
                         )}
@@ -3588,7 +4050,7 @@ export default function AdminPage() {
                       {/* Address */}
                       <div className="mt-3 pt-3 border-t border-stone-100 flex items-start gap-3">
                         <p className={`${ORD_LBL} mt-0.5 flex-shrink-0`}>Address</p>
-                        <p className="text-sm text-stone-700 break-words">{order.customer_address}</p>
+                        <p className="text-sm text-stone-700 break-words">{firstRow.customer_address}</p>
                       </div>
                     </div>
                   );
@@ -3647,7 +4109,6 @@ export default function AdminPage() {
             const p = products.find((x) => x.id === l.product_id);
             return s + (l.amount.trim() !== '' && !isNaN(Number(l.amount)) ? Number(l.amount) : unitPriceOf(p) * (Number(l.quantity) || 0));
           }, 0);
-          const manualHistory = [...manualOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
           const todaySum = manualToday.reduce((s, o) => s + Number(o.total_amount ?? 0), 0);
           return (
             <div className="space-y-6">
@@ -3849,19 +4310,77 @@ export default function AdminPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1.5">
-                      bKash number <span className="text-stone-400 font-normal">(optional)</span>
-                    </label>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Mobile wallet</label>
+                    {/* bKash / Nagad segmented control — mirrors the checkout wallet selector */}
+                    <div className="flex gap-1 bg-stone-100 rounded-xl p-1 mb-2">
+                      {(['bkash', 'nagad'] as const).map((wallet) => {
+                        const active = manualForm.payment_channel === wallet;
+                        const styles = wallet === 'bkash'
+                          ? { on: 'bg-pink-500 text-white shadow-sm', off: 'text-stone-500 hover:text-pink-600' }
+                          : { on: 'bg-orange-500 text-white shadow-sm', off: 'text-stone-500 hover:text-orange-600' }
+                        return (
+                          <button
+                            key={wallet}
+                            type="button"
+                            onClick={() => setManualForm((f) => ({ ...f, payment_channel: wallet }))}
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
+                              active ? styles.on : styles.off}`}
+                          >
+                            {wallet === 'bkash' ? 'bKash' : 'Nagad'}
+                            {manualForm.bkash.trim() !== '' && active && <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <input
                       type="text" value={manualForm.bkash}
                       onChange={(e) => setManualForm((f) => ({ ...f, bkash: e.target.value }))}
-                      placeholder="Last 4 digits or full number"
-                      className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400"
+                      placeholder={`${manualForm.payment_channel === 'nagad' ? 'Nagad' : 'bKash'} number (last 4 digits or full)`}
+                      className={`w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 ${
+                        manualForm.payment_channel === 'nagad' ? 'focus:ring-orange-400' : 'focus:ring-pink-400'}`}
                     />
+                    <p className="text-xs text-stone-400 mt-1.5">
+                      Wallet the customer paid from — shown on the order card.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Paid in store</label>
+                    {/* Payment scope: everything now, or just the delivery charge
+                        (product amount then collected on delivery via Steadfast). */}
+                    <div className="flex gap-1 bg-stone-100 rounded-xl p-1">
+                      {([
+                        { key: 'full' as const, label: 'Full payment', hint: 'Sale final — delivered' },
+                        { key: 'delivery_only' as const, label: 'Only delivery charge', hint: 'Rest is COD on delivery' },
+                      ]).map((m) => {
+                        const active = manualForm.payment_mode === m.key;
+                        return (
+                          <button
+                            key={m.key}
+                            type="button"
+                            onClick={() => setManualForm((f) => ({ ...f, payment_mode: m.key }))}
+                            title={m.hint}
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                              active
+                                ? m.key === 'full'
+                                  ? 'bg-emerald-500 text-white shadow-sm'
+                                  : 'bg-amber-500 text-white shadow-sm'
+                                : 'text-stone-500 hover:text-stone-700'
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-stone-400 mt-1.5">
+                      {manualForm.payment_mode === 'delivery_only'
+                        ? 'Customer pays the delivery charge now — the product amount is collected on delivery.'
+                        : 'Customer paid everything here — the sale is final.'}
+                    </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-stone-700 mb-1.5">
-                      District <span className="text-stone-400 font-normal">(optional)</span>
+                      District {manualForm.payment_mode === 'delivery_only' ? '*' : <span className="text-stone-400 font-normal">(optional)</span>}
                     </label>
                     <select
                       value={manualForm.district}
@@ -3986,45 +4505,294 @@ export default function AdminPage() {
                 </p>
               </div>
 
-              {/* History */}
-              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm overflow-hidden">
-                <div className="px-5 pt-5 pb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
-                    <Store className="w-3.5 h-3.5" /> Recorded in-store sales ({manualHistory.length})
-                  </p>
+              {/* History filter bar — status chips + search (mirrors the Orders tab) */}
+              <div className="flex flex-wrap items-center gap-2">
+                {([
+                  { key: 'all' as const, label: 'All', count: manualStatusCounts.all, cls: 'bg-stone-900 text-white border-stone-900' },
+                  { key: 'pending' as const, label: 'Pending', count: manualStatusCounts.pending, cls: 'bg-amber-500 text-white border-amber-500' },
+                  { key: 'delivered' as const, label: 'Delivered', count: manualStatusCounts.delivered, cls: 'bg-emerald-500 text-white border-emerald-500' },
+                  { key: 'canceled' as const, label: 'Canceled', count: manualStatusCounts.canceled, cls: 'bg-red-500 text-white border-red-500' },
+                ]).map((f) => {
+                  const active = manualStatusFilter === f.key;
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => setManualStatusFilter(f.key)}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold border transition-all whitespace-nowrap ${
+                        active ? f.cls : 'bg-white text-stone-600 border-stone-200 hover:border-stone-300 hover:bg-stone-50'
+                      }`}
+                    >
+                      {f.label}
+                      <span className={`text-[11px] font-bold min-w-[20px] h-5 px-1.5 rounded-full flex items-center justify-center ${
+                        active ? 'bg-white/20 text-white' : 'bg-stone-100 text-stone-500'
+                      }`}>
+                        {f.count}
+                      </span>
+                    </button>
+                  );
+                })}
+                <div className="relative sm:ml-auto min-w-[220px] flex-1 sm:max-w-xs">
+                  <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={manualQuery}
+                    onChange={(e) => setManualQuery(e.target.value)}
+                    placeholder="Search code, customer, phone, product..."
+                    className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                  />
                 </div>
-                {manualHistory.length === 0 ? (
-                  <div className="px-5 pb-6">
-                    <p className="text-sm text-stone-400">No in-store sales recorded yet. Use the form above for walk-in purchases.</p>
-                  </div>
+              </div>
+
+              {/* History — Orders-tab-style cards, grouped by purchase (order_code) */}
+              <div className="space-y-2">
+                {manualFilteredGroups.length === 0 ? (
+                  <EmptyState
+                    icon={<Store className="w-6 h-6" />}
+                    title={manualGroups.length === 0 ? 'No in-store sales recorded yet' : 'No sales match your filters.'}
+                    hint={manualGroups.length === 0 ? 'Use the form above to record walk-in purchases.' : 'Try a different search term or status filter.'}
+                  />
                 ) : (
-                  <div className="divide-y divide-stone-100">
-                    {manualHistory.slice(0, 30).map((o) => (
-                      <div key={o.id} className="flex items-center gap-3 px-5 py-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs font-bold text-stone-800">{o.order_code ?? o.id.slice(0, 8).toUpperCase()}</span>
-                            <span className="text-sm font-medium text-stone-800 truncate">{o.product_title}</span>
-                            {o.selected_size && <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">{o.selected_size}</span>}
-                            <span className="text-[11px] text-stone-400">× {o.quantity ?? 1}</span>
+                  manualFilteredGroups.map((g) => {
+                    const firstRow = g.rows[0];
+                    const codDue = Math.max(0, g.rows.reduce((s, r) => s + Number(r.due_amount ?? r.total_amount ?? 0), 0));
+                    return (
+                    <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
+                      g.status === 'pending'
+                        ? 'border-l-amber-400'
+                        : g.status === 'canceled'
+                          ? 'border-l-red-300'
+                          : 'border-l-emerald-400'
+                    }`}>
+                      {/* Header: customer + status dropdown (mirrors the Orders tab) */}
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm ${
+                            g.status === 'delivered'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : g.status === 'canceled'
+                                ? 'bg-red-100 text-red-500'
+                                : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {(g.customer || '?').trim().charAt(0).toUpperCase()}
                           </div>
-                          <p className="text-[11px] text-stone-400 mt-0.5">
-                            {o.customer_name} · sold by <span className="font-semibold text-stone-500">{o.seller_name ?? '—'}</span>
-                            {o.bkash_number ? ` · bKash ··${o.bkash_number.slice(-4)}` : ' · cash'}
-                            {' · '}{new Date(o.created_at).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })}
+                          <div className="min-w-0">
+                            <p className="font-semibold text-stone-900 truncate">{g.customer || 'Walk-in customer'}</p>
+                            {g.phone && g.phone !== '—' && (
+                              <a href={`tel:${g.phone}`} className="text-xs text-stone-500 hover:text-brand-600 transition-colors">{g.phone}</a>
+                            )}
+                            <p className="text-[11px] text-stone-400">
+                              {new Date(g.createdAt).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+                          <span className="font-mono text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                            {g.status === 'delivered'
+                              ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
+                              : g.status === 'canceled'
+                                ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
+                                : <><Clock className="w-3.5 h-3.5" /> Pending</>}
+                          </span>
+                          <div className="relative">
+                            <button
+                              onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+                                g.status === 'delivered'
+                                  ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                                  : g.status === 'canceled'
+                                    ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                              }`}
+                            >
+                              {g.status === 'delivered'
+                                ? <><Truck className="w-3.5 h-3.5" /> Delivered</>
+                                : g.status === 'canceled'
+                                  ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
+                                  : <><Clock className="w-3.5 h-3.5" /> Pending</>}
+                              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${manualStatusOpen === g.key ? 'rotate-180' : ''}`} />
+                            </button>
+                            {manualStatusOpen === g.key && (
+                              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                                {([
+                                  { value: 'pending' as OrderStatus, label: 'Pending', icon: <Clock className="w-4 h-4" />, activeCls: 'bg-amber-50 text-amber-700' },
+                                  { value: 'delivered' as OrderStatus, label: 'Delivered', icon: <Truck className="w-4 h-4" />, activeCls: 'bg-emerald-50 text-emerald-700' },
+                                  { value: 'canceled' as OrderStatus, label: 'Canceled', icon: <XCircle className="w-4 h-4" />, activeCls: 'bg-red-50 text-red-700' },
+                                ]).map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => setManualGroupStatus(g, opt.value)}
+                                    className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
+                                      g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                                    }`}
+                                  >
+                                    {opt.icon}
+                                    {opt.label}
+                                    {g.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
+                                  </button>
+                                ))}
+                                <div className="border-t border-stone-100 my-1" />
+                                <button
+                                  onClick={() => { setManualStatusOpen(null); setDeleteOrderConfirm(g.rows[0]?.id ?? null); }}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  Delete sale
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Items — every row of the purchase; multi-item sales expand */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
+                        {g.rows.length > 1 && !manualGroupsOpen.has(g.key) ? (
+                          <button
+                            onClick={() => setManualGroupsOpen((prev) => new Set(prev).add(g.key))}
+                            className="text-xs font-semibold text-brand-600 hover:text-brand-500 transition-colors"
+                          >
+                            {g.rows.length} items in this sale — tap to expand
+                          </button>
+                        ) : (
+                          g.rows.map((row) => (
+                            <div key={row.id} className="flex items-center gap-2 flex-wrap text-sm">
+                              <span className="font-semibold text-stone-800">{row.product_title}</span>
+                              {row.product_code && (
+                                <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">{row.product_code}</span>
+                              )}
+                              {row.selected_size && (
+                                <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
+                              )}
+                              <span className="text-[11px] text-stone-400">Qty: {row.quantity ?? 1}</span>
+                              {row.tracking_code && (
+                                <span className="text-[11px] font-mono text-brand-700 bg-brand-50 border border-brand-200 px-2 py-0.5 rounded-full">{row.tracking_code}</span>
+                              )}
+                              <span className="ml-auto text-xs font-semibold text-stone-600">৳{Number(row.total_amount ?? 0).toLocaleString('en-IN')}</span>
+                            </div>
+                          ))
+                        )}
+                        {g.rows.length > 1 && manualGroupsOpen.has(g.key) && (
+                          <button
+                            onClick={() => setManualGroupsOpen((prev) => { const s = new Set(prev); s.delete(g.key); return s; })}
+                            className="text-xs font-medium text-stone-400 hover:text-stone-600 transition-colors"
+                          >
+                            Show less
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Courier: ONE Steadfast consignment per sale (shared tracking code) */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap">
+                        {(() => {
+                          const sharedCode = g.rows.find((r) => r.tracking_code)?.tracking_code ?? null;
+                          if (sharedCode) {
+                            const stageInfo = steadfastStageBadge(g.rows.find((r) => r.steadfast_status)?.steadfast_status);
+                            return (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard?.writeText(sharedCode)
+                                      .then(() => showToast('success', `Tracking code ${sharedCode} copied.`))
+                                      .catch(() => showToast('info', `Tracking code: ${sharedCode}`));
+                                  }}
+                                  title="Click to copy the tracking code (shared by all items in this sale)"
+                                  className="flex items-center gap-1.5 text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
+                                >
+                                  <Truck className="w-3.5 h-3.5" /> {sharedCode}
+                                </button>
+                                {stageInfo && (
+                                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${stageInfo.cls}`}>{stageInfo.label}</span>
+                                )}
+                                <button
+                                  onClick={() => void handleRefreshManualGroup(g)}
+                                  disabled={checkingSteadfast === g.key}
+                                  className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                                >
+                                  {checkingSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                  Refresh status
+                                </button>
+                                <a
+                                  href={`https://steadfast.com.bd/t/${sharedCode}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
+                                >
+                                  Track ↗
+                                </a>
+                                <button
+                                  onClick={() => void handlePrintManualGroup(g)}
+                                  disabled={printingLabels === g.key}
+                                  title="Print the parcel sticker for this sale"
+                                  className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                                >
+                                  {printingLabels === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
+                                  Print label
+                                </button>
+                              </>
+                            );
+                          }
+                          if (g.status === 'canceled') {
+                            return <span className="text-xs text-stone-400">Canceled sale — not booked with Steadfast</span>;
+                          }
+                          if (!steadfastConfigured) {
+                            return <span className="text-xs text-stone-400">Steadfast API keys not configured — add them to .env to book pickups.</span>;
+                          }
+                          return (
+                            <>
+                              <button
+                                onClick={() => void handleBookManualGroup(g)}
+                                disabled={sendingToSteadfast === g.key}
+                                title="Book one pickup for all items in this sale"
+                                className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-3 py-1.5 rounded-full disabled:opacity-60 transition-all"
+                              >
+                                {sendingToSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                                {sendingToSteadfast === g.key ? 'Booking…' : 'Book Steadfast pickup'}
+                              </button>
+                              <span className="text-xs text-stone-400">
+                                {g.rows.length} item{g.rows.length === 1 ? '' : 's'} · one parcel · {codDue > 0 ? `COD ৳${codDue.toLocaleString('en-IN')}` : 'no COD (paid in store)'}
+                              </span>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Details: money + payment + seller (mirrors the Orders tab grid) */}
+                      <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-3">
+                        <div>
+                          <p className={ORD_LBL}>Total</p>
+                          <p className="font-bold text-stone-900 text-sm">৳{g.total.toLocaleString('en-IN')}</p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>Due</p>
+                          <p className={`font-bold text-sm ${codDue > 0 ? 'text-amber-600' : 'text-stone-900'}`}>৳{codDue.toLocaleString('en-IN')}</p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>Wallet</p>
+                          <p className="font-medium text-stone-800 text-sm truncate">
+                            {firstRow?.bkash_number
+                              ? `${firstRow.payment_channel === 'nagad' ? 'Nagad' : 'bKash'} ${firstRow.bkash_number}`
+                              : 'Cash'}
                           </p>
                         </div>
-                        <span className="text-sm font-bold text-stone-900 flex-shrink-0">৳{Number(o.total_amount ?? 0).toLocaleString('en-IN')}</span>
-                        <button
-                          onClick={() => setDeleteOrderConfirm(o.id)}
-                          title="Delete this record"
-                          className="text-stone-300 hover:text-red-500 transition-colors flex-shrink-0"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div>
+                          <p className={ORD_LBL}>Payment</p>
+                          <p className="font-medium text-stone-800 text-sm">
+                            {codDue > 0 ? `COD + charge paid (${firstRow?.delivery_fee != null ? `৳${Number(firstRow.delivery_fee).toFixed(0)}` : '—'})` : 'In-store sale'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className={ORD_LBL}>Sold by</p>
+                          <p className="font-medium text-stone-800 text-sm">{g.seller ?? '—'}</p>
+                        </div>
+                        <div className="col-span-2">
+                          <p className={ORD_LBL}>Address</p>
+                          <p className="text-sm text-stone-700 break-words">{g.address}</p>
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -5198,23 +5966,44 @@ export default function AdminPage() {
              {settingsTab === 'team' && isSuperAdmin && (
                <div className="space-y-4">
                  <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6">
-                   <h3 className="font-display text-lg font-bold text-stone-900">Add an admin</h3>
-                   <p className="text-sm text-stone-500 mt-0.5">
-                     The email must already exist as a user in Supabase (Dashboard → Authentication → Users) with a password — access is granted here.
-                   </p>
+                  <h3 className="font-display text-lg font-bold text-stone-900">Add an admin</h3>
+                  <p className="text-sm text-stone-500 mt-0.5">
+                    Creates their sign-in (email + password) and grants panel access in one step. Share the password privately.
+                  </p>
                    <div className="flex flex-wrap items-end gap-3 mt-4">
-                     <div className="flex-1 min-w-[220px]">
-                       <label className="block text-sm font-medium text-stone-700 mb-1.5">Email</label>
-                       <input
-                         type="email"
-                         value={newTeamEmail}
-                         onChange={(e) => setNewTeamEmail(e.target.value)}
-                         placeholder="admin2@ornix.com.bd"
-                         className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                       />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-stone-700 mb-1.5">Role</label>
+                    <div className="flex-1 min-w-[220px]">
+                      <label className="block text-sm font-medium text-stone-700 mb-1.5">Email</label>
+                      <input
+                        type="email"
+                        value={newTeamEmail}
+                        onChange={(e) => setNewTeamEmail(e.target.value)}
+                        placeholder="admin2@ornix.com.bd"
+                        className="w-full border border-stone-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                      />
+                    </div>
+                    <div className="min-w-[180px]">
+                      <label className="block text-sm font-medium text-stone-700 mb-1.5">Password</label>
+                      <div className="relative">
+                        <input
+                          type={newTeamShowPassword ? 'text' : 'password'}
+                          value={newTeamPassword}
+                          onChange={(e) => setNewTeamPassword(e.target.value)}
+                          placeholder="Min 6 characters"
+                          className="w-full border border-stone-200 rounded-xl pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                        />
+                        <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                        <button
+                          type="button"
+                          onClick={() => setNewTeamShowPassword((v) => !v)}
+                          title={newTeamShowPassword ? 'Hide password' : 'Show password'}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
+                        >
+                          {newTeamShowPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-stone-700 mb-1.5">Role</label>
                        <select
                          value={newTeamRole}
                          onChange={(e) => setNewTeamRole(e.target.value as 'admin' | 'super_admin')}
@@ -5254,17 +6043,106 @@ export default function AdminPage() {
                              </span>
                            </div>
                          </div>
-                         {row.email !== adminEmail && (
-                           <button
-                             onClick={() => void handleRemoveTeamMember(row.email)}
-                             disabled={teamBusy === row.email}
-                             title="Remove from the admin team"
-                             className="p-2 text-stone-300 hover:text-red-500 disabled:opacity-40 transition-colors"
-                           >
-                             {teamBusy === row.email ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                           </button>
-                         )}
-                       </div>
+                        {row.email !== adminEmail && (
+                          <>
+                            <button
+                              onClick={() => openCredEditor(row.email, 'password')}
+                              title="Change this admin's password"
+                              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-colors ${
+                                credEdit?.email === row.email && credEdit.mode === 'password'
+                                  ? 'bg-brand-100 text-brand-700'
+                                  : 'bg-stone-100 text-stone-500 hover:bg-brand-50 hover:text-brand-600'
+                              }`}
+                            >
+                              <KeyRound className="w-3.5 h-3.5" /> Change password
+                            </button>
+                            <button
+                              onClick={() => openCredEditor(row.email, 'email')}
+                              title="Change this admin's login email"
+                              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-colors ${
+                                credEdit?.email === row.email && credEdit.mode === 'email'
+                                  ? 'bg-brand-100 text-brand-700'
+                                  : 'bg-stone-100 text-stone-500 hover:bg-brand-50 hover:text-brand-600'
+                              }`}
+                            >
+                              <Mail className="w-3.5 h-3.5" /> Change email
+                            </button>
+                            <button
+                              onClick={() => void handleRemoveTeamMember(row.email)}
+                              disabled={teamBusy === row.email}
+                              title="Delete this admin's login and remove them from the team"
+                              className="p-2 text-stone-300 hover:text-red-500 disabled:opacity-40 transition-colors"
+                            >
+                              {teamBusy === row.email ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                            </button>
+                          </>
+                        )}
+                      </div>
+
+                      {credEdit?.email === row.email && credEdit.mode === 'email' && (
+                        <div className="mt-4 pt-4 border-t border-stone-100">
+                          {/* Change login ID */}
+                          <div>
+                            <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">Login ID (email)</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <input
+                                type="email"
+                                value={credNewEmail}
+                                onChange={(e) => setCredNewEmail(e.target.value)}
+                                placeholder={`New ID for ${row.email}`}
+                                className="flex-1 min-w-[200px] border border-stone-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                              />
+                              <button
+                                onClick={() => void handleSetAdminEmail(row.email)}
+                                disabled={teamBusy === row.email || credNewEmail.trim().toLowerCase() === row.email}
+                                className="flex items-center gap-1.5 bg-brand-500 hover:bg-brand-400 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2.5 rounded-xl transition-all"
+                              >
+                                {teamBusy === row.email ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+                                Change ID
+                              </button>
+                            </div>
+                            <p className="text-[11px] text-stone-400 mt-1">They sign in with the new ID afterwards — their password and panel access stay the same.</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {credEdit?.email === row.email && credEdit.mode === 'password' && (
+                        <div className="mt-4 pt-4 border-t border-stone-100">
+                          {/* Set new password */}
+                          <div>
+                            <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">Password</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="relative flex-1 min-w-[200px]">
+                                <input
+                                  type={credShowPassword ? 'text' : 'password'}
+                                  value={credNewPassword}
+                                  onChange={(e) => setCredNewPassword(e.target.value)}
+                                  placeholder="New password (min 6 characters)"
+                                  className="w-full border border-stone-200 rounded-xl pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                                />
+                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                                <button
+                                  type="button"
+                                  onClick={() => setCredShowPassword((v) => !v)}
+                                  title={credShowPassword ? 'Hide password' : 'Show password'}
+                                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
+                                >
+                                  {credShowPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                </button>
+                              </div>
+                              <button
+                                onClick={() => void handleSetAdminPassword(row.email)}
+                                disabled={teamBusy === row.email || credNewPassword.length < 6}
+                                className="flex items-center gap-1.5 bg-stone-800 hover:bg-stone-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2.5 rounded-xl transition-all"
+                              >
+                                {teamBusy === row.email ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+                                Set password
+                              </button>
+                            </div>
+                            <p className="text-[11px] text-stone-400 mt-1">The new password works immediately — share it privately.</p>
+                          </div>
+                        </div>
+                      )}
                        {row.role === 'super_admin' ? (
                          <p className="text-xs text-stone-400 mt-3">Super admins have full access to every tab and manage this team.</p>
                        ) : (
@@ -5858,7 +6736,7 @@ export default function AdminPage() {
                   Keep Order
                 </button>
                 <button
-                  onClick={() => { const id = cancelOrderConfirm; setCancelOrderConfirm(null); if (id) void applyOrderStatus(id, 'canceled'); }}
+                  onClick={() => void handleCancelOrderConfirm()}
                   className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-2.5 rounded-2xl transition-all text-sm">
                   Cancel Order
                 </button>

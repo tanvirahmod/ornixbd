@@ -17,7 +17,7 @@ import type { Order } from './supabase';
 const LOGO_URL = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
 
 // Declared parcel weight printed on labels and sent with every booking.
-const WEIGHT_KG = 1.5;
+const WEIGHT_KG = 0.5;
 
 // Canonical Code 128 symbol widths (6 bar/space widths, 7 for the STOP symbol).
 const CODE128_PATTERNS = [
@@ -113,17 +113,31 @@ function labelDataFor(order: Order): LabelData {
   };
 }
 
+/** Sticker grid layouts for an A4 sheet: stickers per page → columns × rows. */
+export type StickersPerPage = 9 | 12 | 16;
+const LABEL_LAYOUTS: Record<StickersPerPage, { cols: number; rows: number }> = {
+  9: { cols: 3, rows: 3 },
+  12: { cols: 3, rows: 4 },
+  16: { cols: 4, rows: 4 },
+};
+
 const LABEL_CSS = `
-  @page { size: 4in 6in; margin: 0; }
+  @page { size: A4 portrait; margin: 0; }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* One A4 sheet holding a grid of stickers (9/12/16 per page). */
+  .page { width: 210mm; height: 297mm; padding: 8mm; page-break-after: always; break-after: page;
+          display: grid; grid-template-columns: repeat(var(--cols), 1fr);
+          grid-template-rows: repeat(var(--rows), 1fr); }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  .cell { overflow: hidden; display: flex; align-items: flex-start; justify-content: center; }
+  .cell-inner { transform-origin: top left; }
   .label { width: 384px; height: 576px; padding: 14px 16px 10px; display: flex; flex-direction: column;
-           page-break-after: always; overflow: hidden; }
-  .label:last-child { page-break-after: auto; }
+           overflow: hidden; }
   @media screen {
     body { background: #777; padding: 20px 0; }
-    .label { background: #fff; margin: 0 auto 20px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+    .page { background: #fff; margin: 0 auto 20px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
   }
   .head { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 8px;
           border-bottom: 3px solid #000; }
@@ -203,31 +217,43 @@ function labelHtml(data: LabelData, merchantId: string | null): string {
     </div>`;
 }
 
-/** Build the full standalone HTML document with one sticker per order. */
-export async function renderLabelsDocument(orders: Order[], merchantId: string | null): Promise<string> {
-  const pages = await Promise.all(
-    orders.map(async (o) => {
-      const data = labelDataFor(o);
-      try {
-        data.qrDataUrl = await QRCode.toDataURL(`https://steadfast.com.bd/t/${data.barcodeText}`, {
-          margin: 1,
-          width: 240,
-          color: { dark: '#000000', light: '#ffffff' },
-        });
-      } catch {
-        data.qrDataUrl = '';
-      }
-      return labelHtml(data, merchantId);
-    })
-  );
+/** Build the full standalone HTML document: A4 pages with a sticker grid. */
+export async function renderLabelsDocument(orders: Order[], merchantId: string | null, perPage: StickersPerPage = 9): Promise<string> {
+  const { cols, rows } = LABEL_LAYOUTS[perPage] ?? LABEL_LAYOUTS[9];
+  // Scale each sticker (designed at 384×576 px) to fit its grid cell.
+  const MM_PX = 96 / 25.4; // CSS px per mm at A4 print
+  const innerW = (210 - 16) * MM_PX; // 8mm padding on each side
+  const innerH = (297 - 16) * MM_PX;
+  const scale = Math.min(innerW / cols / 384, innerH / rows / 576);
+
+  const pages: string[] = [];
+  for (let i = 0; i < orders.length; i += perPage) {
+    const chunk = orders.slice(i, i + perPage);
+    const cells = await Promise.all(
+      chunk.map(async (o) => {
+        const data = labelDataFor(o);
+        try {
+          data.qrDataUrl = await QRCode.toDataURL(`https://steadfast.com.bd/t/${data.barcodeText}`, {
+            margin: 1,
+            width: 240,
+            color: { dark: '#000000', light: '#ffffff' },
+          });
+        } catch {
+          data.qrDataUrl = '';
+        }
+        return `<div class="cell"><div class="cell-inner" style="width:${(384 * scale).toFixed(1)}px;height:${(576 * scale).toFixed(1)}px"><div style="transform:scale(${scale.toFixed(4)});transform-origin:top left">${labelHtml(data, merchantId)}</div></div></div>`;
+      })
+    );
+    pages.push(`<div class="page" style="--cols:${cols};--rows:${rows}">${cells.join('\n')}</div>`);
+  }
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>Steadfast parcel labels (${orders.length})</title>
 <style>${LABEL_CSS}</style></head><body>${pages.join('\n')}</body></html>`;
 }
 
-/** Open the browser print dialog with one sticker per order (4×6in pages). */
-export async function printLabels(orders: Order[], merchantId: string | null): Promise<void> {
-  const doc = await renderLabelsDocument(orders, merchantId);
+/** Open the browser print dialog with A4 sheets of stickers (9/12/16 per page). */
+export async function printLabels(orders: Order[], merchantId: string | null, perPage: StickersPerPage = 9): Promise<void> {
+  const doc = await renderLabelsDocument(orders, merchantId, perPage);
 
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');

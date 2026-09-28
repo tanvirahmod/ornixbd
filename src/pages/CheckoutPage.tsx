@@ -17,9 +17,6 @@ import { setSEO, SITE_NAME } from '../lib/seo';
    CHECKOUT CONSTANTS — tweak numbers here
    ──────────────────────────────────────────────────────────── */
 const DELIVERY_FEE = 150;
-const FREE_DELIVERY_THRESHOLD = 1000;
-/** Orders at/above this total must be paid fully in advance. */
-const FULL_ADVANCE_THRESHOLD = 1500;
 const BKASH_NUMBER = '01700-000000';
 
 type PaymentChoice = 'advance' | 'full';
@@ -297,10 +294,9 @@ export default function CheckoutPage() {
   const zone = deliveryDistrict ? zoneForDistrict(deliveryDistrict) : null;
   const zoneFee = zone && zoneRates ? zoneRates[zone] : null;
 
-  const deliveryFee =
-    subtotal >= FREE_DELIVERY_THRESHOLD
-      ? 0
-        : zoneFee ?? DELIVERY_FEE;
+  // Delivery charge always applies — the zone rate once a district is chosen,
+  // otherwise the flat fallback fee.
+  const deliveryFee = zoneFee ?? DELIVERY_FEE;
 
   const discountAmount = coupon
     ? Math.min(
@@ -309,9 +305,6 @@ export default function CheckoutPage() {
       )
     : 0;
   const total = round2(Math.max(0, subtotal - discountAmount + deliveryFee));
-
-  // Orders at/above the threshold are always fully prepaid
-  const fullAdvanceRequired = total >= FULL_ADVANCE_THRESHOLD;
 
   // Every item in this order is a no-advance product → pure cash on delivery,
   // no bKash number / TrxID required.
@@ -322,9 +315,6 @@ export default function CheckoutPage() {
         return !!code && productCodeMap[code] === true;
       })
     : product?.advance_optional === true;
-  useEffect(() => {
-    if (fullAdvanceRequired && paymentChoice !== 'full') setPaymentChoice('full');
-  }, [fullAdvanceRequired, paymentChoice]);
 
   const advanceAmount = noAdvanceRequired ? 0 : paymentChoice === 'full' ? total : deliveryFee;
   const dueAmount = round2(total - advanceAmount);
@@ -406,9 +396,8 @@ export default function CheckoutPage() {
       else if (!/^[A-Za-z0-9]{6,20}$/.test(toAsciiDigits(trxId.trim()))) next.trxId = t('trxIdInvalid', { channel: channelLabel });
     }
     setPaymentErrors(next);
-    const agreed = agreeTerms || fullAdvanceRequired;
     if (!agreeTerms) setAgreeError(true);
-    return !Object.values(next).some(Boolean) && agreed;
+    return !Object.values(next).some(Boolean) && agreeTerms;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -427,6 +416,7 @@ export default function CheckoutPage() {
       code: string | null;
       size: string | null;
       quantity: number;
+      unitPrice: number;
     }> = isCartCheckout
       ? cartItems.map((item) => ({
           productId: item.productId,
@@ -434,6 +424,7 @@ export default function CheckoutPage() {
           code: item.productCode,
           size: item.size,
           quantity: item.quantity,
+          unitPrice: item.unitPrice,
         }))
       : [
           {
@@ -442,6 +433,7 @@ export default function CheckoutPage() {
             code: product?.product_code ?? null,
             size: selectedSize && selectedSize !== 'none' ? selectedSize : null,
             quantity: finalQuantity,
+            unitPrice,
           },
         ];
 
@@ -465,6 +457,26 @@ export default function CheckoutPage() {
       total_amount: total,
       coupon_code: coupon?.code ?? null,
     };
+
+    // Per-line money allocation — every order row carries ONLY its own share of
+    // the purchase (each row previously stored the whole cart's totals, which
+    // multiplied revenue when rows were summed). Cart-wide charges are spread
+    // proportionally to each line's value; rounding leftovers land on the first
+    // line so per-line sums always equal the purchase totals exactly.
+    const lineGross = lineItems.map((item) => round2(item.unitPrice * item.quantity));
+    const grossSum = round2(lineGross.reduce((s, v) => s + v, 0)) || 1;
+    const alloc = (charge: number, i: number) =>
+      i === 0
+        ? round2(charge - lineGross.slice(1).reduce((s, g) => s + (charge * g) / grossSum, 0))
+        : round2((charge * lineGross[i]) / grossSum);
+    const linePricing = lineItems.map((_item, i) => ({
+      lineSubtotal: lineGross[i],
+      lineFee: alloc(deliveryFee, i),
+      lineDiscount: alloc(discountAmount, i),
+      lineTotal: round2(lineGross[i] + alloc(deliveryFee, i) - alloc(discountAmount, i)),
+      lineAdvance: alloc(noAdvanceRequired ? 0 : round2(advanceAmount), i),
+      lineDue: round2(lineGross[i] + alloc(deliveryFee, i) - alloc(discountAmount, i) - alloc(noAdvanceRequired ? 0 : round2(advanceAmount), i)),
+    }));
     setPlacedOrderCode(orderCode);
     const payment = {
       payment_method: noAdvanceRequired ? 'cash_on_delivery' : paymentChoice === 'full' ? 'full_advance' : 'advance_partial',
@@ -480,7 +492,7 @@ export default function CheckoutPage() {
     };
 
     // Fall back to progressively fewer columns for older schemas
-    const payloadCandidates: Array<Record<string, string | number | null>>[] = lineItems.map((item) => [
+    const payloadCandidates: Array<Record<string, string | number | null>>[] = lineItems.map((item, i) => [
       {
         product_id: item.productId,
         product_title: item.title,
@@ -489,8 +501,16 @@ export default function CheckoutPage() {
         quantity: item.quantity,
         order_code: orderCode,
         ...customer,
-        ...pricing,
+        subtotal: linePricing[i].lineSubtotal,
+        delivery_fee: linePricing[i].lineFee,
+        discount_amount: linePricing[i].lineDiscount,
+        total_amount: linePricing[i].lineTotal,
+        coupon_code: pricing.coupon_code,
         ...payment,
+        // Payment amounts are allocated per line too — the row's advance/due
+        // must be its own share, not the purchase-wide values.
+        advance_amount: linePricing[i].lineAdvance,
+        due_amount: linePricing[i].lineDue,
       },
       {
         product_id: item.productId,
@@ -500,7 +520,10 @@ export default function CheckoutPage() {
         quantity: item.quantity,
         order_code: orderCode,
         ...customer,
-        ...pricing,
+        subtotal: linePricing[i].lineSubtotal,
+        delivery_fee: linePricing[i].lineFee,
+        discount_amount: linePricing[i].lineDiscount,
+        total_amount: linePricing[i].lineTotal,
         bkash_number: payment.bkash_number,
         trx_id: payment.trx_id,
       },
@@ -512,9 +535,9 @@ export default function CheckoutPage() {
         quantity: item.quantity,
         order_code: orderCode,
         ...customer,
-        subtotal: pricing.subtotal,
-        delivery_fee: pricing.delivery_fee,
-        total_amount: pricing.total_amount,
+        subtotal: linePricing[i].lineSubtotal,
+        delivery_fee: linePricing[i].lineFee,
+        total_amount: linePricing[i].lineTotal,
       },
       {
         product_id: item.productId,
@@ -754,7 +777,7 @@ export default function CheckoutPage() {
         : deliveryFee === 0
           ? t('payNothingNowDesc', { due: total.toFixed(0), channel: channelName })
           : t('payDeliveryNowDesc', { advance: deliveryFee.toFixed(0), due: round2(total - deliveryFee).toFixed(0), channel: channelName }),
-      disabled: fullAdvanceRequired,
+      disabled: noAdvanceRequired,
       advance: noAdvanceRequired ? 0 : deliveryFee,
       due: noAdvanceRequired ? total : round2(total - deliveryFee),
     },
@@ -771,7 +794,7 @@ export default function CheckoutPage() {
 
   // Hint when the zone fee isn't known yet for the chosen district
   const zonePendingHint =
-    subtotal < FREE_DELIVERY_THRESHOLD && zoneFee == null
+    zoneFee == null
       ? t('districtFeeHint')
       : '';
 
@@ -840,9 +863,7 @@ export default function CheckoutPage() {
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-stone-500">{t('shippingRowLabel')}</span>
-                  <span className={`font-medium ${deliveryFee === 0 ? 'text-emerald-600' : 'text-stone-700'}`}>
-                    {deliveryFee === 0 ? t('freeDeliveryShort') : `৳${deliveryFee.toFixed(0)}`}
-                  </span>
+                  <span className="font-medium text-stone-700">৳{deliveryFee.toFixed(0)}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-stone-100">
                   <span className="font-semibold text-stone-900">{t('totalToPay')}</span>
@@ -1060,8 +1081,8 @@ export default function CheckoutPage() {
                     <span className="flex-1 min-w-0">
                       <span className="flex items-center justify-between gap-2">
                         <span className="font-bold text-stone-900 text-sm">{t('homeDeliveryName')}</span>
-                        <span className={`text-sm font-bold whitespace-nowrap ${deliveryFee === 0 ? 'text-emerald-600' : 'text-stone-900'}`}>
-                          {deliveryFee === 0 ? t('freeDeliveryShort') : `৳${deliveryFee.toFixed(0)}`}
+                        <span className="text-sm font-bold whitespace-nowrap text-stone-900">
+                          ৳{deliveryFee.toFixed(0)}
                         </span>
                       </span>
                       <span className="block text-xs text-stone-500 mt-0.5">{t('homeDeliveryDesc')}</span>
@@ -1133,7 +1154,7 @@ export default function CheckoutPage() {
                           {t('homeDeliveryName')}
                         </p>
                         <p className="text-xs text-stone-500">
-                          {t('shippingRowLabel')}: {deliveryFee === 0 ? t('freeDeliveryShort') : `৳${deliveryFee.toFixed(0)}`}
+                          {t('shippingRowLabel')}: ৳{deliveryFee.toFixed(0)}
                         </p>
                       </div>
                       <Pencil className="w-3.5 h-3.5 text-brand-600 flex-shrink-0 mt-1" />
@@ -1170,12 +1191,6 @@ export default function CheckoutPage() {
                       );
                     })}
                   </div>
-
-                  {fullAdvanceRequired && !noAdvanceRequired && (
-                    <p className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
-                      {t('fullAdvanceRequiredNote', { threshold: FULL_ADVANCE_THRESHOLD.toFixed(0) })}
-                    </p>
-                  )}
 
                   {/* Advance instructions (only when something must be sent now) */}
                   {advanceAmount > 0 ? (

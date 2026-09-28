@@ -83,7 +83,7 @@ export async function createSteadfastConsignment(
       recipient_phone: input.recipient_phone,
       recipient_address: input.recipient_address,
       cod_amount: input.cod_amount,
-      weight: input.weight ?? 1.5, // declared parcel weight (kg)
+      weight: input.weight ?? 0.5, // declared parcel weight (kg)
       note: input.note ?? '',
     });
 

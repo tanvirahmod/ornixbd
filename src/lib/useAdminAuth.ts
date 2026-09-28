@@ -43,6 +43,37 @@ export function useAdminAuth() {
   const [role, setRole] = useState<'super_admin' | 'admin' | null>(null);
   const [permissions, setPermissions] = useState<Record<string, boolean>>({});
 
+  // ── Session keep-alive ──
+  // The access token is short-lived (1 h by default). While a tab stays open
+  // supabase-js refreshes it automatically, but a browser that was closed for
+  // a while relies on ONE refresh attempt at startup — if that single attempt
+  // fails (slow network, tab race), the session is discarded and the admin
+  // sees the login screen again. This keep-alive proactively refreshes the
+  // token before it expires — on mount, every 5 minutes, and whenever the
+  // user returns to the tab — and retries after a failed attempt, so coming
+  // back later never costs a sign-in. Refresh tokens themselves don't expire
+  // unless revoked, so this keeps admins logged in for weeks/months.
+  const REFRESH_AHEAD_MS = 15 * 60 * 1000; // refresh when < 15 min of token life remain
+  let lastKeepAliveAt = 0; // throttle: at most one check per minute
+  const keepAlive = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastKeepAliveAt < 60 * 1000) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return; // signed out — nothing to keep alive
+      lastKeepAliveAt = now;
+      const expiresInMs = (session.expires_at ?? 0) * 1000 - Date.now();
+      if (expiresInMs < REFRESH_AHEAD_MS) {
+        const { error } = await supabase.auth.refreshSession();
+        if (error) throw error;
+      }
+    } catch {
+      // Failed (offline, server blip) — reset the throttle so the next
+      // interval tick / tab focus retries immediately.
+      lastKeepAliveAt = 0;
+    }
+  }, []);
+
   const loadRole = useCallback(async (email: string) => {
     if (!email) {
       setRole(null);
@@ -87,6 +118,22 @@ export function useAdminAuth() {
       sub.subscription.unsubscribe();
     };
   }, [loadRole]);
+
+  // Run the keep-alive: once at startup (covers "came back after a break"),
+  // then on an interval and whenever the tab regains focus/visibility.
+  useEffect(() => {
+    void keepAlive();
+    const interval = window.setInterval(() => void keepAlive(), 5 * 60 * 1000);
+    const onFocus = () => void keepAlive();
+    const onVisibility = () => { if (document.visibilityState === 'visible') void keepAlive(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [keepAlive]);
 
   /** Password sign-in. Returns an error message on failure, null on success. */
   const signIn = async (email: string, password: string): Promise<string | null> => {

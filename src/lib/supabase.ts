@@ -3,7 +3,16 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    // Keep admins signed in across browser restarts: the session (incl. the
+    // refresh token) persists in localStorage, so closing the browser for an
+    // hour — or a week — no longer means signing in again. useAdminAuth adds
+    // a keep-alive that refreshes the short-lived access token on top of this.
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
 
 export type Category = {
   id: string;

@@ -8,7 +8,6 @@ import { COVER_FALLBACK, productParam } from '../lib/utils';
 import { setSEO, SITE_NAME } from '../lib/seo';
 
 const DELIVERY_FEE = 150;
-const FREE_DELIVERY_THRESHOLD = 1000;
 
 export default function CartPage() {
   const { t } = useLanguage();
@@ -24,7 +23,9 @@ export default function CartPage() {
     });
   }, []);
 
-  const deliveryFee = subtotal >= FREE_DELIVERY_THRESHOLD || subtotal === 0 ? 0 : DELIVERY_FEE;
+  // Delivery charge always applies (estimated here at the flat rate; checkout
+  // charges the exact zone rate once the district is chosen).
+  const deliveryFee = subtotal === 0 ? 0 : DELIVERY_FEE;
   const total = subtotal + deliveryFee;
 
   if (items.length === 0) {
@@ -150,9 +151,7 @@ export default function CartPage() {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-stone-500">{t('deliveryFee')}</span>
-                  <span className={`font-medium ${deliveryFee === 0 ? 'text-emerald-600' : 'text-stone-700'}`}>
-                    {deliveryFee === 0 ? t('freeDeliveryShort') : `৳${deliveryFee}`}
-                  </span>
+                  <span className="font-medium text-stone-700">৳{deliveryFee}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-stone-100">
                   <span className="font-semibold text-stone-900">{t('totalToPay')}</span>
@@ -165,7 +164,6 @@ export default function CartPage() {
               >
                 {t('proceedToCheckout')}
               </button>
-              <p className="mt-3 text-xs text-stone-400 text-center">{t('freeDelivery')}</p>
             </div>
           </div>
         </div>
