@@ -133,9 +133,21 @@ export default async (request: Request, context: Context) => {
     const collectionMatch = url.pathname.match(/^\/collections\/(.+)$/);
 
     if (productMatch) {
-      // Product URLs end with -prd-XXXXX (slugified title + lowercase code)
-      const codeMatch = productMatch[1].match(/-(prd-\d+)$/i);
-      productCode = codeMatch ? codeMatch[1].toUpperCase() : undefined;
+      // Product URLs end with the product code after the slugified title.
+      // Handles generated codes (`PRD-00001`), custom codes with no hyphen
+      // (`R0YAL304`), and custom codes with their own hyphen (`NX-001`) —
+      // same candidate logic as extractProductCodeCandidates in src/lib/utils.ts.
+      const slugCode = productMatch[1];
+      const prdMatch = slugCode.match(/-(prd-\d+)$/i);
+      if (prdMatch) {
+        productCode = prdMatch[1].toUpperCase();
+      } else {
+        const tokens = slugCode.split('-');
+        const last = tokens[tokens.length - 1] ?? '';
+        const lastTwo = tokens.length >= 3 ? tokens.slice(-2).join('-') : '';
+        if (/\d/.test(last) && last.length <= 20) productCode = last.toUpperCase();
+        else if (lastTwo && /\d/.test(lastTwo) && lastTwo.length <= 24) productCode = lastTwo.toUpperCase();
+      }
     } else if (collectionMatch) {
       categorySlug = collectionMatch[1];
     }

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 
-type Target = 'home' | 'shop' | 'collections' | 'product' | 'checkout' | 'admin' | 'feedback' | 'new-arrivals' | 'hot-deals' | 'shop-by-size' | 'story' | 'policies';
+type Target = 'home' | 'shop' | 'collections' | 'product' | 'checkout' | 'admin' | 'feedback' | 'new-arrivals' | 'hot-deals' | 'shop-by-size' | 'story' | 'policies' | 'track';
 
 export function useNavigation() {
   const navigate = useNavigate();
@@ -34,6 +34,8 @@ export function useNavigation() {
       navigate('/admin');
     } else if (target === 'feedback') {
       navigate('/feedback');
+    } else if (target === 'track') {
+      navigate('/track');
     }
   };
 }

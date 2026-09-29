@@ -4,10 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
+import { useSiteSettings } from '../lib/siteConfig';
+import { parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS } from '../components/ZoneSelect';
 import { COVER_FALLBACK, productParam } from '../lib/utils';
 import { setSEO, SITE_NAME } from '../lib/seo';
-
-const DELIVERY_FEE = 150;
 
 export default function CartPage() {
   const { t } = useLanguage();
@@ -23,10 +23,19 @@ export default function CartPage() {
     });
   }, []);
 
-  // Delivery charge always applies (estimated here at the flat rate; checkout
-  // charges the exact zone rate once the district is chosen).
-  const deliveryFee = subtotal === 0 ? 0 : DELIVERY_FEE;
-  const total = subtotal + deliveryFee;
+  // Delivery is charged at checkout by the customer's district, using the
+  // admin-set zone rates (Admin → Settings → Delivery & Payments). Show the
+  // CHEAPEST zone rate here as an honest "from ৳X". No hardcoded fallback:
+  // unconfigured rates show "charged at checkout" instead of an invented fee.
+  const { values: rateValues } = useSiteSettings([...ZONE_RATE_KEYS]);
+  const parsedRates = parseZoneRates(rateValues);
+  const minDeliveryFee = parsedRates ? minZoneRateOf(parsedRates) : null;
+  const maxDeliveryFee = parsedRates ? Math.max(parsedRates.dhaka_city, parsedRates.dhaka_suburban, parsedRates.outside_dhaka) : null;
+
+  // The delivery charge depends on the district (picked at checkout), so the
+  // cart shows the product total plus an honest fee RANGE — no invented
+  // "total" that pretends delivery is free.
+  const total = subtotal;
 
   if (items.length === 0) {
     return (
@@ -151,12 +160,21 @@ export default function CartPage() {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-stone-500">{t('deliveryFee')}</span>
-                  <span className="font-medium text-stone-700">৳{deliveryFee}</span>
+                  {minDeliveryFee != null ? (
+                    <span className="font-medium text-stone-700">
+                      ৳{minDeliveryFee}{maxDeliveryFee != null && maxDeliveryFee !== minDeliveryFee ? `–৳${maxDeliveryFee}` : ''}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-stone-400 italic">{t('deliveryFeeAtCheckout')}</span>
+                  )}
                 </div>
                 <div className="flex justify-between pt-2 border-t border-stone-100">
-                  <span className="font-semibold text-stone-900">{t('totalToPay')}</span>
+                  <span className="font-semibold text-stone-900">{t('totalNow')}</span>
                   <span className="font-display font-bold text-stone-900 text-lg">৳{total.toFixed(0)}</span>
                 </div>
+                {minDeliveryFee != null && (
+                  <p className="text-[11px] text-stone-400 text-right">{t('totalPlusDelivery', { min: minDeliveryFee, max: maxDeliveryFee ?? minDeliveryFee })}</p>
+                )}
               </div>
               <button
                 onClick={() => navigate('/checkout/cart')}

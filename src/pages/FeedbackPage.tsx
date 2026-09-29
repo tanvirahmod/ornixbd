@@ -17,7 +17,7 @@ export default function FeedbackPage() {
       url: '/feedback',
     });
   }, []);
-  const [form, setForm] = useState({ name: '', email: '', message: '', captcha: '' });
+  const [form, setForm] = useState({ name: '', email: '', message: '', captcha: '', website: '' });
   const [errors, setErrors] = useState({ name: '', email: '', message: '', captcha: '' });
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -59,6 +59,9 @@ export default function FeedbackPage() {
       name: form.name.trim(),
       email: form.email.trim(),
       message: form.message.trim(),
+      // Honeypot: hidden field humans never fill. Bots that fill it are
+      // dropped silently by the feedback_spam_guard trigger server-side.
+      website: form.website,
     });
 
     if (submitError) {
@@ -150,6 +153,20 @@ export default function FeedbackPage() {
               className={`w-full border rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 transition-all resize-none ${errors.message ? 'border-red-400 bg-red-50' : 'border-stone-200'}`}
             />
             {errors.message && <p className="text-xs text-red-500 mt-1">{errors.message}</p>}
+          </div>
+
+          {/* Honeypot — invisible to humans, catnip to bots */}
+          <div aria-hidden="true" style={{ position: 'absolute', left: '-9999px', top: '-9999px', height: 0, overflow: 'hidden' }}>
+            <label htmlFor="fb-website">Website</label>
+            <input
+              id="fb-website"
+              type="text"
+              name="website"
+              tabIndex={-1}
+              autoComplete="off"
+              value={form.website}
+              onChange={(e) => setForm({ ...form, website: e.target.value })}
+            />
           </div>
 
           {/* Numeric Captcha */}

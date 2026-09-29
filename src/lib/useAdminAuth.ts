@@ -8,7 +8,7 @@
 //   • role 'admin' — baseline access; a capability set to false in the
 //     permissions map hides the matching tab (UI) and blocks the underlying
 //     writes (RLS). Missing key = allowed.
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from './supabase';
 
 export type AdminCapability =
@@ -74,26 +74,51 @@ export function useAdminAuth() {
     }
   }, []);
 
+  // admin_me() is a SECURITY DEFINER RPC — returns the signed-in admin's own
+  // role + permissions without depending on admin_users RLS (a
+  // self-referencing SELECT policy there would recurse and error).
+  // getSession() and onAuthStateChange both fire at sign-in — share one
+  // in-flight lookup so the RPC runs once, not twice.
+  const roleLoadInFlight = useRef<Promise<void> | null>(null);
+  const roleLoadEmail = useRef('');
   const loadRole = useCallback(async (email: string) => {
     if (!email) {
       setRole(null);
       setPermissions({});
       return;
     }
-    // admin_me() is a SECURITY DEFINER RPC — returns the signed-in admin's
-    // own role + permissions without depending on admin_users RLS (a
-    // self-referencing SELECT policy there would recurse and error).
-    const { data, error } = await supabase.rpc('admin_me');
-    if (error) {
-      // Migration not applied yet — treat as plain admin (baseline access).
-      console.warn('admin_me() unavailable — run the super-admin permissions migration.', error.message);
+    if (roleLoadInFlight.current && roleLoadEmail.current === email) return roleLoadInFlight.current;
+    roleLoadEmail.current = email;
+    roleLoadInFlight.current = (async () => {
+      // Network blips (the login-time HTTP/2 burst refused streams with
+      // "Failed to fetch") used to log a misleading "run the migration"
+      // warning. Retry transient failures; only a real function-not-found
+      // means the migration is actually missing.
+      let lastError: { message: string } | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { data, error } = await supabase.rpc('admin_me');
+        if (!error) {
+          const row = Array.isArray(data) ? data[0] : data;
+          setRole((row?.role as 'super_admin' | 'admin' | undefined) ?? null);
+          setPermissions((row?.permissions as Record<string, boolean> | undefined) ?? {});
+          roleLoadInFlight.current = null;
+          return;
+        }
+        lastError = error;
+        const transient = /failed to fetch|err_http2|err_network|server refused|\b5\d\d\b/i.test(error.message);
+        if (!transient) break;
+        await new Promise((r) => window.setTimeout(r, 350 * (attempt + 1)));
+      }
+      if (lastError && /could not find the function|not found in the schema cache|404/i.test(lastError.message)) {
+        console.warn('admin_me() unavailable — run the super-admin permissions migration.', lastError.message);
+      } else if (lastError) {
+        console.warn('admin_me() hit a network error — will retry on the next auth event.', lastError.message);
+      }
       setRole(null);
       setPermissions({});
-      return;
-    }
-    const row = Array.isArray(data) ? data[0] : data;
-    setRole((row?.role as 'super_admin' | 'admin' | undefined) ?? null);
-    setPermissions((row?.permissions as Record<string, boolean> | undefined) ?? {});
+      roleLoadInFlight.current = null;
+    })();
+    return roleLoadInFlight.current;
   }, []);
 
   useEffect(() => {

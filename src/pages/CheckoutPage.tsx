@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   Check, ChevronRight, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash,
-  ShieldCheck, ShoppingBag, Truck, Tag, X, Pencil, Banknote, AlertTriangle,
+  ShieldCheck, ShoppingBag, Truck, Tag, X, Pencil, Banknote, AlertTriangle, PackageSearch,
 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { supabase, Product, Coupon } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
-import ZoneSelect, { zoneForDistrict } from '../components/ZoneSelect';
+import ZoneSelect, { zoneForDistrict, parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS, type ZoneRateMap } from '../components/ZoneSelect';
 import ThanaSelect from '../components/ThanaSelect';
 import { useNavigation } from '../lib/navigation';
 import { useCart, CartItem } from '../lib/CartContext';
@@ -16,8 +16,6 @@ import { setSEO, SITE_NAME } from '../lib/seo';
 /* ────────────────────────────────────────────────────────────
    CHECKOUT CONSTANTS — tweak numbers here
    ──────────────────────────────────────────────────────────── */
-const DELIVERY_FEE = 150;
-const BKASH_NUMBER = '01700-000000';
 
 type PaymentChoice = 'advance' | 'full';
 type PayChannel = 'bkash' | 'nagad';
@@ -44,7 +42,6 @@ const CHANNEL_THEME = {
   },
 } as const;
 type CheckoutStep = 1 | 2 | 3;
-type DeliveryZone = 'dhaka_city' | 'dhaka_suburban' | 'outside_dhaka';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -123,7 +120,7 @@ export default function CheckoutPage() {
   const [errors, setErrors] = useState({ name: '', phone: '', address: '', deliveryDistrict: '', deliveryThana: '' });
   const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>(persisted?.paymentChoice ?? 'advance');
   const [payChannel, setPayChannel] = useState<PayChannel>(persisted?.payChannel ?? 'bkash');
-  const [wallets, setWallets] = useState<{ bkash: string; nagad: string }>({ bkash: BKASH_NUMBER, nagad: '' });
+  const [wallets, setWallets] = useState<{ bkash: string; nagad: string }>({ bkash: '', nagad: '' });
   const [bkashNumber, setBkashNumber] = useState(persisted?.bkashNumber ?? '');
   const [trxId, setTrxId] = useState(persisted?.trxId ?? '');
   const [paymentErrors, setPaymentErrors] = useState({ bkashNumber: '', trxId: '' });
@@ -132,6 +129,8 @@ export default function CheckoutPage() {
 
   const [couponInput, setCouponInput] = useState('');
   const [coupon, setCoupon] = useState<Coupon | null>(null);
+  // Out-of-stock report from the atomic stock RPC, shown on the payment step.
+  const [stockError, setStockError] = useState('');
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [bkashCopied, setBkashCopied] = useState(false);
@@ -157,35 +156,34 @@ export default function CheckoutPage() {
   }, [form, paymentChoice, payChannel, bkashNumber, trxId]);
 
   // ── Steadfast courier charges + the bKash/Nagad numbers to pay the advance to, editable in Admin → Settings ──
-  const [zoneRates, setZoneRates] = useState<Record<DeliveryZone, number> | null>(null);
+  const [zoneRates, setZoneRates] = useState<ZoneRateMap | null>(null);
   useEffect(() => {
     async function fetchZoneRates() {
-      const { data } = await supabase.from('site_settings').select('key, value');
-      const pick = (key: string, fallback: number): number => {
-        const row = (data ?? []).find((s: { key: string }) => s.key === key);
-        const num = Number(row?.value);
-        return row?.value != null && row.value !== '' && !isNaN(num) && num >= 0 ? num : fallback;
-        };
-      setZoneRates({
-        dhaka_city: pick('steadfast_rate_dhaka_city', 60),
-        dhaka_suburban: pick('steadfast_rate_dhaka_suburban', 110),
-        outside_dhaka: pick('steadfast_rate_outside_dhaka', 130),
-      });
+      // Rates come ONLY from the admin panel (site_settings). No hardcoded
+      // fallback: if any zone rate is missing/blank, ordering pauses with a
+      // clear notice instead of silently charging an invented fee.
+      const { data } = await supabase.from('site_settings').select('key, value').in('key', [...ZONE_RATE_KEYS, 'checkout_bkash_number', 'checkout_nagad_number']);
+      const values: Record<string, string | null> = {};
+      for (const s of data ?? []) values[s.key] = s.value;
+      setZoneRates(parseZoneRates(values));
       const bkashRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_bkash_number');
       const nagadRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_nagad_number');
+      // NEVER fall back to a placeholder number — customers would send real
+      // money to a dead wallet. An empty number means "temporarily
+      // unavailable" and the payment step shows a clear notice instead.
       setWallets({
-        bkash: bkashRow?.value?.trim() || BKASH_NUMBER,
-        nagad: nagadRow?.value?.trim() || '',
+        bkash: bkashRow?.value?.trim() ?? '',
+        nagad: nagadRow?.value?.trim() ?? '',
       });
     }
     fetchZoneRates();
   }, []);
   // bKash is always available; Nagad appears once the admin saves a Nagad number.
   const payChannels = useMemo(() => {
-    const out: PayChannel[] = ['bkash'];
+    const out: PayChannel[] = wallets.bkash ? ['bkash'] : [];
     if (wallets.nagad) out.push('nagad');
     return out;
-  }, [wallets.nagad]);
+  }, [wallets.nagad, wallets.bkash]);
   const effectiveChannel: PayChannel = payChannels.includes(payChannel) ? payChannel : 'bkash';
   const payToWallet = effectiveChannel === 'nagad' ? wallets.nagad : wallets.bkash;
   const channelLabel = effectiveChannel === 'nagad' ? t('payChannelNagad') : t('payChannelBkash');
@@ -294,9 +292,13 @@ export default function CheckoutPage() {
   const zone = deliveryDistrict ? zoneForDistrict(deliveryDistrict) : null;
   const zoneFee = zone && zoneRates ? zoneRates[zone] : null;
 
-  // Delivery charge always applies — the zone rate once a district is chosen,
-  // otherwise the flat fallback fee.
-  const deliveryFee = zoneFee ?? DELIVERY_FEE;
+  // Delivery charge — always the ADMIN-SET zone rate (Settings → Delivery &
+  // Payments) for the chosen district. Before a district is picked, the
+  // CHEAPEST zone rate stands in as an honest "from" amount. When rates
+  // aren't configured, ordering pauses (ratesMissing) — no invented fee.
+  const minZoneRate = zoneRates ? minZoneRateOf(zoneRates) : null;
+  const deliveryFee = zoneFee ?? minZoneRate ?? 0;
+  const ratesMissing = zoneRates === null;
 
   const discountAmount = coupon
     ? Math.min(
@@ -345,42 +347,58 @@ export default function CheckoutPage() {
   };
 
   /* ── Coupon ── */
+  // Validation AND redemption happen server-side via checkout_redeem_coupon —
+  // the coupons table is no longer publicly readable, so the client can neither
+  // bypass the rules nor enumerate codes. Redeeming here reserves one use; if
+  // the order later fails to save, handleSubmit restores it.
   const applyCoupon = async () => {
     const code = couponInput.trim().toUpperCase();
     if (!code) return;
     setCouponBusy(true);
     setCouponError('');
-    const { data, error } = await supabase.from('coupons').select('*').eq('code', code).maybeSingle();
-    if (error || !data || !data.is_active) {
-      setCouponError(t('couponInvalid'));
+
+    const { data, error } = await supabase.rpc('checkout_redeem_coupon', {
+      p_code: code,
+      p_subtotal: subtotal,
+      p_product_codes: orderProductCodes,
+      p_commit: false, // validation only — the use is committed at final submit
+    });
+    const result = (Array.isArray(data) ? data[0] : data) as
+      | { ok: boolean; error?: string; min_order_amount?: number; product_codes?: string[]; code?: string; discount_type?: 'percent' | 'fixed'; value?: number; discount?: number }
+      | null;
+
+    if (error || !result || !result.ok) {
+      const err = result?.error;
+      if (err === 'expired') setCouponError(t('couponExpired'));
+      else if (err === 'min_order') setCouponError(t('couponMinOrder', { amount: Number(result?.min_order_amount ?? 0).toFixed(0) }));
+      else if (err === 'usage_limit') setCouponError(t('couponUsageLimit'));
+      else if (err === 'products') setCouponError(t('couponProductsOnly', { codes: (result?.product_codes ?? []).join(', ') }));
+      else setCouponError(t('couponInvalid'));
       setCouponBusy(false);
       return;
     }
-    if (data.expires_at && new Date(data.expires_at).getTime() < Date.now()) {
-      setCouponError(t('couponExpired'));
-      setCouponBusy(false);
-      return;
-    }
-    if (data.min_order_amount != null && subtotal < Number(data.min_order_amount)) {
-      setCouponError(t('couponMinOrder', { amount: Number(data.min_order_amount).toFixed(0) }));
-      setCouponBusy(false);
-      return;
-    }
-    // Product restriction: every ordered product code must be in the coupon's list
-    if ((data.product_codes?.length ?? 0) > 0) {
-      const allowed = data.product_codes!.map((c: string) => c.trim().toUpperCase());
-      if (orderProductCodes.length === 0 || !orderProductCodes.every((c) => allowed.includes(c))) {
-        setCouponError(t('couponProductsOnly', { codes: data.product_codes!.join(', ') }));
-        setCouponBusy(false);
-        return;
-      }
-    }
-    setCoupon(data);
+
+    // Trust the server's discount math (the client previously computed its own).
+    setCoupon({
+      id: result.code ?? code,
+      code: result.code ?? code,
+      discount_type: result.discount_type ?? 'fixed',
+      value: Number(result.value ?? 0),
+      min_order_amount: null,
+      max_uses: null,
+      times_used: null,
+      is_active: true,
+      product_codes: null,
+      expires_at: null,
+      created_at: '',
+    });
     setCouponInput('');
     setCouponBusy(false);
   };
 
   const removeCoupon = () => {
+    // Applying only validated the code — nothing was reserved, so no restore
+    // is needed here. The single commit happens in handleSubmit.
     setCoupon(null);
     setCouponError('');
     setCouponInput('');
@@ -389,6 +407,12 @@ export default function CheckoutPage() {
   /* ── Step 3 validation + submit ── */
   const validatePayment = () => {
     const next = { bkashNumber: '', trxId: '' };
+    if (advanceAmount > 0 && !payToWallet) {
+      // Wallet number missing — the amber notice above explains it. Never
+      // let the customer "pay" into a placeholder number.
+      setError(t('paymentUnavailableTitle'));
+      return false;
+    }
     if (advanceAmount > 0 && !noAdvanceRequired) {
       if (!bkashNumber.trim()) next.bkashNumber = t('bkashNumberRequired');
       else if (!isValidBdMobile(bkashNumber)) next.bkashNumber = t('bkashNumberInvalid');
@@ -403,6 +427,9 @@ export default function CheckoutPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (step !== 3) return;
+    // Belt-and-braces: never place an order when the admin hasn't configured
+    // the delivery rates (the buttons are already disabled).
+    if (ratesMissing) return;
     if (!validatePayment()) return;
     setSubmitting(true);
     setError('');
@@ -557,6 +584,61 @@ export default function CheckoutPage() {
       },
     ]);
 
+    // Stock guard FIRST — all-or-nothing via the locked-down RPC. It verifies
+    // every line under row locks before touching anything; a shortage returns
+    // the report and changes nothing, so the customer gets a clear message
+    // instead of an oversold order.
+    const stockPayload = lineItems.map((item) => ({ product_id: item.productId, size: item.size ?? null, quantity: item.quantity }));
+    let shortages: Array<{ product_id: string; size: string | null; requested: number; available: number }> = [];
+    let stockFailed = false;
+    try {
+      const rpc = await supabase.rpc('checkout_decrement_stock', { p_items: stockPayload });
+      const rows = (Array.isArray(rpc.data) ? rpc.data : null) as typeof shortages | null;
+      if (rpc.error || rows === null) stockFailed = true;
+      else shortages = rows;
+    } catch {
+      stockFailed = true;
+    }
+
+    if (shortages.length > 0) {
+      const titleFor = (pid: string) => lineItems.find((li) => li.productId === pid)?.title ?? 'An item';
+      const missing = shortages
+        .map((s) => `${titleFor(s.product_id)}${s.size ? ` (size ${s.size})` : ''}: only ${s.available} left, you asked for ${s.requested}`)
+        .join('; ');
+      setStockError(missing);
+      setSubmitting(false);
+      return;
+    }
+    if (stockFailed) {
+      // Migration not applied yet — proceed without the guard (old behavior)
+      // rather than blocking every checkout. Nothing was decremented.
+      console.warn('checkout_decrement_stock unavailable — skipping stock guard.');
+    }
+
+    // Commit the coupon's single use atomically server-side, right before the
+    // order insert. If the insert fails below, we give it back.
+    let committedCoupon = false;
+    if (coupon) {
+      try {
+        const redeem = await supabase.rpc('checkout_redeem_coupon', {
+          p_code: coupon.code,
+          p_subtotal: subtotal,
+          p_product_codes: orderProductCodes,
+          p_commit: true,
+        });
+        const result = (Array.isArray(redeem.data) ? redeem.data[0] : redeem.data) as { ok?: boolean } | null;
+        if (redeem.error || !result?.ok) {
+          setCouponError(t('couponUsageLimit'));
+          setSubmitting(false);
+          return;
+        }
+        committedCoupon = true;
+      } catch {
+        // redeem RPC missing (legacy DB) — keep the order going; the counter
+        // stays best-effort as before.
+      }
+    }
+
     let submitError: { message: string } | null = null;
     for (let i = 0; i < lineItems.length; i++) {
       let itemError: { message: string } | null = null;
@@ -578,56 +660,14 @@ export default function CheckoutPage() {
     }
 
     if (submitError) {
+      // Give the reserved stock and the committed coupon use back (nothing was saved).
+      if (committedCoupon) {
+        try { await supabase.rpc('checkout_restore_coupon', { p_code: coupon!.code }); } catch { /* best effort */ }
+      }
+      try { await supabase.rpc('checkout_restore_stock', { p_items: stockPayload }); } catch { /* best effort */ }
       setError(t('somethingWentWrong'));
       setSubmitting(false);
       return;
-    }
-
-    // Best-effort coupon usage counter — via locked-down RPC, direct update as legacy fallback
-    if (coupon) {
-      try {
-        const rpc = await supabase.rpc('checkout_consume_coupon', { p_code: coupon.code });
-        if (rpc.error) throw rpc.error;
-      } catch {
-        try {
-          await supabase.from('coupons').update({ times_used: (coupon.times_used ?? 0) + 1 }).eq('id', coupon.id);
-        } catch {
-          // counter is cosmetic — never block the order
-        }
-      }
-    }
-
-    // Decrement stock for each ordered line item — via locked-down RPC,
-    // falling back to direct updates for databases without the migration yet.
-    const stockPayload = lineItems.map((item) => ({ product_id: item.productId, size: item.size ?? null, quantity: item.quantity }));
-    let stockDone = false;
-    try {
-      const rpc = await supabase.rpc('checkout_decrement_stock', { p_items: stockPayload });
-      if (!rpc.error) stockDone = true;
-    } catch {
-      // fall through to the legacy path
-    }
-    if (!stockDone) {
-      for (const item of lineItems) {
-        const { data: currentProduct } = await supabase
-          .from('products')
-          .select('stock_count')
-          .eq('id', item.productId)
-          .maybeSingle();
-        const newStock = Math.max(0, (currentProduct?.stock_count ?? 0) - item.quantity);
-        await supabase.from('products').update({ stock_count: newStock }).eq('id', item.productId);
-
-        if (item.size) {
-          const { data: currentSize } = await supabase
-            .from('product_sizes')
-            .select('quantity')
-            .eq('product_id', item.productId)
-            .eq('size', item.size)
-            .maybeSingle();
-          const newSizeQty = Math.max(0, (currentSize?.quantity ?? 0) - item.quantity);
-          await supabase.from('product_sizes').update({ quantity: newSizeQty }).eq('product_id', item.productId).eq('size', item.size);
-        }
-      }
     }
 
     setPlacedItems(isCartCheckout ? [...cartItems] : []);
@@ -697,7 +737,25 @@ export default function CheckoutPage() {
                 </button>
               </div>
               <p className="text-[11px] text-brand-600/80 mt-1.5">{t('orderCodeSaveNote')}</p>
+              {/* The tracking link itself — one tap to the live status page,
+                  with the code prefilled and auto-tracked. */}
+              <a
+                href={`/track?code=${encodeURIComponent(placedOrderCode)}`}
+                onClick={(e) => { e.preventDefault(); onNavigate('track'); }}
+                className="mt-2.5 w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 text-white font-bold text-sm py-2.5 rounded-xl transition-all"
+              >
+                <PackageSearch className="w-4 h-4" /> {t('trackYourOrderCta')}
+              </a>
             </div>
+          )}
+          {!placedOrderCode && (
+            <a
+              href="/track"
+              onClick={(e) => { e.preventDefault(); onNavigate('track'); }}
+              className="text-sm font-semibold text-brand-600 hover:text-brand-700 underline underline-offset-2 mb-4 inline-block"
+            >
+              {t('trackYourOrderCta')}
+            </a>
           )}
           <div className="bg-stone-50 rounded-2xl px-4 py-3 mb-3 space-y-1.5 text-sm">
             {placedItems.length > 0 ? (
@@ -722,6 +780,10 @@ export default function CheckoutPage() {
             <span className="text-stone-500">{t('totalToPay')}</span>
             <span className="font-display font-bold text-stone-900">৳{total.toFixed(0)}</span>
           </div>
+          <p className="text-xs text-stone-400 mb-4 flex items-center justify-center gap-1.5 text-left">
+            <PackageSearch className="w-3.5 h-3.5 flex-shrink-0 text-brand-400" />
+            {t('trackYourOrderNote')}
+          </p>
           <p className="text-xs text-stone-400 mb-8 flex items-center justify-center gap-1.5 text-left">
             {noAdvanceRequired ? (
               <><Banknote className="w-3.5 h-3.5 flex-shrink-0 text-emerald-500" /> {t('codOnlyDesc', { total: total.toFixed(0), channel: channelLabel })}</>
@@ -863,7 +925,13 @@ export default function CheckoutPage() {
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-stone-500">{t('shippingRowLabel')}</span>
-                  <span className="font-medium text-stone-700">৳{deliveryFee.toFixed(0)}</span>
+                  {zoneFee != null ? (
+                    <span className="font-medium text-stone-700">৳{deliveryFee.toFixed(0)}</span>
+                  ) : minZoneRate != null ? (
+                    <span className="font-medium text-stone-700">{t('deliveryFeeFrom', { amount: minZoneRate })}</span>
+                  ) : (
+                    <span className="text-xs text-stone-400 italic">{t('deliveryFeeAtCheckout')}</span>
+                  )}
                 </div>
                 <div className="flex justify-between pt-2 border-t border-stone-100">
                   <span className="font-semibold text-stone-900">{t('totalToPay')}</span>
@@ -1100,6 +1168,14 @@ export default function CheckoutPage() {
                     </p>
                   )}
 
+                  {/* Delivery rates not configured in the admin panel — pause
+                      ordering rather than charging an invented fee. */}
+                  {ratesMissing && (
+                    <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                      <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                      <p className="text-sm text-amber-800 font-medium">{t('deliveryFeeNotSet')}</p>
+                    </div>
+                  )}
                   <div className="flex gap-3">
                     <button
                       type="button"
@@ -1111,7 +1187,8 @@ export default function CheckoutPage() {
                     <button
                       type="button"
                       onClick={() => goToStep(3)}
-                      className="flex-1 bg-brand-500 hover:bg-brand-400 text-white font-bold py-4 rounded-2xl transition-all hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5"
+                      disabled={ratesMissing}
+                      className="flex-1 bg-brand-500 hover:bg-brand-400 disabled:opacity-60 disabled:hover:shadow-none text-white font-bold py-4 rounded-2xl transition-all hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5"
                     >
                       {t('continueToPayment')}
                     </button>
@@ -1193,7 +1270,17 @@ export default function CheckoutPage() {
                   </div>
 
                   {/* Advance instructions (only when something must be sent now) */}
-                  {advanceAmount > 0 ? (
+                  {advanceAmount > 0 && !payToWallet ? (
+                    // No wallet number configured (or settings failed to load).
+                    // Never show a placeholder number — customers would send real
+                    // money to a dead account. Block the step with a clear notice.
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-4 space-y-2">
+                      <p className="flex items-center gap-2 text-sm text-amber-800 font-bold">
+                        <AlertTriangle className="w-4 h-4" /> {t('paymentUnavailableTitle')}
+                      </p>
+                      <p className="text-sm text-amber-700/90">{t('paymentUnavailableDesc', { channel: channelLabel })}</p>
+                    </div>
+                  ) : advanceAmount > 0 ? (
                     <div className={`${CHANNEL_THEME[effectiveChannel].box} rounded-2xl p-4 space-y-3`}>
                       <h3 className="font-bold text-stone-800 text-sm flex items-center gap-2">
                         <Wallet className={`w-4 h-4 ${CHANNEL_THEME[effectiveChannel].iconText}`} /> {t('paymentInstructionsTitle')}
@@ -1324,6 +1411,13 @@ export default function CheckoutPage() {
                     </div>
                   )}
 
+                  {stockError && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-2xl px-4 py-3">
+                      <p className="font-semibold mb-0.5">Out of stock</p>
+                      {stockError}
+                    </div>
+                  )}
+
                   <div className="flex gap-3">
                     <button
                       type="button"
@@ -1335,7 +1429,7 @@ export default function CheckoutPage() {
                     </button>
                     <button
                       type="submit"
-                      disabled={submitting}
+                      disabled={submitting || ratesMissing || (advanceAmount > 0 && !payToWallet)}
                       className="flex-1 flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-70 text-white font-bold py-4 rounded-2xl transition-all hover:shadow-xl hover:shadow-brand-500/30 hover:-translate-y-0.5"
                     >
                       {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : null}

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Search, Package, Truck, CheckCheck, XCircle, Clock, Loader2, PackageSearch,
   MapPin, Phone, ExternalLink, Copy, CheckCircle2,
@@ -22,15 +23,27 @@ const STAGE_INDEX: Record<Stage, number> = {
 };
 
 function normalizeCode(raw: string): string {
-  return raw.trim().toUpperCase().replace(/^ORN-?/, 'ORN-');
+  const cleaned = raw.trim().toUpperCase().replace(/\s+/g, '');
+  // Accept "ORN-XXXXXX", "ORNXXXXXX" and "XXXXXX" alike — insert the ORN-
+  // prefix when it's missing, never mangle what the customer typed.
+  if (/^ORN-/.test(cleaned)) return cleaned;
+  if (/^ORN/.test(cleaned)) return `ORN-${cleaned.slice(3)}`;
+  return `ORN-${cleaned}`;
 }
 
 export default function TrackOrderPage() {
-  const [code, setCode] = useState('');
+  const [params] = useSearchParams();
+  // Deep link support: /track?code=ORN-XXXXXX (the checkout success screen
+  // links here with the fresh code) pre-fills and auto-tracks once.
+  const initialCode = params.get('code') ?? '';
+  const [code, setCode] = useState(normalizeCode(initialCode));
+  const autoTracked = useRef(false);
   const [phoneLast, setPhoneLast] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [order, setOrder] = useState<Order | null>(null);
+  // All order rows sharing the looked-up code (a cart checkout inserts one row
+  // per item — the page must show the whole purchase, not just the first row).
+  const [rows, setRows] = useState<Partial<Order>[]>([]);
   const [sfStatus, setSfStatus] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -40,8 +53,8 @@ export default function TrackOrderPage() {
     description: 'Track your ORNIX order with your order code.',
   });
 
-  const stage: Stage | 'cancelled' | null = order
-    ? order.status === 'canceled'
+  const stage: Stage | 'cancelled' | null = rows.length > 0
+    ? rows[0].status === 'canceled'
       ? 'cancelled'
       : (() => {
           const badge = steadfastStageBadge(sfStatus);
@@ -60,58 +73,73 @@ export default function TrackOrderPage() {
     }
     setLoading(true);
     setError('');
-    setOrder(null);
+    setRows([]);
     setSfStatus(null);
 
-    // Track via the locked-down RPC (no public SELECT on orders anymore);
-    // fall back to a direct query for databases without the migration yet.
-    let rows: Partial<Order>[] | null = null;
+    // Track via the locked-down RPC (public SELECT on orders is revoked by the
+    // security lockdown, so a direct-query "fallback" could never succeed —
+    // it only produced a misleading "No order found"). A missing RPC is a
+    // server-setup problem and gets its own message instead.
     let dbError: string | null = null;
+    let found: Partial<Order>[] = [];
     try {
       const rpc = await supabase.rpc('track_order', { p_order_code: cleaned, p_phone_last4: phoneLast.trim() || null });
-      if (!rpc.error && rpc.data && (rpc.data as Partial<Order>[]).length > 0) {
-        rows = rpc.data as Partial<Order>[];
-      } else if (rpc.error) {
+      if (rpc.error) {
         dbError = rpc.error.message;
+      } else {
+        found = (rpc.data as Partial<Order>[] | null) ?? [];
       }
     } catch {
-      // fall through to the legacy query
-    }
-    if (!rows) {
-      const legacy = await supabase
-        .from('orders')
-        .select('*')
-        .eq('order_code', cleaned)
-        .order('created_at', { ascending: true });
-      dbError = legacy.error?.message ?? null;
-      rows = (legacy.data as Partial<Order>[] | null) ?? null;
+      dbError = 'Network error — please try again.';
     }
 
     setLoading(false);
 
-    if (dbError || !rows || rows.length === 0) {
+    if (dbError) {
+      const missing = dbError.includes('Could not find the function') || dbError.includes('schema cache');
+      setError(
+        missing
+          ? 'Tracking is temporarily unavailable on our side — please try again shortly or contact us on WhatsApp.'
+          : 'No order found with that code. Double-check the code from your confirmation screen.'
+      );
+      return;
+    }
+    if (found.length === 0) {
       setError('No order found with that code. Double-check the code from your confirmation screen.');
       return;
     }
 
-    // Cart checkouts create one row per item — all share the same code
-    const found: Order = rows[0] as Order;
+    // Phone check: the RPC hides customer_phone on mismatch — treat null as mismatch.
     if (phoneLast.trim()) {
-      // RPC hides customer_phone when the digits don't match — treat null as a mismatch
-      const digits = (found.customer_phone ?? '').replace(/\D/g, '');
+      const digits = (found[0].customer_phone ?? '').replace(/\D/g, '');
       if (!digits.endsWith(phoneLast.trim())) {
         setError('The last 4 digits don\u2019t match this order code.');
         return;
       }
     }
-    setOrder(found);
 
-    // Live courier status (best effort — page still works if this fails)
-    if (found.tracking_code) {
-      const res = await checkSteadfastStatus(found.tracking_code);
+    setRows(found);
+
+    // Live courier status (best effort — page still works if this fails).
+    // All rows of a purchase share one tracking code.
+    const tracking = found.map((r) => r.tracking_code).find(Boolean);
+    if (tracking) {
+      const res = await checkSteadfastStatus(tracking);
       if (res.ok && res.status) setSfStatus(res.status);
     }
   };
+
+  // Auto-track a deep-linked code exactly once (StrictMode double-invokes
+  // effects in dev — the ref keeps it to a single lookup).
+  const handleTrackRef = useRef(handleTrack);
+  handleTrackRef.current = handleTrack;
+  useEffect(() => {
+    if (initialCode && !autoTracked.current) {
+      autoTracked.current = true;
+      void handleTrackRef.current();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen bg-stone-50">
@@ -175,24 +203,50 @@ export default function TrackOrderPage() {
         </form>
 
         {/* Result */}
-        {order && (
+        {rows.length > 0 && (() => {
+          const order = rows[0];
+          const multi = rows.length > 1;
+          // Purchase-level totals: per-line amounts are allocated shares, the
+          // real totals are the sums across every row of the code.
+          const purchaseTotal = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+          const purchaseDue = rows.reduce((s, r) => s + Number(r.due_amount ?? 0), 0);
+          const orderDate = rows.map((r) => r.created_at).sort()[0];
+          return (
           <div className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden animate-fade-in-up">
             {/* Summary */}
             <div className="p-6 border-b border-stone-100">
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Order {order.order_code}</p>
-                  <p className="font-display text-xl font-bold text-stone-900 mt-0.5">{order.product_title}</p>
+                  <p className="font-display text-xl font-bold text-stone-900 mt-0.5">
+                    {multi ? `${rows.length} items` : order.product_title}
+                  </p>
                   <p className="text-sm text-stone-500 mt-0.5">
-                    {order.selected_size && <>Size {order.selected_size} · </>}
-                    Qty {order.quantity ?? 1} · {new Date(order.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                    {new Date(orderDate ?? Date.now()).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
                   </p>
                 </div>
                 <div className="text-right flex-shrink-0">
                   <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Total</p>
-                  <p className="font-display text-xl font-bold text-stone-900">৳{Number(order.total_amount ?? 0).toFixed(0)}</p>
+                  <p className="font-display text-xl font-bold text-stone-900">৳{purchaseTotal.toFixed(0)}</p>
+                  {purchaseDue > 0 && <p className="text-xs text-stone-400 mt-0.5">Due on delivery ৳{purchaseDue.toFixed(0)}</p>}
                 </div>
               </div>
+
+              {/* All items of the purchase */}
+              {multi && (
+                <div className="mt-3 space-y-1">
+                  {rows.map((r, i) => (
+                    <div key={i} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-stone-600 truncate">
+                        {r.product_title}
+                        {r.selected_size ? ` · ${r.selected_size}` : ''}
+                        <span className="text-stone-400"> ×{r.quantity ?? 1}</span>
+                      </span>
+                      <span className="font-medium text-stone-800 whitespace-nowrap">৳{Number(r.total_amount ?? 0).toFixed(0)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 {order.tracking_code ? (
@@ -298,10 +352,11 @@ export default function TrackOrderPage() {
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Help card */}
-        {!order && (
+        {rows.length === 0 && (
           <div className="bg-white rounded-3xl shadow-sm border border-stone-100 p-6">
             <h2 className="font-bold text-stone-900 text-sm mb-2">Lost your order code?</h2>
             <p className="text-sm text-stone-500 leading-relaxed">

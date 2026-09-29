@@ -1,6 +1,10 @@
 // Frontend helper for ImageKit direct browser uploads.
 // Gets a one-time signature from the imagekit-auth Edge Function, then uploads
 // the file straight to ImageKit. The private key never touches the browser.
+// The Edge Function requires a signed-in admin session — uploads only happen
+// from the admin panel, and the caller sends its access token.
+
+import { supabase } from './supabase';
 
 const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -17,11 +21,16 @@ interface UploadAuth {
 }
 
 async function getUploadAuth(folder: string): Promise<UploadAuth> {
+  // Send the signed-in admin's access token — the Edge Function verifies it
+  // against the admin allowlist before issuing any signature.
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token ?? SUPABASE_ANON_KEY;
   const res = await fetch(`${FUNCTIONS_URL}/imagekit-auth`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
     },
     body: JSON.stringify({ folder }),
   });

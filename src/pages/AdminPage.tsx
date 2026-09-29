@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from 'react';import {
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';import {
   Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler, ShieldCheck,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown, KeyRound
+   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown, KeyRound, LogIn, Smartphone, Wifi
 } from 'lucide-react';
-import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon, AdminLog, StockMovement, Expense, Seller, SizeChartTemplate } from '../lib/supabase';
+import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon, AdminLog, AdminLogin, StockMovement, Expense, Seller, SizeChartTemplate } from '../lib/supabase';
+import { runBounded } from '../lib/supabaseQuery';
 import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
 import { zoneForDistrict, DELIVERY_ZONES, type DeliveryZone } from '../components/ZoneSelect';
@@ -13,6 +14,7 @@ import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, FinCard, FinDelta, DailyBars, Em
 import { printLabels, type StickersPerPage } from '../lib/parcelLabel';
 import { toAsciiDigits } from './CheckoutPage';
 import { printManualOrdersReport, manualOrderInDateRange } from '../lib/manualOrdersReport';
+import { printFinanceReport, type FinanceReportRow } from '../lib/financeReport';
 import { useAdminAuth, ALL_CAPABILITIES } from '../lib/useAdminAuth';
 import { setAdminEmail, setAdminPassword, adminAddAdmin, adminDeleteAdmin } from '../lib/adminAuthManager';
 import { useNavigation } from '../lib/navigation';
@@ -169,7 +171,11 @@ export default function AdminPage() {
 
   // ── Activity log & stock movement history ──
   const [adminLogs, setAdminLogs] = useState<AdminLog[]>([]);
+  // Login sessions (one row per admin sign-in) — Settings → Activity tab
+  const [adminLogins, setAdminLogins] = useState<AdminLogin[]>([]);
   const [activityAdminFilter, setActivityAdminFilter] = useState('all');
+  const [activityPage, setActivityPage] = useState(1); // 1-based, paginated view
+  const ACTIVITY_PAGE_SIZE = 15;
   // ── Settings sub-tabs (organized sections) ──
   const [settingsTab, setSettingsTab] = useState<'storefront' | 'delivery' | 'inventory' | 'activity' | 'team'>('storefront');
 
@@ -190,6 +196,48 @@ export default function AdminPage() {
     if (activityAdminFilter === 'all') return adminLogs;
     return adminLogs.filter((l) => (l.admin_id ?? '').trim() === activityAdminFilter);
   }, [adminLogs, activityAdminFilter]);
+
+  // One product save used to render as TWO rows: "Product updated" plus a
+  // "Stock adjusted" on the same product within the same minute (the save
+  // handler logs both). Fold each adjacent same-product pair into a single
+  // row whose sentence tells the whole story — "Ferari Jacket — stock +6
+  // units (24 → 30)" — instead of two cryptic fragments.
+  const mergedActivityLogs = useMemo(() => {
+    const out: AdminLog[] = [];
+    for (const log of filteredActivityLogs) {
+      const last = out[out.length - 1];
+      const pairable = !!last && !!log.target &&
+        ((last.action === 'product_update' && log.action === 'stock_adjust') ||
+         (last.action === 'stock_adjust' && log.action === 'product_update')) &&
+        last.admin_id === log.admin_id &&
+        last.target === log.target &&
+        Math.abs(new Date(last.created_at).getTime() - new Date(log.created_at).getTime()) < 120000;
+      if (pairable && last) {
+        // The newer row (product_update) is the base; graft the stock change
+        // into its detail so both halves survive in one entry.
+        const stockHalf = last.action === 'stock_adjust' ? last : log;
+        const base = last.action === 'stock_adjust' ? log : last;
+        out[out.length - 1] = {
+          ...base,
+          action: 'product_stock_update',
+          detail: `${base.detail ?? 'Product'} — stock ${stockHalf.detail ?? 'changed'}`,
+        };
+        continue;
+      }
+      out.push(log);
+    }
+    return out;
+  }, [filteredActivityLogs]);
+  // Paginated slice of the merged log (newest first). The page resets
+  // whenever the filter changes so the view always starts at the newest row.
+  const activityTotalPages = Math.max(1, Math.ceil(mergedActivityLogs.length / ACTIVITY_PAGE_SIZE));
+  const activitySafePage = Math.min(activityPage, activityTotalPages);
+  const activityPageRows = mergedActivityLogs.slice(
+    (activitySafePage - 1) * ACTIVITY_PAGE_SIZE,
+    activitySafePage * ACTIVITY_PAGE_SIZE,
+  );
+  const setActivityPageSafe = (p: number) => setActivityPage(Math.min(Math.max(1, p), activityTotalPages));
+  useEffect(() => { setActivityPage(1); }, [activityAdminFilter]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [movementProductId, setMovementProductId] = useState<string | null>(null);
   const orderStatusRef = useRef<HTMLDivElement | null>(null);
@@ -209,10 +257,16 @@ export default function AdminPage() {
     const rows = source.order_code
       ? orders.filter((o) => o.order_code === source.order_code)
       : [source];
-    for (const row of rows) {
-      if (row.status !== 'canceled') await applyOrderStatus(row.id, 'canceled');
+    const toCancel = rows.filter((row) => row.status !== 'canceled');
+    for (const row of toCancel) {
+      await applyOrderStatus(row.id, 'canceled', { silent: true });
     }
-    if (rows.length > 1) showToast('info', `Canceled all ${rows.length} items of ${source.order_code}.`);
+    // One toast for the whole purchase, not one per row.
+    if (toCancel.length > 1) {
+      showToast('info', `Canceled all ${toCancel.length} items of ${source.order_code} — their stock is back in inventory.`);
+    } else if (toCancel.length === 1) {
+      showToast('info', `Order canceled — its stock is back in inventory.`);
+    }
   };
   const [deleteOrderConfirm, setDeleteOrderConfirm] = useState<string | null>(null);
   const [deletingOrder, setDeletingOrder] = useState<string | null>(null);
@@ -260,7 +314,10 @@ export default function AdminPage() {
   const [heroBgError, setHeroBgError] = useState('');
 
   // ── Steadfast courier rates per delivery zone ──
-  const [steadfastRates, setSteadfastRates] = useState({ dhaka_city: '60', dhaka_suburban: '110', outside_dhaka: '130' });
+  // Zone rates start empty — they are whatever the admin has saved in
+  // site_settings (fetched below). No hardcoded defaults: blank means blank,
+  // and an unconfigured rate pauses checkout rather than inventing a fee.
+  const [steadfastRates, setSteadfastRates] = useState<Record<DeliveryZone, string>>({ dhaka_city: '', dhaka_suburban: '', outside_dhaka: '' });
   const [lowStockThreshold, setLowStockThreshold] = useState(5);
   const [thresholdInput, setThresholdInput] = useState('5');
   const [thresholdSaving, setThresholdSaving] = useState(false);
@@ -281,7 +338,12 @@ export default function AdminPage() {
     // 'full' = everything settled in store (sale final) · 'delivery_only' =
     // customer paid just the delivery charge; the product amount is collected
     // on delivery (COD via Steadfast) so the sale stays pending until shipped.
-    payment_mode: 'full' as 'full' | 'delivery_only',
+    // 'full' = everything + the district's delivery charge, settled in store
+    // (sale final) · 'full_no_delivery' = product amount settled in full, no
+    // delivery charge involved (handover / pickup) · 'delivery_only' =
+    // customer paid just the delivery charge; product amount collected on
+    // delivery (COD via Steadfast) so the sale stays pending until shipped.
+    payment_mode: 'full' as 'full' | 'full_no_delivery' | 'delivery_only',
     district: '', thana: '', address: '',
   });
   // ── Size chart templates (reusable measurement charts) ──
@@ -307,6 +369,8 @@ export default function AdminPage() {
   const [reportFrom, setReportFrom] = useState('');
   const [reportTo, setReportTo] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
+  const [finExportBusy, setFinExportBusy] = useState(false); // Finance PDF export in progress
+  const [headerRefreshing, setHeaderRefreshing] = useState(false); // black-bar Refresh button
   // Manual-orders history (grouped, Orders-tab-style cards)
   const [manualStatusFilter, setManualStatusFilter] = useState<'all' | OrderStatus>('all');
   const [manualQuery, setManualQuery] = useState('');
@@ -356,10 +420,97 @@ export default function AdminPage() {
     }
   };
 
+  // ── Activity log presentation helpers ──
+  // Raw action slugs like 'admin_set_password' are cryptic; these map each to a
+  // friendly sentence the super admin can read at a glance.
+  const ACTIVITY_META: Record<string, { label: string; icon: typeof Lock; cls: string }> = {
+    login: { label: 'Signed in', icon: LogIn, cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+    logout: { label: 'Signed out', icon: LogOut, cls: 'bg-slate-50 text-slate-600 border-slate-200' },
+    login_failed: { label: 'Failed login attempt', icon: XCircle, cls: 'bg-red-50 text-red-600 border-red-200' },
+    order_status: { label: 'Order status changed', icon: Truck, cls: 'bg-brand-50 text-brand-700 border-brand-200' },
+    bulk_status: { label: 'Bulk status change', icon: CheckCheck, cls: 'bg-brand-50 text-brand-700 border-brand-200' },
+    // NOTE: no 'order_restore' action is written anywhere — restoring a canceled
+    // order just logs 'order_status' again. If this case ever renders it is
+    // only for legacy rows in the database.
+    order_delete: { label: 'Order deleted', icon: Trash2, cls: 'bg-red-50 text-red-600 border-red-200' },
+    bulk_delete: { label: 'Bulk order deletion', icon: Trash2, cls: 'bg-red-50 text-red-600 border-red-200' },
+    steadfast_book: { label: 'Steadfast booking', icon: Truck, cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+    manual_order: { label: 'In-store sale recorded', icon: Store, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    stock_adjust: { label: 'Stock adjusted', icon: Package, cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    // Merged row: one product save that also changed stock (see mergedActivityLogs).
+    product_stock_update: { label: 'Product updated & stock adjusted', icon: Pencil, cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+    stock_sell: { label: 'Unit sold (stock sell)', icon: ShoppingBag, cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    product_create: { label: 'Product added', icon: Plus, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    product_update: { label: 'Product updated', icon: Pencil, cls: 'bg-sky-50 text-sky-700 border-sky-200' },
+    product_delete: { label: 'Product deleted', icon: Trash2, cls: 'bg-red-50 text-red-600 border-red-200' },
+    category_delete: { label: 'Category deleted', icon: Trash2, cls: 'bg-red-50 text-red-600 border-red-200' },
+    size_chart_create: { label: 'Size chart created', icon: Ruler, cls: 'bg-stone-100 text-stone-700 border-stone-200' },
+    size_chart_update: { label: 'Size chart updated', icon: Ruler, cls: 'bg-stone-100 text-stone-700 border-stone-200' },
+    size_chart_delete: { label: 'Size chart deleted', icon: Ruler, cls: 'bg-red-50 text-red-600 border-red-200' },
+    admin_add: { label: 'Team member added', icon: Users, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    admin_remove: { label: 'Team member removed', icon: Users, cls: 'bg-red-50 text-red-600 border-red-200' },
+    admin_set_login: { label: 'Admin email changed', icon: Mail, cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    admin_set_password: { label: 'Admin password changed', icon: KeyRound, cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+    expense_add: { label: 'Expense recorded', icon: Banknote, cls: 'bg-orange-50 text-orange-700 border-orange-200' },
+    settings_update: { label: 'Settings updated', icon: Settings, cls: 'bg-stone-100 text-stone-700 border-stone-200' },
+  } as const;
+  const activityMeta = (action: string) => ACTIVITY_META[action] ?? { label: action.replace(/_/g, ' '), icon: Bell, cls: 'bg-stone-100 text-stone-600 border-stone-200' };
+  /** Human sentence for an entry: derived from action + target + detail. */
+  const activityText = (log: AdminLog): string => {
+    const target = (log.target ?? '').trim();
+    const detail = (log.detail ?? '').trim();
+    switch (log.action) {
+      case 'order_status': return detail ? `${target ? `Order ${target}` : 'An order'} → ${detail}` : 'Order status changed';
+      case 'bulk_status': return detail || 'Multiple orders moved together';
+      case 'order_delete': return target ? `Order ${target.slice(0, 8).toUpperCase()} removed` : 'An order was removed';
+      case 'order_restore': return target ? `Canceled order ${target.slice(0, 8).toUpperCase()} restored` : 'Canceled order restored';
+      case 'bulk_delete': return detail || 'Multiple orders removed together';
+      case 'steadfast_book': return detail || (target ? `Booked pickup for order ${target.slice(0, 8).toUpperCase()}` : 'Booked a Steadfast pickup');
+      case 'manual_order': return detail ? `Sold ${detail}` : 'Recorded an in-store sale';
+      case 'stock_adjust': return detail || (target ? 'Stock quantity adjusted' : 'Stock adjusted');
+      // Merged product-save row: detail already reads "<title> — stock +N units (a → b)".
+      case 'product_stock_update': return detail || 'Product details saved with a stock change';
+      case 'stock_sell': return detail || 'One unit sold directly from stock';
+      case 'product_create': case 'product_update': return detail || 'Product details saved';
+      case 'product_delete': return target ? `Removed product ${target.slice(0, 8).toUpperCase()}` : 'A product was removed';
+      case 'category_delete': return 'Removed a category (its products keep existing)';
+      case 'size_chart_create': case 'size_chart_update': return detail ? `Size chart “${detail}”` : 'Size chart saved';
+      case 'size_chart_delete': return 'Removed a size chart template';
+      case 'admin_add': return target ? `Added ${target} to the team` : 'Added a team member';
+      case 'admin_remove': return target ? `Removed ${target} from the team` : 'Removed a team member';
+      case 'admin_set_login': return target ? `Login email for ${target} changed` : 'Changed a team member\'s login email';
+      case 'admin_set_password': return target ? `Password changed for ${target}` : 'Changed a team member\'s password';
+      case 'expense_add': return detail || 'Recorded a business expense';
+      case 'settings_update': return detail || 'Store settings saved';
+      case 'login_failed': return detail || 'Someone tried to sign in with wrong credentials';
+      default: {
+        // Unknown/future actions: join the pieces so nothing is lost.
+        if (detail && target) return `${detail} (${target.slice(0, 12)})`;
+        return detail || target || '';
+      }
+    }
+  };
+  const fmtLogTime = (iso: string) =>
+    new Date(iso).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+  /** "Chrome on Windows" from a raw user-agent string (best-effort). */
+  const describeAgent = (ua: string | null): string => {
+    if (!ua) return 'Unknown device';
+    const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+    const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+    return os ? `${browser} on ${os}` : browser;
+  };
+
   // Record a stock change (fires only once the stock_movements table exists)
   const stockDelta = async (productId: string, size: string | null, delta: number, reason: string, note?: string | null) => {
     try {
-      await supabase.from('stock_movements').insert({ product_id: productId, size, delta, reason, note: note ?? null, admin_id: currentAdminId || null });
+      const { error } = await supabase.from('stock_movements').insert({ product_id: productId, size, delta, reason, note: note ?? null, admin_id: currentAdminId || null });
+      if (error) {
+        // Supabase reports failures as an error field (it doesn't throw) —
+        // only record the local entry when the row actually saved, or the
+        // history would show movements that never happened.
+        console.warn('Stock movement insert failed:', error.message);
+        return;
+      }
       setStockMovements((prev) => [
         { id: `local-${Date.now()}-${Math.random()}`, product_id: productId, size, delta, reason, note: note ?? null, admin_id: currentAdminId || null, created_at: new Date().toISOString() },
         ...prev,
@@ -427,6 +578,12 @@ export default function AdminPage() {
     address: string;
     createdAt: string;
     total: number;
+    /** Sum of amounts still collected on delivery (COD) — 'delivery-only' sales. */
+    due: number;
+    /** Sum collected up front in store: delivery charge, wallet advance, or both. */
+    collected: number;
+    /** 'advance_paid' = customer sent the delivery-fee advance, 'full_payment' = everything settled in store. */
+    paymentMode: string | null;
     status: OrderStatus;
   };
   const manualGroups: ManualGroup[] = useMemo(() => {
@@ -445,11 +602,16 @@ export default function AdminPage() {
           address: o.customer_address,
           createdAt: o.created_at,
           total: 0,
+          due: 0,
+          collected: 0,
+          paymentMode: (o as Order & { payment_mode?: string | null }).payment_mode ?? null,
           status: o.status,
         });
       }
       g.rows.push(o);
       g.total += Number(o.total_amount ?? 0);
+      g.due += Number(o.due_amount ?? 0);
+      g.collected += Number(o.advance_amount ?? 0);
       if (g.status !== 'canceled' && o.status === 'canceled') g.status = 'canceled'; // any canceled row cancels the sale
       if (o.created_at < g.createdAt) g.createdAt = o.created_at;
     }
@@ -525,6 +687,9 @@ export default function AdminPage() {
   const stageOfGroup = (g: StoreGroup): SteadfastStage | 'not_booked' => {
     const codes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
     if (codes.length === 0) return g.status === 'canceled' ? 'cancelled' : 'not_booked';
+    // Canceled wins over whatever the courier last said — a canceled purchase
+    // with a stale tracking code must not show up as "Delivered".
+    if (g.status === 'canceled') return 'cancelled';
     // Prefer the live status of any row; fall back to 'booked'.
     for (const r of g.rows) {
       if (!r.tracking_code) continue;
@@ -616,7 +781,9 @@ export default function AdminPage() {
   // One label per PARCEL, not per order row: multi-item purchases share one
   // tracking code, so dedupe by it. The kept row's COD is bumped to the whole
   // purchase's outstanding amount so the sticker's cash strip is correct.
-  const ordersForLabels = () => {
+  // Memoized — recomputing per render (plus twice more per Print click) was
+  // wasted work on every keystroke in any search box.
+  const ordersForLabels = useMemo(() => {
     const seenCodes = new Set<string>();
     const out: Order[] = [];
     for (const o of storeOrders.filter((x) => x.tracking_code && x.status !== 'canceled').sort((a, b) => (a.created_at < b.created_at ? 1 : -1))) {
@@ -628,18 +795,18 @@ export default function AdminPage() {
       out.push({ ...o, due_amount: groupDue });
     }
     return out;
-  };
+  }, [storeOrders]);
 
-  const labelCount = ordersForLabels().length;
+  const labelCount = ordersForLabels.length;
 
-  const ordersInDateRange = (from: string, to: string) => {
+  const ordersInDateRange = useCallback((from: string, to: string) => {
     const fromTs = from ? new Date(`${from}T00:00:00`).getTime() : null;
     const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : null;
-    return ordersForLabels().filter((o) => {
+    return ordersForLabels.filter((o) => {
       const ts = new Date(o.created_at).getTime();
       return (fromTs == null || ts >= fromTs) && (toTs == null || ts <= toTs);
     });
-  };
+  }, [ordersForLabels]);
 
   const dayOffsetISO = (days: number) => {
     const d = new Date();
@@ -708,10 +875,13 @@ export default function AdminPage() {
       : 0;
     const qty = Number(order.quantity ?? 1) || 1;
     const subtotal = unitPrice * qty;
-    // Stored fee wins (0 = free delivery / in-store sale); fall back to zone rate, then flat 150
+    // Stored fee wins (0 = free delivery / in-store sale). Missing stored fee:
+    // use the admin-set zone rate when the zone is known; 0 when it isn't —
+    // never a made-up flat fee, which silently mispriced rows and skewed the
+    // Finance totals.
     const zone = order.delivery_zone ? zoneForDistrict(order.delivery_zone) : null;
     const zoneRate = zone ? Number(steadfastRates[zone as DeliveryZone]) : NaN;
-    const deliveryFee = order.delivery_fee != null ? Number(order.delivery_fee) : (isNaN(zoneRate) ? 150 : zoneRate);
+    const deliveryFee = order.delivery_fee != null ? Number(order.delivery_fee) : (isNaN(zoneRate) ? 0 : zoneRate);
     const total = subtotal + deliveryFee;
 
     return { unitPrice, qty, subtotal, deliveryFee, total };
@@ -761,7 +931,10 @@ export default function AdminPage() {
   };
 
   const finStats = useMemo(() => {
-    const count = financeOrders.length;
+    // Count PURCHASES, not rows: a 3-item cart shares one order_code and is one
+    // order — the Orders tab shows one card, so Finance's count and the
+    // "Avg order" math must group the same way or the numbers never agree.
+    const codes = new Set<string>();
     let grossRevenue = 0;   // product value (subtotal − discounts)
     let deliveryCollected = 0;
     let grossTotal = 0;
@@ -771,6 +944,7 @@ export default function AdminPage() {
     let courierEst = 0;
     const couponSpend: Record<string, { count: number; amount: number }> = {};
     for (const o of financeOrders) {
+      codes.add(o.order_code ?? o.id);
       const pricing = getOrderPricing(o);
       const storedTotal = o.total_amount != null ? Number(o.total_amount) : pricing.total;
       const storedDiscount = o.discount_amount != null ? Number(o.discount_amount) : 0;
@@ -790,7 +964,7 @@ export default function AdminPage() {
         couponSpend[o.coupon_code] = c;
       }
     }
-    return { count, grossRevenue, deliveryCollected, grossTotal, advance, due, discounts, courierEst, couponSpend };
+    return { count: codes.size, grossRevenue, deliveryCollected, grossTotal, advance, due, discounts, courierEst, couponSpend };
   }, [financeOrders, products, steadfastRates]);
 
   // ── In-store (manual) sales for the selected range ──
@@ -952,43 +1126,60 @@ export default function AdminPage() {
     return { topProducts, leastProducts, topCustomers };
   }, [financeOrders, products]);
 
-  // Download the currently selected finance range as a CSV file
-  const exportFinanceCsv = () => {
+  // Print the currently selected finance range as a detailed PDF (Save-as-PDF)
+  const exportFinancePdf = async () => {
     if (financeOrders.length === 0) return;
-    const headers = [
-      'Order code', 'Date', 'Customer', 'Phone', 'Product', 'Size', 'Qty',
-      'Unit price', 'Subtotal', 'Discount', 'Coupon', 'Delivery fee', 'Total',
-      'Advance paid', 'Due', 'Payment method', 'Zone', 'Courier', 'Tracking code', 'Status',
-      'Unit cost', 'Order cost', 'Order profit', 'Source', 'Seller',
-    ];
-    const esc = (v: string | number) => {
-      const s = String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const lines = [
-      headers.join(','),
-      ...financeOrders
+    setFinExportBusy(true);
+    try {
+      const rows: FinanceReportRow[] = financeOrders
         .slice()
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
         .map((o) => {
           const r = buildLedgerRow(o);
-          const profit = r.unitCost != null && r.costTotal != null ? r.subtotal - r.discount - r.costTotal : '';
-          return [
-            r.orderCode, r.dateLabel, r.customer, r.phone, o.product_title, r.size, r.qty,
-            r.unitPrice, r.subtotal, r.discount, r.coupon, r.deliveryFee, r.total,
-            r.advance, r.due, r.payLabel, r.zone, r.courier, r.trackingCode, r.status,
-            r.unitCost ?? '', r.costTotal ?? '', profit, r.orderSource, r.sellerName,
-          ].map(esc).join(',');
-        }),
-    ];
-    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ornix-finance-${finRange === 'custom' ? `${finFrom || 'start'}_to_${finTo || 'now'}` : finRange}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('success', `Exported ${financeOrders.length} order${financeOrders.length === 1 ? '' : 's'} to CSV.`);
+          return {
+            orderCode: r.orderCode,
+            dateLabel: r.dateLabel,
+            customer: r.customer,
+            productTitle: o.product_title,
+            size: r.size,
+            qty: r.qty,
+            payLabel: r.payLabel,
+            subtotal: r.subtotal,
+            discount: r.discount,
+            deliveryFee: r.deliveryFee,
+            total: r.total,
+            advance: r.advance,
+            due: r.due,
+            status: r.status,
+            sellerName: r.sellerName,
+            orderSource: r.orderSource,
+          };
+        });
+      const rangeText = finRange === 'custom'
+        ? `${finFrom || 'start'} → ${finTo || 'now'}`
+        : finRange === 'all'
+          ? 'All time'
+          : finRange === 'today'
+            ? `Today (${dayOffsetISO(0)})`
+            : finRange === 'week'
+              ? `This week (from ${rangeStartISO()})`
+              : `This month (from ${rangeStartISO()})`;
+      await printFinanceReport(rows, {
+        rangeText,
+        chips: [
+          { label: 'REVENUE (AFTER DISCOUNTS)', value: formatBDT(finStats.grossRevenue) },
+          { label: 'DELIVERY FEES', value: formatBDT(finStats.deliveryCollected) },
+          { label: 'DISCOUNTS', value: formatBDT(finStats.discounts) },
+          { label: 'COLLECTED', value: formatBDT(finStats.advance) },
+          { label: 'DUE ON DELIVERY', value: formatBDT(finStats.due) },
+          ...(cogs.known ? [{ label: 'EST. PROFIT', value: formatBDT(netProfit) }] : []),
+        ],
+      });
+      showToast('success', `Finance report opened — choose "Save as PDF" (${financeOrders.length} order${financeOrders.length === 1 ? '' : 's'}).`);
+    } catch (err) {
+      showToast('error', `Could not build the report: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+    setFinExportBusy(false);
   };
 
   useEffect(() => {
@@ -1113,8 +1304,11 @@ export default function AdminPage() {
         { event: 'INSERT', schema: 'public', table: 'orders' },
         (payload) => {
           const newOrder = payload.new as Order;
-          setOrders((prev) => [newOrder, ...prev]);
-          setNotifications((prev) => [newOrder, ...prev]);
+          // De-dupe by id (like the admin_log channel): rows this client just
+          // inserted — e.g. a manual sale — already sit in state, and the
+          // realtime echo must not add them a second time.
+          setOrders((prev) => (prev.some((o) => o.id === newOrder.id) ? prev : [newOrder, ...prev]));
+          setNotifications((prev) => (prev.some((n) => n.id === newOrder.id) ? prev : [newOrder, ...prev]));
           // Browser notification
           if (Notification.permission === 'granted') {
             new Notification('New Order on Ornix!', {
@@ -1181,7 +1375,23 @@ export default function AdminPage() {
         (payload) => {
           const entry = payload.new as AdminLog;
           if (!entry?.id) return;
-          setAdminLogs((prev) => (prev.some((l) => l.id === entry.id) ? prev : [entry, ...prev]));
+          setAdminLogs((prev) => {
+            if (prev.some((l) => l.id === entry.id)) return prev;
+            // logAdmin() optimistically appends a local-… twin of this row
+            // before the DB id exists — match it on content + a short time
+            // window so the realtime echo doesn't render the action twice.
+            const echoMs = new Date(entry.created_at).getTime();
+            const hasLocalTwin = prev.some((l) =>
+              l.id.startsWith('local-') &&
+              l.admin_id === entry.admin_id &&
+              l.action === entry.action &&
+              (l.target ?? null) === (entry.target ?? null) &&
+              (l.detail ?? null) === (entry.detail ?? null) &&
+              Math.abs(new Date(l.created_at).getTime() - echoMs) < 15000
+            );
+            if (hasLocalTwin) return prev;
+            return [entry, ...prev];
+          });
         }
       )
       .subscribe();
@@ -1196,28 +1406,32 @@ export default function AdminPage() {
 
   async function fetchAll() {
     setLoading(true);
-    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes, couponRes, expensesRes, adminLogRes, stockMovesRes, sizeChartRes, sellersRes] = await Promise.all([
-      supabase
+    // Bounded concurrency + retry: 13 simultaneous REST calls over one HTTP/2
+    // connection tripped the CDN's stream cap (ERR_HTTP2_SERVER_REFUSED_STREAM
+    // in the console, some tabs silently empty). Small waves fix it.
+    const [prodRes, catRes, ordRes, feedRes, annRes, settingsRes, couponRes, expensesRes, adminLogRes, adminLoginsRes, stockMovesRes, sizeChartRes, sellersRes] = await runBounded([
+      () => supabase
         .from('products')
         .select('*, product_images(id, image_url, display_order), categories(id, name, created_at), product_sizes(id, size, quantity), size_chart_templates(id, name, measurements, created_at, updated_at)')
         .order('created_at', { ascending: false }),
-       supabase.from('categories').select('*').order('priority', { ascending: true, nullsFirst: false }).order('name'),
+      () => supabase.from('categories').select('*').order('priority', { ascending: true, nullsFirst: false }).order('name'),
       // Cap the orders fetch: full history in one request gets slow as the shop
       // grows. The newest 2,000 orders cover all tabs; export/CSV stays accurate
       // for any filtered range within that window.
-      supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(2000),
-      supabase.from('feedback').select('*').order('created_at', { ascending: false }),
-      supabase.from('announcements').select('*').order('created_at', { ascending: false }),
-      supabase.from('site_settings').select('*'),
-      supabase.from('coupons').select('*').order('created_at', { ascending: false }),
+      () => supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(2000),
+      () => supabase.from('feedback').select('*').order('created_at', { ascending: false }),
+      () => supabase.from('announcements').select('*').order('created_at', { ascending: false }),
+      () => supabase.from('site_settings').select('*'),
+      () => supabase.from('coupons').select('*').order('created_at', { ascending: false }),
       // Admin-expansion tables (may not exist until the migration is applied)
-      supabase.from('expenses').select('*').order('spent_at', { ascending: false }).limit(200),
-      supabase.from('admin_log').select('*').order('created_at', { ascending: false }).limit(300),
-      supabase.from('stock_movements').select('*').order('created_at', { ascending: false }).limit(500),
+      () => supabase.from('expenses').select('*').order('spent_at', { ascending: false }).limit(200),
+      () => supabase.from('admin_log').select('*').order('created_at', { ascending: false }).limit(300),
+      () => supabase.from('admin_logins').select('*').order('login_at', { ascending: false }).limit(200),
+      () => supabase.from('stock_movements').select('*').order('created_at', { ascending: false }).limit(500),
       // Size chart templates (may not exist until the size-chart migration is applied)
-      supabase.from('size_chart_templates').select('*').order('name', { ascending: true }),
+      () => supabase.from('size_chart_templates').select('*').order('name', { ascending: true }),
       // Saved seller names (may not exist until the sellers migration is applied)
-      supabase.from('sellers').select('*').order('name', { ascending: true }),
+      () => supabase.from('sellers').select('*').order('name', { ascending: true }),
     ]);
     if (prodRes.data) {
       setProducts(
@@ -1237,18 +1451,28 @@ export default function AdminPage() {
     else if (couponRes.data) setCoupons(couponRes.data);
     if (expensesRes.data) setExpenses(expensesRes.data as Expense[]);
     if (adminLogRes.data) setAdminLogs(adminLogRes.data as AdminLog[]);
+    if (adminLoginsRes.error) setAdminLogins([]); // table may not exist until the migration runs
+    else if (adminLoginsRes.data) setAdminLogins(adminLoginsRes.data as AdminLogin[]);
     if (stockMovesRes.data) setStockMovements(stockMovesRes.data as StockMovement[]);
     if (sizeChartRes.error) setSizeCharts([]);
     else if (sizeChartRes.data) setSizeCharts(sizeChartRes.data as SizeChartTemplate[]);
     if (sellersRes.error) setSellers([]);
     else if (sellersRes.data) setSellers(sellersRes.data as Seller[]);
+    // A permission/RLS failure on the core tables renders as "no data" — make
+    // it loud instead of an empty-looking panel.
+    const coreFailures: string[] = [];
+    if (prodRes.error) coreFailures.push(`products: ${prodRes.error.message}`);
+    if (ordRes.error) coreFailures.push(`orders: ${ordRes.error.message}`);
+    if (coreFailures.length > 0) {
+      console.error('fetchAll core table errors:', coreFailures);
+      showToast('error', `Some data failed to load — ${coreFailures.join(' · ')}`);
+    }
     if (settingsRes.data) {
       const settings = settingsRes.data as SiteSetting[];
       const heroSetting = settings.find((s) => s.key === 'hero_background_image');
       if (heroSetting) setHeroBgImage(heroSetting.value ?? '');
       const heroMobileSetting = settings.find((s) => s.key === 'hero_background_image_mobile');
-      if (heroMobileSetting) setHeroBgMobileImage(heroMobileSetting.value ?? '');
-      const rateKeys: Array<[string, keyof typeof steadfastRates]> = [
+      if (heroMobileSetting) setHeroBgMobileImage(heroMobileSetting.value ?? '');      const rateKeys: Array<[string, DeliveryZone]> = [
         ['steadfast_rate_dhaka_city', 'dhaka_city'],
         ['steadfast_rate_dhaka_suburban', 'dhaka_suburban'],
         ['steadfast_rate_outside_dhaka', 'outside_dhaka'],
@@ -1257,6 +1481,7 @@ export default function AdminPage() {
         const next = { ...prev };
         for (const [key, field] of rateKeys) {
           const row = settings.find((s) => s.key === key);
+          // Keep whatever the admin is typing unless the DB truly has a value.
           if (row?.value != null && row.value !== '') next[field] = row.value;
         }
         return next;
@@ -1306,16 +1531,39 @@ export default function AdminPage() {
     const err = await signIn(adminId, adminPass);
     if (err) {
       setLoginError(err);
-      // Best-effort audit of the failed attempt (inserts are admin-only after
-      // the security migration, so this usually no-ops — harmless)
+      // Best-effort audit of the failed attempt. A direct insert could never
+      // work here (the client isn't authenticated yet, so admin-only RLS
+      // always rejected it) — the SECURITY DEFINER RPC records it server-side,
+      // allowlist-gated and rate-limited.
       try {
-        await supabase.from('admin_log').insert({ admin_id: adminId.trim() || '(blank)', action: 'login_failed', detail: err });
-      } catch { /* locked down — expected */ }
+        await supabase.rpc('log_failed_login', { p_email: adminId.trim() || '(blank)', p_detail: err });
+      } catch { /* best effort */ }
+    } else {
+      // Session trail: one admin_logins row per sign-in (login + logout time,
+      // IP and browser stamped server-side by the RPC). The activity-log
+      // 'signed in' / 'signed out' entries below ride the same trail.
+      try {
+        await supabase.rpc('log_admin_login');
+        const { data: whoami } = await supabase.auth.getUser();
+        const email = whoami?.user?.email ?? adminId.trim();
+        setAdminLogs((prev) => [
+          { id: `local-login-${Date.now()}-${Math.random()}`, admin_id: email, action: 'login', target: null, detail: null, created_at: new Date().toISOString() },
+          ...prev,
+        ]);
+      } catch { /* logins table may not exist yet — login itself still worked */ }
     }
     setLoggingIn(false);
   };
 
   const handleLogout = async () => {
+    // Close the open admin_logins session and drop a 'signed out' entry before
+    // the auth token goes away (the RPC needs the session to attribute the row).
+    try {
+      await supabase.rpc('log_admin_logout');
+      if (currentAdminId) {
+        await supabase.rpc('log_admin_activity', { p_action: 'logout', p_target: null, p_detail: null });
+      }
+    } catch { /* logins table may not exist yet */ }
     await signOut();
     setCurrentAdminId('');
   };
@@ -1349,10 +1597,25 @@ export default function AdminPage() {
     setImageUrls(imgs.length > 0 ? imgs : ['']);
     setModalMode('edit');
     setFormError('');
-    const sq = product.product_sizes?.reduce((acc, ps) => {
-      acc[ps.size] = String(ps.quantity);
-      return acc;
-    }, {} as Record<string, string>) ?? {};
+    // Seed size quantities from the product's size rows. Declared sizes with
+    // no row (legacy/inconsistent products) get the stock the existing rows
+    // don't account for — seeded from 0 instead, an untouched save would write
+    // stock_count = 0 and wipe the product's inventory.
+    const sq: Record<string, string> = {};
+    for (const ps of product.product_sizes ?? []) sq[ps.size] = String(ps.quantity);
+    if (product.sizes.length > 0) {
+      const missingSizes = product.sizes.filter((s) => !(s in sq));
+      if (missingSizes.length > 0) {
+        const rowsSum = (product.product_sizes ?? [])
+          .filter((ps) => product.sizes.includes(ps.size))
+          .reduce((sum, ps) => sum + (Number(ps.quantity) || 0), 0);
+        const residual = Math.max(0, (product.stock_count || 0) - rowsSum);
+        const spread = Math.floor(residual / missingSizes.length);
+        missingSizes.forEach((s, i) => {
+          sq[s] = String(i === missingSizes.length - 1 ? residual - spread * (missingSizes.length - 1) : spread);
+        });
+      }
+    }
     setSizeQuantities(sq);
     setModalOpen(true);
   };
@@ -1437,16 +1700,30 @@ export default function AdminPage() {
         updateError = (await supabase.from('products').update(rest).eq('id', editingProduct.id)).error;
       }
       if (updateError) { setFormError('Failed to update product.'); setSaving(false); return; }
-      await supabase.from('product_images').delete().eq('product_id', editingProduct.id);
+      const { error: imgDelError } = await supabase.from('product_images').delete().eq('product_id', editingProduct.id);
+      if (imgDelError) {
+        setFormError(`Could not update the product's images: ${imgDelError.message}`);
+        setSaving(false);
+        return;
+      }
       if (validImages.length > 0) {
-        await supabase.from('product_images').insert(
+        const { error: imgInsError } = await supabase.from('product_images').insert(
           validImages.map((url, i) => ({ product_id: editingProduct.id, image_url: url, display_order: i }))
         );
+        if (imgInsError) {
+          setFormError(`The product saved but its images could not be re-added: ${imgInsError.message}`);
+          setSaving(false);
+          return;
+        }
       }
     } else {
       setSaving(false);
       return;
     }
+
+    // (Image errors above already abort the save with the modal open, so the
+    // admin can retry without losing the form — a silent failure here used to
+    // delete all images for nothing.)
 
     await supabase.from('product_sizes').delete().eq('product_id', productId);
     if (sizes.length > 0) {
@@ -1529,16 +1806,22 @@ export default function AdminPage() {
 
   const handleDelete = async () => {
     if (!deleteConfirm) return;
+    // Audit after success — a failed delete must not leave a log entry.
+    let failed = false;
     if (deleteConfirm.type === 'product') {
-      void logAdmin('product_delete', deleteConfirm.id);
-      await supabase.from('products').delete().eq('id', deleteConfirm.id);
+      const { error } = await supabase.from('products').delete().eq('id', deleteConfirm.id);
+      failed = !!error;
+      if (!error) void logAdmin('product_delete', deleteConfirm.id);
     } else if (deleteConfirm.type === 'size_chart') {
-      void logAdmin('size_chart_delete', deleteConfirm.id);
-      await supabase.from('size_chart_templates').delete().eq('id', deleteConfirm.id);
+      const { error } = await supabase.from('size_chart_templates').delete().eq('id', deleteConfirm.id);
+      failed = !!error;
+      if (!error) void logAdmin('size_chart_delete', deleteConfirm.id);
     } else {
-      void logAdmin('category_delete', deleteConfirm.id);
-      await supabase.from('categories').delete().eq('id', deleteConfirm.id);
+      const { error } = await supabase.from('categories').delete().eq('id', deleteConfirm.id);
+      failed = !!error;
+      if (!error) void logAdmin('category_delete', deleteConfirm.id);
     }
+    if (failed) showToast('error', 'Delete failed — it may still be referenced by products or orders.');
     setDeleteConfirm(null);
     await fetchAll();
   };
@@ -1611,9 +1894,46 @@ export default function AdminPage() {
     }
   };
 
-  const applyOrderStatus = async (orderId: string, status: OrderStatus, opts?: { via?: string }) => {
+  // Give an order's units back to inventory (cancel path). Prefers the atomic
+  // admin RPC; falls back to the checkout RPC (pre-migration databases) with
+  // sizeless lines when a declared size has no product_sizes row. Local product
+  // state is mirrored so the UI doesn't wait for a refetch.
+  const restoreOrderStock = async (rows: Order[]) => {
+    if (rows.length === 0) return;
+    try {
+      const { error } = await supabase.rpc('admin_restore_order_stock', { p_order_ids: rows.map((r) => r.id) });
+      if (error) {
+        // Migration may not be applied yet — fall back to the checkout RPC.
+        const items = rows.map((r) => {
+          const product = r.product_id ? products.find((p) => p.id === r.product_id) : null;
+          const hasSize = !!(r.selected_size && product?.product_sizes?.some((ps) => ps.size === r.selected_size));
+          return { product_id: r.product_id, size: hasSize ? r.selected_size : null, quantity: Math.max(1, r.quantity || 1) };
+        }).filter((it) => it.product_id);
+        if (items.length === 0) { console.warn('Stock restore failed:', error.message); return; }
+        const retry = await supabase.rpc('checkout_restore_stock', { p_items: items });
+        if (retry.error) { console.warn('Stock restore failed:', retry.error.message); return; }
+      }
+      for (const r of rows) {
+        if (!r.product_id) continue;
+        void stockDelta(r.product_id, r.selected_size ?? null, Math.max(1, r.quantity || 1), 'cancel_restore', `Order ${r.order_code ?? r.id.slice(0, 8)} canceled`);
+      }
+      setProducts((prev) => prev.map((p) => {
+        const mine = rows.filter((r) => r.product_id === p.id);
+        if (mine.length === 0) return p;
+        let newSizes = p.product_sizes;
+        for (const r of mine) {
+          if (newSizes && r.selected_size) {
+            newSizes = newSizes.map((ps) => (ps.size === r.selected_size ? { ...ps, quantity: ps.quantity + Math.max(1, r.quantity || 1) } : ps));
+          }
+        }
+        const restored = mine.reduce((s, r) => s + Math.max(1, r.quantity || 1), 0);
+        return { ...p, product_sizes: newSizes, stock_count: p.stock_count + restored };
+      }));
+    } catch { /* restore is best-effort — never block the status change */ }
+  };
+
+  const applyOrderStatus = async (orderId: string, status: OrderStatus, opts?: { via?: string; silent?: boolean }) => {
     setUpdatingDelivery(orderId);
-    void logAdmin('order_status', orderId, `${status}${opts?.via ? ` (${opts.via})` : ''}`);
 
     const prevOrders = orders;
     const prevNotifications = notifications;
@@ -1630,7 +1950,16 @@ export default function AdminPage() {
       setNotifications(prevNotifications);
       showToast('error', `Failed to update order status: ${error.message}`);
     } else {
-      showToast('success', `Order marked as ${status}.`);
+      // Audit only after the change actually saved — a failed update must not
+      // leave a log entry claiming it happened.
+      void logAdmin('order_status', orderId, `${status}${opts?.via ? ` (${opts.via})` : ''}`);
+      // Canceling gives the order's stock back (callers only route rows that
+      // aren't canceled yet, so this fires once per row).
+      if (status === 'canceled') {
+        const row = orders.find((o) => o.id === orderId);
+        if (row) await restoreOrderStock([row]);
+      }
+      if (!opts?.silent) showToast('success', `Order marked as ${status}.`);
     }
 
     setUpdatingDelivery(null);
@@ -1638,7 +1967,6 @@ export default function AdminPage() {
 
   const handleDeleteOrder = async (orderId: string) => {
     setDeletingOrder(orderId);
-    void logAdmin('order_delete', orderId);
     // Delete every row of the purchase (multi-item carts share one order_code)
     // so no orphan item rows linger in Finance or the analytics.
     const source = orders.find((o) => o.id === orderId);
@@ -1651,6 +1979,8 @@ export default function AdminPage() {
       setDeletingOrder(null);
       return;
     }
+    // Audit only after the delete actually succeeded.
+    void logAdmin('order_delete', orderId);
     const idSet = new Set(ids);
     setOrders((prev) => prev.filter((o) => !idSet.has(o.id)));
     setNotifications((prev) => prev.filter((n) => !idSet.has(n.id)));
@@ -1752,6 +2082,12 @@ export default function AdminPage() {
       setOrders((prev) => prev.map((o) => (selectedOrderIds.has(o.id) ? { ...o, status, delivered: status === 'delivered' } : o)));
       setNotifications((prev) => prev.map((n) => (selectedOrderIds.has(n.id) ? { ...n, status, delivered: status === 'delivered' } : n)));
       void logAdmin('bulk_status', null, `${ids.length} order(s) → ${status}`);
+      // Canceling via bulk actions restores stock for every row that just
+      // became canceled (rows already canceled keep their single restore).
+      if (status === 'canceled') {
+        const newlyCanceled = orders.filter((o) => selectedOrderIds.has(o.id) && o.status !== 'canceled');
+        await restoreOrderStock(newlyCanceled);
+      }
       showToast('success', `${ids.length} order${ids.length === 1 ? '' : 's'} marked ${status}.`);
     }
     setSelectedOrderIds(new Set());
@@ -1989,10 +2325,10 @@ export default function AdminPage() {
 
   const handleSellProduct = async (productId: string, size: string | null, currentQty: number) => {
     if (currentQty <= 0) return;
-    const newQty = currentQty - 1;
     void stockDelta(productId, size, -1, 'manual_sell');
     void logAdmin('stock_sell', productId, size ? `1 unit of size ${size}` : '1 unit');
 
+    // Optimistic local update — mirrors what the server-side decrement does.
     if (size) {
       setProducts((prev) => prev.map((p) => {
         if (p.id !== productId) return p;
@@ -2002,38 +2338,33 @@ export default function AdminPage() {
         const newStock = newProductSizes?.reduce((sum, ps) => sum + ps.quantity, 0) ?? p.stock_count;
         return { ...p, product_sizes: newProductSizes, stock_count: Math.max(0, newStock) };
       }));
-
-      const { error: sizeError } = await supabase
-        .from('product_sizes')
-        .update({ quantity: Math.max(0, newQty) })
-        .eq('product_id', productId)
-        .eq('size', size);
-
-      if (sizeError) {
-        await fetchAll();
-        return;
-      }
     } else {
       setProducts((prev) => prev.map((p) =>
         p.id === productId ? { ...p, stock_count: Math.max(0, p.stock_count - 1) } : p
       ));
     }
 
-    const { data: current } = await supabase
-      .from('products')
-      .select('stock_count')
-      .eq('id', productId)
-      .maybeSingle();
-
-    if (current) {
+    // Single atomic server-side decrement (row-locked, floors at 0, keeps
+    // stock_count synced to the size rows). Replaces the old read-modify-write
+    // pair where two admins selling the last unit could both succeed.
+    const { error } = await supabase.rpc('admin_decrement_stock', {
+      p_items: [{ product_id: productId, size: size ?? null, quantity: 1 }],
+    });
+    if (error) {
+      // Migration may not be applied yet — fall back to the old direct writes.
+      if (size) {
+        const { error: sizeError } = await supabase
+          .from('product_sizes')
+          .update({ quantity: Math.max(0, currentQty - 1) })
+          .eq('product_id', productId)
+          .eq('size', size);
+        if (sizeError) { await fetchAll(); return; }
+      }
       const { error: productError } = await supabase
         .from('products')
-        .update({ stock_count: Math.max(0, (current.stock_count ?? 0) - 1) })
+        .update({ stock_count: Math.max(0, (products.find((p) => p.id === productId)?.stock_count ?? 1) - 1) })
         .eq('id', productId);
-
-      if (productError) {
-        await fetchAll();
-      }
+      if (productError) await fetchAll();
     }
   };
 
@@ -2278,9 +2609,12 @@ export default function AdminPage() {
 
   // Persist the Steadfast courier rates + checkout bKash number
   const handleSaveSteadfastRates = async () => {
+    // All three zone rates are REQUIRED — they are the single source of truth
+    // for every delivery charge in the app (checkout, manual orders, finance).
+    // A blank one would silently pause customer checkout.
     for (const v of [steadfastRates.dhaka_city, steadfastRates.dhaka_suburban, steadfastRates.outside_dhaka]) {
-      if (isNaN(Number(v)) || Number(v) < 0) {
-        showToast('error', 'Courier rates must be valid, non-negative numbers.');
+      if (v.trim() === '' || isNaN(Number(v)) || Number(v) < 0) {
+        showToast('error', 'All three courier rates are required (valid, non-negative numbers) — customers cannot check out while one is blank.');
         return;
       }
     }
@@ -2331,13 +2665,26 @@ export default function AdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin]);
 
-  // Refresh the activity log whenever the super admin opens its sub-tab
+  // Refresh the activity data when the super admin opens its sub-tab. Logs and
+  // sessions are tiny — fetch just those, not every product/order/coupon again.
+  const refreshActivityLog = useCallback(async () => {
+    const [logRes, loginsRes, movesRes] = await Promise.all([
+      supabase.from('admin_log').select('*').order('created_at', { ascending: false }).limit(300),
+      supabase.from('admin_logins').select('*').order('login_at', { ascending: false }).limit(200),
+      supabase.from('stock_movements').select('*').order('created_at', { ascending: false }).limit(500),
+    ]);
+    if (logRes.data) setAdminLogs(logRes.data as AdminLog[]);
+    if (loginsRes.error) setAdminLogins([]);
+    else if (loginsRes.data) setAdminLogins(loginsRes.data as AdminLogin[]);
+    if (movesRes.data) setStockMovements(movesRes.data as StockMovement[]);
+  }, []);
+
   useEffect(() => {
     if (tab === 'settings' && settingsTab === 'activity') {
-      void fetchAll();
+      void refreshActivityLog();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, settingsTab]);
+  }, [tab, settingsTab, refreshActivityLog]);
 
   /** Result of a team call through the Edge Function — false when it isn't deployed yet. */
   const callEdge = async (
@@ -2366,17 +2713,21 @@ export default function AdminPage() {
     setTeamBusy(email);
     // Preferred path: one call creates the login AND adds them to the team.
     const viaEdge = await callEdge(() => adminAddAdmin(email, newTeamPassword, newTeamRole));
+    let added = viaEdge;
     if (!viaEdge) {
       // Fallback: allowlist-only RPC (login user must then be made in the Dashboard).
       const { error } = await supabase.rpc('super_admin_add_admin', { p_email: email, p_role: newTeamRole });
+      added = !error;
       if (error) showToast('error', `Could not add admin: ${error.message}`);
       else showToast('success', `${email} added to the team — they can sign in once you create their login in Supabase (Authentication → Users).`);
     }
+    // Audit only when the admin was actually added — if both paths failed the
+    // log must not claim it happened.
+    if (added) void logAdmin('admin_add', email, `role: ${newTeamRole}`);
     if (viaEdge) {
       setNewTeamEmail('');
       setNewTeamPassword('');
     }
-    void logAdmin('admin_add', email, `role: ${newTeamRole}`);
     await fetchTeam();
     setTeamBusy('');
   };
@@ -2386,13 +2737,16 @@ export default function AdminPage() {
     setTeamBusy(email);
     // Preferred path: delete the auth user AND the allowlist row in one go.
     const viaEdge = await callEdge(() => adminDeleteAdmin(email));
+    let removed = viaEdge;
     if (!viaEdge) {
       // Fallback: allowlist-only RPC (auth user then remains in the Dashboard).
       const { error } = await supabase.rpc('super_admin_remove_admin', { p_email: email });
+      removed = !error;
       if (error) showToast('error', `Could not remove: ${error.message}`);
       else showToast('success', `${email} removed from the team — delete their login in Supabase (Authentication → Users) to fully revoke it.`);
     }
-    void logAdmin('admin_remove', email, null);
+    // Audit only when the removal actually succeeded.
+    if (removed) void logAdmin('admin_remove', email, null);
     await fetchTeam();
     setTeamBusy('');
   };
@@ -2585,6 +2939,9 @@ export default function AdminPage() {
     // details a website order has: real phone, address, district (the district
     // also sets the courier charge collected in store).
     const deliveryOnly = manualForm.payment_mode === 'delivery_only';
+    // 'full_no_delivery' records the product amount only — no delivery charge
+    // is collected or owed (customer picks up / takes it home).
+    const collectsDeliveryFee = manualForm.payment_mode !== 'full_no_delivery';
     if (deliveryOnly) {
       if (!/^01[3-9]\d{8}$/.test(phoneDigits)) {
         showToast('error', 'Delivery-charge-only sales need the customer\u2019s full phone (Steadfast pickup).');
@@ -2640,13 +2997,28 @@ export default function AdminPage() {
     const composedAddress = addressParts.length ? addressParts.join(', ') : 'In-store purchase';
     const manualZone = manualForm.district ? zoneForDistrict(manualForm.district) : null;
     const saleTotal = resolved.reduce((s, r) => s + r.amount, 0);
-    // Charge collected in store (delivery-charge-only mode): the zone rate for
-    // the customer's district, recorded on the first row so the sale's totals add up.
-    const collectedFee = deliveryOnly && manualZone ? Math.max(0, Number(steadfastRates[manualZone as DeliveryZone]) || 0) : 0;
-    // Per-row money split. 'full' → everything settled in store (delivered).
-    // 'delivery_only' → the customer paid just the delivery charge (recorded as
-    // the first row's advance); the product amount stays due and is collected
-    // by Steadfast on delivery, so the sale stays pending until it ships.
+    // Delivery charge from the admin-set zone rates (Settings → Delivery) —
+    // the ONLY source; a blank rate stops the sale rather than silently
+    // recording ৳0 collected (checkout pauses for the same reason).
+    // 'delivery_only' → collected in store now, recorded as the first row's
+    // advance; product amount rides with the courier as COD.
+    // 'full' → collected in store on top of the sale total, so the card's
+    // Total matches what actually left the customer's wallet.
+    // 'full_no_delivery' → no delivery charge at all (zoneFee stays 0), so a
+    // missing rate never blocks a pickup sale.
+    const rateRaw = manualZone ? steadfastRates[manualZone as DeliveryZone] : undefined;
+    if (manualZone && collectsDeliveryFee && (rateRaw == null || String(rateRaw).trim() === '' || isNaN(Number(rateRaw)))) {
+      showToast('error', `No delivery rate saved for ${manualZone.replace(/_/g, ' ')} — set it in Settings → Delivery & Payments, then record the sale.`);
+      return;
+    }
+    const zoneFee = manualZone && collectsDeliveryFee ? Math.max(0, Number(rateRaw) || 0) : 0;
+    const collectedFee = deliveryOnly ? zoneFee : 0;
+    const deliveryFee = deliveryOnly ? 0 : zoneFee;
+    // Per-row money split. 'full' → everything settled in store (delivered):
+    // total = product amount + delivery fee, nothing due. 'delivery_only' →
+    // the customer paid just the delivery charge (recorded as the first row's
+    // advance); the product amount stays due and is collected by Steadfast on
+    // delivery, so the sale stays pending until it ships.
     const rowMoney = (r: (typeof resolved)[number], i: number) =>
       deliveryOnly
         ? {
@@ -2655,76 +3027,89 @@ export default function AdminPage() {
             advance_amount: i === 0 ? collectedFee : 0,
             due_amount: r.amount,
           }
-        : { delivery_fee: 0, total_amount: r.amount, advance_amount: r.amount, due_amount: 0 };
+        : {
+            delivery_fee: i === 0 ? deliveryFee : 0,
+            total_amount: r.amount + (i === 0 ? deliveryFee : 0),
+            advance_amount: r.amount + (i === 0 ? deliveryFee : 0),
+            due_amount: 0,
+          };
     const orderCode = `ORN-${Array.from(crypto.getRandomValues(new Uint8Array(4)))
       .map((b) => b.toString(36).padStart(2, '0'))
       .join('')
       .slice(0, 6)
       .toUpperCase()}`;
 
+    // Core payload — every column every deployment has. The optional tag
+    // columns (order_source / seller_name / bkash_number / payment_channel /
+    // payment_mode) are spread in separately so a database missing any of
+    // them can be retried without them instead of failing the sale.
+    const baseRow = (r: (typeof resolved)[number], idx: number) => ({
+      order_code: orderCode,
+      product_id: r.product.id,
+      product_title: r.product.title,
+      product_code: r.product.product_code,
+      selected_size: r.size,
+      quantity: r.qty,
+      customer_name: customer,
+      customer_phone: phoneDigits || '—',
+      customer_address: composedAddress,
+      subtotal: r.amount,
+      ...rowMoney(r, idx),
+      discount_amount: 0,
+      payment_method: deliveryOnly ? 'advance_partial' : 'in_store',
+      courier_name: deliveryOnly ? 'Home Delivery' : 'Store Pickup',
+      delivery_zone: manualZone,
+      status: deliveryOnly ? 'pending' : 'delivered',
+      delivered: !deliveryOnly,
+    });
+    const optionalRow = {
+      order_source: 'manual' as const,
+      seller_name: seller,
+      bkash_number: bkashDigits || null,
+      payment_channel: manualForm.payment_channel,
+      payment_mode: deliveryOnly
+        ? ('advance_paid' as const)
+        : manualForm.payment_mode === 'full_no_delivery'
+          ? ('full_payment_no_delivery' as const)
+          : ('full_payment' as const),
+    };
+    // Columns the live database doesn't have (PostgREST names them in the
+    // "Could not find the '<col>' column" schema-cache error) — dropped from
+    // the retry so the sale still goes through without the tag.
+    const missingColumns = new Set<string>();
+
     const inserted: Order[] = [];
     let firstError: string | null = null;
     for (const [idx, r] of resolved.entries()) {
-      const { data, error } = await supabase
-        .from('orders')
-        .insert({
-          order_code: orderCode,
-          product_id: r.product.id,
-          product_title: r.product.title,
-          product_code: r.product.product_code,
-          selected_size: r.size,
-          quantity: r.qty,
-          customer_name: customer,
-          customer_phone: phoneDigits || '—',
-          customer_address: composedAddress,
-          subtotal: r.amount,
-          ...rowMoney(r, idx),
-          discount_amount: 0,
-          payment_method: deliveryOnly ? 'advance_partial' : 'in_store',
-          courier_name: deliveryOnly ? 'Home Delivery' : 'Store Pickup',
-          delivery_zone: manualZone,
-          status: deliveryOnly ? 'pending' : 'delivered',
-          delivered: !deliveryOnly,
-          order_source: 'manual',
-          seller_name: seller,
-          bkash_number: bkashDigits || null,
-          payment_channel: manualForm.payment_channel,
-        })
-        .select()
-        .single();
-      // Older databases may not have orders.payment_channel yet — retry the
-      // same row without the column so the sale still goes through.
-      if (error && error.message.includes('payment_channel')) {
-        const retry = await supabase
+      let payload = { ...baseRow(r, idx), ...optionalRow };
+      // Rows after the first skip any column the database already rejected.
+      if (missingColumns.size) {
+        const shrunk = { ...payload } as Record<string, unknown>;
+        for (const col of missingColumns) delete shrunk[col];
+        payload = shrunk as typeof payload;
+      }
+      let lastError: string | null = null;
+      // Up to 5 attempts: first with all columns, then progressively without
+      // any column the database reports as missing.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data, error } = await supabase
           .from('orders')
-          .insert({
-            order_code: orderCode,
-            product_id: r.product.id,
-            product_title: r.product.title,
-            product_code: r.product.product_code,
-            selected_size: r.size,
-            quantity: r.qty,
-            customer_name: customer,
-            customer_phone: phoneDigits || '—',
-            customer_address: composedAddress,
-            subtotal: r.amount,
-            ...rowMoney(r, idx),
-            discount_amount: 0,
-            payment_method: deliveryOnly ? 'advance_partial' : 'in_store',
-            courier_name: deliveryOnly ? 'Home Delivery' : 'Store Pickup',
-            delivery_zone: manualZone,
-            status: deliveryOnly ? 'pending' : 'delivered',
-            delivered: !deliveryOnly,
-            order_source: 'manual',
-            seller_name: seller,
-            bkash_number: bkashDigits || null,
-          })
+          .insert(payload)
           .select()
           .single();
-        if (!retry.error && retry.data) { inserted.push(retry.data as Order); continue; }
+        if (!error && data) { inserted.push(data as Order); break; }
+        const colMatch = error?.message.match(/Could not find the '([a-z_]+)' column/i);
+        if (error && colMatch && (payload as Record<string, unknown>)[colMatch[1]] !== undefined) {
+          missingColumns.add(colMatch[1]);
+          const shrunk = { ...payload } as Record<string, unknown>;
+          delete shrunk[colMatch[1]];
+          payload = shrunk as typeof payload;
+          continue; // retry this same row without the missing column
+        }
+        lastError = error?.message ?? 'unknown error';
+        break;
       }
-      if (error || !data) { firstError = error?.message ?? 'unknown error'; break; }
-      inserted.push(data as Order);
+      if (lastError) { firstError = lastError; break; }
     }
 
     if (firstError || inserted.length === 0) {
@@ -2757,15 +3142,25 @@ export default function AdminPage() {
       }
     }
     for (const agg of byProduct.values()) {
-      const newStock = Math.max(0, agg.product.stock_count - agg.totalQty);
-      await supabase.from('products').update({ stock_count: newStock }).eq('id', agg.product.id);
-      for (const sd of agg.sizeDeltas) {
-        const entry = agg.product.product_sizes?.find((ps) => ps.size === sd.size);
-        if (entry) {
-          await supabase.from('product_sizes')
-            .update({ quantity: Math.max(0, entry.quantity - sd.qty) })
-            .eq('product_id', agg.product.id)
-            .eq('size', sd.size);
+      // One atomic server-side decrement per product (row-locked, floors at 0,
+      // keeps stock_count synced to the size rows). Replaces the old
+      // read-modify-write where two admins selling the last unit could both win.
+      const decItems = agg.sizeDeltas.length > 0
+        ? agg.sizeDeltas.map((sd) => ({ product_id: agg.product.id, size: sd.size, quantity: sd.qty }))
+        : [{ product_id: agg.product.id, size: null as string | null, quantity: agg.totalQty }];
+      const { error: decError } = await supabase.rpc('admin_decrement_stock', { p_items: decItems });
+      if (decError) {
+        // Migration may not be applied yet — fall back to direct writes.
+        const newStock = Math.max(0, agg.product.stock_count - agg.totalQty);
+        await supabase.from('products').update({ stock_count: newStock }).eq('id', agg.product.id);
+        for (const sd of agg.sizeDeltas) {
+          const entry = agg.product.product_sizes?.find((ps) => ps.size === sd.size);
+          if (entry) {
+            await supabase.from('product_sizes')
+              .update({ quantity: Math.max(0, entry.quantity - sd.qty) })
+              .eq('product_id', agg.product.id)
+              .eq('size', sd.size);
+          }
         }
       }
       void stockDelta(agg.product.id, agg.sizeDeltas.length === 1 ? agg.sizeDeltas[0].size : null, -agg.totalQty, 'in_store_sale', `Manual order by ${seller}`);
@@ -2786,11 +3181,20 @@ export default function AdminPage() {
       return { ...p, stock_count: Math.max(0, p.stock_count - agg.totalQty), product_sizes: newSizes };
     }));
     setManualLines([{ product_id: '', product_code: '', size: '', quantity: '1', amount: '' }]);
-    setManualForm(f => ({ ...f, customer_name: '', customer_phone: '', bkash: '', payment_channel: 'bkash', payment_mode: 'full', district: '', thana: '', address: '' }));
+    setManualForm(f => ({ ...f, customer_name: '', customer_phone: '', bkash: '', payment_channel: 'bkash', payment_mode: 'full', district: '', thana: '', address: '' })); // reset: 'full' = full payment + delivery
     setManualSaving(false);
-    showToast('success', deliveryOnly
-      ? `Sale recorded — ৳${collectedFee.toLocaleString('en-IN')} delivery charge collected · ৳${saleTotal.toLocaleString('en-IN')} due on delivery (${inserted.length} item${inserted.length === 1 ? '' : 's'}).`
-      : `In-store sale recorded — ৳${saleTotal.toLocaleString('en-IN')} · ${inserted.length} item${inserted.length === 1 ? '' : 's'}.`);
+    // Safety net fired — the sale saved but some tag column(s) are missing in
+    // the live database. Nudge the admin to run the migration batch.
+    if (missingColumns.size) {
+      showToast('info', `Saved, but the database is missing ${[...missingColumns].join(', ')} — run the latest supabase/apply-pending-migrations.sql to add it.`);
+    }
+    if (deliveryOnly) {
+      showToast('success', `Sale recorded — ৳${collectedFee.toLocaleString('en-IN')} delivery charge collected · ৳${saleTotal.toLocaleString('en-IN')} due on delivery (${inserted.length} item${inserted.length === 1 ? '' : 's'}).`);
+    } else if (deliveryFee > 0) {
+      showToast('success', `Sale recorded — ৳${saleTotal.toLocaleString('en-IN')} products + ৳${deliveryFee.toLocaleString('en-IN')} delivery charge (${manualZone ?? 'no district'} rate) collected in store · ${inserted.length} item${inserted.length === 1 ? '' : 's'}.`);
+    } else {
+      showToast('success', `In-store sale recorded — ৳${saleTotal.toLocaleString('en-IN')} · ${inserted.length} item${inserted.length === 1 ? '' : 's'}.`);
+    }
   };
 
   // ── Saved sellers: remove a name from the dropdown (does not touch past orders) ──
@@ -2962,6 +3366,29 @@ export default function AdminPage() {
                 </>
               )}
             </div>
+            {/* Full panel refresh: re-pulls every dataset (products, orders,
+                manual sales, logs, settings…) without a page reload, so the
+                admin stays signed in and sees fresh data instantly. */}
+            <button
+              onClick={async () => {
+                if (headerRefreshing) return;
+                setHeaderRefreshing(true);
+                try {
+                  await fetchAll();
+                  await fetchTeam();
+                  showToast('success', 'Panel refreshed — all data is up to date.');
+                } catch {
+                  showToast('error', 'Refresh failed — check your connection and try again.');
+                }
+                setHeaderRefreshing(false);
+              }}
+              disabled={headerRefreshing}
+              title="Refresh the whole panel (reload all data)"
+              className="flex items-center gap-1.5 text-stone-400 hover:text-white text-sm transition-colors disabled:opacity-60"
+            >
+              <RefreshCw className={`w-4 h-4 ${headerRefreshing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
             <button onClick={() => onNavigate('home')}
               className="flex items-center gap-1.5 text-stone-400 hover:text-white text-sm transition-colors">
               <Eye className="w-4 h-4" /> View Store
@@ -4109,6 +4536,19 @@ export default function AdminPage() {
             const p = products.find((x) => x.id === l.product_id);
             return s + (l.amount.trim() !== '' && !isNaN(Number(l.amount)) ? Number(l.amount) : unitPriceOf(p) * (Number(l.quantity) || 0));
           }, 0);
+          // Zone rate for the selected district — collected in store on top of the
+          // sale total (full payment) or as the advance (delivery-charge-only).
+          // Mirrors the save guard: blank rate → warn instead of showing ৳0.
+          // 'full_no_delivery' collects no delivery charge, so no rate needed.
+          const manualZoneId = manualForm.district ? zoneForDistrict(manualForm.district) : null;
+          const manualRateRaw = manualZoneId ? steadfastRates[manualZoneId as DeliveryZone] : undefined;
+          const manualRateMissing = manualZoneId != null
+            && manualForm.payment_mode !== 'full_no_delivery'
+            && (manualRateRaw == null || String(manualRateRaw).trim() === '' || isNaN(Number(manualRateRaw)));
+          const manualZoneFee = manualForm.payment_mode === 'full_no_delivery'
+            ? 0
+            : (manualRateMissing ? 0 : Math.max(0, Number(manualRateRaw) || 0));
+          const grandTotal = saleTotal + (manualForm.payment_mode === 'delivery_only' ? 0 : manualZoneFee);
           const todaySum = manualToday.reduce((s, o) => s + Number(o.total_amount ?? 0), 0);
           return (
             <div className="space-y-6">
@@ -4345,11 +4785,14 @@ export default function AdminPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-stone-700 mb-1.5">Paid in store</label>
-                    {/* Payment scope: everything now, or just the delivery charge
-                        (product amount then collected on delivery via Steadfast). */}
+                    {/* Payment scope: everything + delivery charge now, product
+                        amount only (no delivery charge), or just the delivery
+                        charge (product amount then collected on delivery via
+                        Steadfast). */}
                     <div className="flex gap-1 bg-stone-100 rounded-xl p-1">
                       {([
-                        { key: 'full' as const, label: 'Full payment', hint: 'Sale final — delivered' },
+                        { key: 'full' as const, label: 'Full + delivery', hint: 'Everything incl. the delivery charge, collected in store' },
+                        { key: 'full_no_delivery' as const, label: 'Full, no delivery', hint: 'Product amount only — no delivery charge (pickup/handover)' },
                         { key: 'delivery_only' as const, label: 'Only delivery charge', hint: 'Rest is COD on delivery' },
                       ]).map((m) => {
                         const active = manualForm.payment_mode === m.key;
@@ -4363,7 +4806,9 @@ export default function AdminPage() {
                               active
                                 ? m.key === 'full'
                                   ? 'bg-emerald-500 text-white shadow-sm'
-                                  : 'bg-amber-500 text-white shadow-sm'
+                                  : m.key === 'full_no_delivery'
+                                    ? 'bg-sky-500 text-white shadow-sm'
+                                    : 'bg-amber-500 text-white shadow-sm'
                                 : 'text-stone-500 hover:text-stone-700'
                             }`}
                           >
@@ -4375,12 +4820,14 @@ export default function AdminPage() {
                     <p className="text-xs text-stone-400 mt-1.5">
                       {manualForm.payment_mode === 'delivery_only'
                         ? 'Customer pays the delivery charge now — the product amount is collected on delivery.'
-                        : 'Customer paid everything here — the sale is final.'}
+                        : manualForm.payment_mode === 'full_no_delivery'
+                          ? 'Customer paid the product amount in full — no delivery charge involved.'
+                          : 'Customer paid everything, including the delivery charge — the sale is final.'}
                     </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-stone-700 mb-1.5">
-                      District {manualForm.payment_mode === 'delivery_only' ? '*' : <span className="text-stone-400 font-normal">(optional)</span>}
+                      District {manualForm.payment_mode === 'delivery_only' ? '*' : manualForm.payment_mode === 'full_no_delivery' ? <span className="text-stone-400 font-normal">(optional — no delivery charge)</span> : <span className="text-stone-400 font-normal">(optional)</span>}
                     </label>
                     <select
                       value={manualForm.district}
@@ -4425,8 +4872,33 @@ export default function AdminPage() {
                   <p className="text-sm text-stone-500">
                     {manualLines.some((l) => l.product_id) ? (
                       <>
+                        {manualRateMissing && (
+                          <span className="mr-2 font-semibold text-red-600">
+                            No delivery rate saved for {manualZoneId?.replace(/_/g, ' ')} — set it in Settings → Delivery & Payments before recording.
+                          </span>
+                        )}
                         {manualLines.filter((l) => l.product_id).length} item{manualLines.filter((l) => l.product_id).length === 1 ? '' : 's'} in this sale
-                        {saleTotal > 0 && <> · Sale total: <span className="font-bold text-stone-900">৳{saleTotal.toLocaleString('en-IN')}</span></>}
+                        {manualForm.payment_mode === 'delivery_only' && saleTotal > 0 && (
+                          <>
+                            {' '}· Products: <span className="font-bold text-stone-900">৳{saleTotal.toLocaleString('en-IN')}</span>
+                            {' '}· Delivery now: <span className="font-bold text-emerald-600">৳{manualZoneFee.toLocaleString('en-IN')}</span>
+                            {' '}· Due on delivery: <span className="font-bold text-amber-600">৳{saleTotal.toLocaleString('en-IN')}</span>
+                          </>
+                        )}
+                        {manualForm.payment_mode === 'full_no_delivery' && (
+                          <>
+                            {saleTotal > 0 && <> · Products: <span className="font-bold text-stone-900">৳{saleTotal.toLocaleString('en-IN')}</span></>}
+                            {grandTotal > 0 && <> · Total collected: <span className="font-bold text-stone-900">৳{grandTotal.toLocaleString('en-IN')}</span></>}
+                            {' '}· No delivery charge
+                          </>
+                        )}
+                        {manualForm.payment_mode === 'full' && (
+                          <>
+                            {saleTotal > 0 && <> · Products: <span className="font-bold text-stone-900">৳{saleTotal.toLocaleString('en-IN')}</span></>}
+                            {manualZoneFee > 0 && <> · Delivery ({manualForm.district}): <span className="font-bold text-emerald-600">৳{manualZoneFee.toLocaleString('en-IN')}</span></>}
+                            {grandTotal > 0 && <> · Total collected: <span className="font-bold text-stone-900">৳{grandTotal.toLocaleString('en-IN')}</span></>}
+                          </>
+                        )}
                       </>
                     ) : (
                       'Add the products the customer bought.'
@@ -4434,7 +4906,7 @@ export default function AdminPage() {
                   </p>
                   <button
                     onClick={() => void handleSaveManualOrder()}
-                    disabled={manualSaving || !manualLines.some((l) => l.product_id)}
+                    disabled={manualSaving || !manualLines.some((l) => l.product_id) || manualRateMissing}
                     className="ml-auto flex items-center gap-2 bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white font-semibold px-5 py-2.5 rounded-xl transition-all shadow-sm"
                   >
                     {manualSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Store className="w-4 h-4" />}
@@ -4554,7 +5026,7 @@ export default function AdminPage() {
                 ) : (
                   manualFilteredGroups.map((g) => {
                     const firstRow = g.rows[0];
-                    const codDue = Math.max(0, g.rows.reduce((s, r) => s + Number(r.due_amount ?? r.total_amount ?? 0), 0));
+                    const codDue = g.due;
                     return (
                     <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
                       g.status === 'pending'
@@ -4766,6 +5238,9 @@ export default function AdminPage() {
                         <div>
                           <p className={ORD_LBL}>Due</p>
                           <p className={`font-bold text-sm ${codDue > 0 ? 'text-amber-600' : 'text-stone-900'}`}>৳{codDue.toLocaleString('en-IN')}</p>
+                          {g.collected > 0 && (
+                            <p className="text-[11px] text-emerald-600 font-medium mt-0.5">+৳{g.collected.toLocaleString('en-IN')} collected</p>
+                          )}
                         </div>
                         <div>
                           <p className={ORD_LBL}>Wallet</p>
@@ -4778,7 +5253,15 @@ export default function AdminPage() {
                         <div>
                           <p className={ORD_LBL}>Payment</p>
                           <p className="font-medium text-stone-800 text-sm">
-                            {codDue > 0 ? `COD + charge paid (${firstRow?.delivery_fee != null ? `৳${Number(firstRow.delivery_fee).toFixed(0)}` : '—'})` : 'In-store sale'}
+                            {g.paymentMode === 'advance_paid'
+                              ? 'Advance paid'
+                              : g.paymentMode === 'full_payment_no_delivery'
+                                ? 'Full payment (no delivery)'
+                                : g.paymentMode === 'full_payment'
+                                  ? 'Full payment'
+                                  : codDue > 0
+                                    ? 'COD + charge paid'
+                                    : 'In-store sale'}
                           </p>
                         </div>
                         <div>
@@ -4821,13 +5304,13 @@ export default function AdminPage() {
                 ]).map((r) =>
                   r.key === 'csv' ? (
                     <button
-                      key="csv"
-                      onClick={exportFinanceCsv}
-                      disabled={financeOrders.length === 0}
-                      title="Download the currently selected range as CSV"
+                      key="pdf"
+                      onClick={() => void exportFinancePdf()}
+                      disabled={financeOrders.length === 0 || finExportBusy}
+                      title="Open a detailed PDF report of the selected range (choose Save as PDF)"
                       className="flex items-center gap-1.5 text-xs font-semibold text-stone-700 bg-white border border-stone-200 hover:border-stone-300 px-3 py-2 rounded-xl disabled:opacity-50 transition-all"
                     >
-                      <Download className="w-3.5 h-3.5" /> CSV
+                      {finExportBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} PDF
                     </button>
                   ) : (
                     <button
@@ -4909,7 +5392,7 @@ export default function AdminPage() {
               )}
               {/* Cash strip: money in hand vs money still out there (range-based) */}
               <div className="mt-5 pt-4 border-t border-stone-100 grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <FinCard label="In hand (bKash advance)" value={formatBDT(finStats.advance)} sub="Paid up front by customers" tone="emerald" icon={CheckCircle2} />
+                <FinCard label="In hand (advances + collected)" value={formatBDT(finStats.advance)} sub="Paid up front — wallet advances and cash taken in store" tone="emerald" icon={CheckCircle2} />
                 <FinCard label="To collect on delivery" value={formatBDT(finStats.due)} sub="Customer pays the courier" tone={finStats.due > 0 ? 'amber' : 'stone'} icon={Clock} />
                 <FinCard label="Delivery fees charged" value={formatBDT(finStats.deliveryCollected)} sub="Added to customer bills" tone="sky" icon={Truck} />
                 <FinCard label="Discounts given" value={`−${formatBDT(finStats.discounts)}`} sub={`${Object.keys(finStats.couponSpend).length} coupon(s) used`} tone="amber" icon={Percent} />
@@ -5738,29 +6221,143 @@ export default function AdminPage() {
                      No activity recorded yet. Actions start appearing once the admin-expansion SQL migration is applied and admins use the panel.
                    </p>
                  </div>
-               ) : filteredActivityLogs.length === 0 ? (
+               ) : mergedActivityLogs.length === 0 ? (
                  <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4">
                    <p className="text-sm text-stone-400">
                      No activity by "{activityAdminFilter}" in the loaded log — try another admin or "All admins".
                    </p>
                  </div>
                ) : (
-                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 divide-y divide-stone-100 mt-4 max-h-96 overflow-y-auto">
-                   {filteredActivityLogs.slice(0, 80).map((log) => (
-                     <div key={log.id} className="flex items-center gap-3 px-4 py-2.5">
-                       <span className="text-[10px] font-bold uppercase bg-stone-900 text-white px-2 py-0.5 rounded-md flex-shrink-0">{log.admin_id}</span>
-                       <span className="text-xs font-semibold text-brand-600 flex-shrink-0">{log.action.replace(/_/g, ' ')}</span>
-                       <span className="text-xs text-stone-500 truncate min-w-0 flex-1">{log.detail ?? log.target ?? ''}</span>
-                       <span className="text-[11px] text-stone-400 flex-shrink-0">
-                         {new Date(log.created_at).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })}
-                       </span>
-                     </div>
-                   ))}
-                   {filteredActivityLogs.length > 80 && (
-                     <div className="px-4 py-2 text-[11px] text-stone-400">
-                       Showing newest 80 of {filteredActivityLogs.length} matching entries — filter by admin to narrow further.
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 divide-y divide-stone-100 mt-4">
+                   {activityPageRows.map((log) => {
+                     const meta = activityMeta(log.action);
+                     const Icon = meta.icon;
+                     const text = activityText(log);
+                     return (
+                       <div key={log.id} className="flex items-start gap-3 px-4 py-3 hover:bg-stone-50/60 transition-colors">
+                         <span className={`w-7 h-7 rounded-lg border flex items-center justify-center flex-shrink-0 mt-0.5 ${meta.cls}`}>
+                           <Icon className="w-3.5 h-3.5" />
+                         </span>
+                         <div className="min-w-0 flex-1">
+                           <div className="flex items-baseline gap-2 flex-wrap">
+                             <span className="text-[10px] font-bold uppercase tracking-wide bg-stone-900 text-white px-1.5 py-0.5 rounded flex-shrink-0">{log.admin_id}</span>
+                             <span className="text-sm font-semibold text-stone-900">{meta.label}</span>
+                           </div>
+                           {(text || log.target) && (
+                             <p className="text-xs text-stone-500 mt-0.5 break-words">
+                               {text}
+                               {text && log.target && text !== log.target && (
+                                 <span className="font-mono text-[10px] text-stone-400 ml-1.5">[{log.target.slice(0, 12)}]</span>
+                               )}
+                             </p>
+                           )}
+                           <p className="text-[10px] text-stone-400 mt-0.5">{fmtLogTime(log.created_at)}</p>
+                         </div>
+                       </div>
+                     );
+                   })}
+                   {activityTotalPages > 1 && (
+                     <div className="px-4 py-3 flex items-center justify-between gap-3">
+                       <p className="text-[11px] text-stone-400">
+                         Page {activitySafePage} of {activityTotalPages} · {mergedActivityLogs.length} entries
+                       </p>
+                       <div className="flex items-center gap-1.5">
+                         <button
+                           onClick={() => setActivityPageSafe(activitySafePage - 1)}
+                           disabled={activitySafePage <= 1}
+                           className="text-xs font-semibold text-stone-600 bg-stone-100 hover:bg-stone-200 disabled:opacity-40 px-3 py-1.5 rounded-lg transition-all"
+                         >
+                           ← Newer
+                         </button>
+                         <button
+                           onClick={() => setActivityPageSafe(activitySafePage + 1)}
+                           disabled={activitySafePage >= activityTotalPages}
+                           className="text-xs font-semibold text-stone-600 bg-stone-100 hover:bg-stone-200 disabled:opacity-40 px-3 py-1.5 rounded-lg transition-all"
+                         >
+                           Older →
+                         </button>
+                       </div>
                      </div>
                    )}
+                 </div>
+               )}
+             </div>
+
+             {/* ── Admin login sessions: login/logout time, IP and browser per sign-in ── */}
+             <div className="mt-6">
+               <div className="flex flex-wrap items-center justify-between gap-3">
+                 <div>
+                   <h2 className="font-display text-xl font-bold text-stone-900">Login sessions</h2>
+                   <p className="text-sm text-stone-500 mt-1">When each admin signed in and out, and from where. Newest first.</p>
+                 </div>
+                 <select
+                   value={activityAdminFilter}
+                   onChange={(e) => setActivityAdminFilter(e.target.value)}
+                   className="border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                 >
+                   <option value="all">All admins</option>
+                   {[...new Set(adminLogins.map((s) => (s.admin_id ?? '').trim()).filter(Boolean))]
+                     .sort((a, b) => a.localeCompare(b))
+                     .map((admin) => (
+                       <option key={admin} value={admin}>{admin}</option>
+                     ))}
+                 </select>
+               </div>
+               {adminLogins.length === 0 ? (
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mt-4">
+                   <p className="text-sm text-stone-400">
+                     No sessions recorded yet. Run the activity-log migration in Supabase, then every sign-in appears here with its login/logout time, IP and browser.
+                   </p>
+                 </div>
+               ) : (
+                 <div className="bg-white rounded-2xl shadow-sm border border-stone-100 divide-y divide-stone-100 mt-4 max-h-96 overflow-y-auto">
+                   {(() => {
+                     const sessions = adminLogins
+                       .filter((s) => activityAdminFilter === 'all' || (s.admin_id ?? '').trim() === activityAdminFilter)
+                       .sort((a, b) => (a.login_at < b.login_at ? 1 : -1))
+                       .slice(0, 60);
+                     if (sessions.length === 0) {
+                       return <div className="px-4 py-4 text-sm text-stone-400">No sessions by this admin in the loaded log.</div>;
+                     }
+                     return sessions.map((s) => {
+                       // "Online now" only closes via the logout RPC — an admin
+                       // who closes the browser never signs out, so assume a
+                       // session older than 24h is closed (stale, not online).
+                       const stale = !s.logout_at && Date.now() - new Date(s.login_at).getTime() > 24 * 60 * 60 * 1000;
+                       const open = !s.logout_at && !stale;
+                       const mins = s.logout_at
+                         ? Math.max(1, Math.round((new Date(s.logout_at).getTime() - new Date(s.login_at).getTime()) / 60000))
+                         : null;
+                       const dur = mins == null ? null : mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`;
+                       return (
+                         <div key={s.id} className="flex items-start gap-3 px-4 py-3 hover:bg-stone-50/60 transition-colors">
+                           <span className={`w-7 h-7 rounded-lg border flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                             open ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-stone-100 text-stone-500 border-stone-200'}`}>
+                             {open ? <LogIn className="w-3.5 h-3.5" /> : <LogOut className="w-3.5 h-3.5" />}
+                           </span>
+                           <div className="min-w-0 flex-1">
+                             <div className="flex items-baseline gap-2 flex-wrap">
+                               <span className="text-[10px] font-bold uppercase tracking-wide bg-stone-900 text-white px-1.5 py-0.5 rounded flex-shrink-0">{s.admin_id}</span>
+                               {open ? (
+                                 <span className="text-[10px] font-bold uppercase text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">Online now</span>
+                               ) : (
+                                 <span className="text-[11px] text-stone-400">· {dur} session</span>
+                               )}
+                             </div>
+                             <p className="text-xs text-stone-600 mt-0.5">
+                               Signed in <b>{fmtLogTime(s.login_at)}</b>
+                               {s.logout_at && <> · signed out <b>{fmtLogTime(s.logout_at)}</b></>}
+                               {!s.logout_at && <> · still signed in</>}
+                             </p>
+                             <p className="text-[10px] text-stone-400 mt-0.5 flex items-center gap-3 flex-wrap">
+                               <span className="inline-flex items-center gap-1"><Smartphone className="w-3 h-3" /> {describeAgent(s.user_agent)}</span>
+                               {s.ip_address && <span className="inline-flex items-center gap-1 font-mono"><Wifi className="w-3 h-3" /> {s.ip_address}</span>}
+                             </p>
+                           </div>
+                         </div>
+                       );
+                     });
+                   })()}
                  </div>
                )}
              </div>
@@ -5901,23 +6498,27 @@ export default function AdminPage() {
                </div>
                <div className="p-6 space-y-4">
                  {([
-                   { key: 'dhaka_city' as const, label: 'Inside Dhaka', hint: 'Dhaka City', fallback: '60' },
-                   { key: 'dhaka_suburban' as const, label: 'Dhaka Suburban', hint: 'Gazipur, Narayanganj, Savar, Munshiganj…', fallback: '110' },
-                   { key: 'outside_dhaka' as const, label: 'Outside Dhaka', hint: 'Chattogram, Sylhet, Khulna, Rajshahi…', fallback: '130' },
+                   { key: 'dhaka_city' as const, label: 'Inside Dhaka', hint: 'Dhaka City' },
+                   { key: 'dhaka_suburban' as const, label: 'Dhaka Suburban', hint: 'Gazipur, Narayanganj, Savar, Munshiganj…' },
+                   { key: 'outside_dhaka' as const, label: 'Outside Dhaka', hint: 'Chattogram, Sylhet, Khulna, Rajshahi…' },
                  ]).map((z) => (
                    <div key={z.key}>
-                     <label className="block text-sm font-medium text-stone-700 mb-1.5">{z.label}</label>
+                     <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                       {z.label}{steadfastRates[z.key].trim() === '' && <span className="text-red-500 font-semibold"> *</span>}
+                     </label>
                      <div className="relative">
                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-stone-400">৳</span>
                        <input
                          type="number"
                          min="0"
+                         required
                          value={steadfastRates[z.key]}
                          onChange={(e) => setSteadfastRates({ ...steadfastRates, [z.key]: e.target.value })}
-                         className="w-full border border-stone-200 rounded-xl pl-8 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                         placeholder="Required"
+                         className={`w-full border rounded-xl pl-8 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 ${steadfastRates[z.key].trim() === '' ? 'border-red-300 focus:ring-red-300' : 'border-stone-200 focus:ring-brand-400'}`}
                        />
                      </div>
-                     <p className="text-xs text-stone-400 mt-1">{z.hint}{steadfastRates[z.key] === '' ? ` — defaults to ৳${z.fallback} if left blank` : ''}</p>
+                     <p className="text-xs text-stone-400 mt-1">{z.hint}{steadfastRates[z.key].trim() === '' ? ' — required: checkout pauses while a rate is blank' : " — applies everywhere instantly"}</p>
                    </div>
                  ))}
                  <div>
@@ -6748,6 +7349,13 @@ export default function AdminPage() {
         {/* ── Delete order confirm ── */}
         {deleteOrderConfirm && (() => {
           const target = orders.find((o) => o.id === deleteOrderConfirm);
+          // The delete takes every row sharing the order_code (whole cart) —
+          // the modal must say so instead of naming just the clicked item.
+          const cartRows = target?.order_code
+            ? orders.filter((o) => o.order_code === target.order_code)
+            : [];
+          const cartCount = Math.max(1, cartRows.length || 1);
+          const cartTitles = [...new Set(cartRows.map((r) => r.product_title))];
           return (
             <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full text-center animate-fade-in-up">
@@ -6759,13 +7367,17 @@ export default function AdminPage() {
                   {target ? (
                     <>
                       <span className="font-medium text-stone-600">{target.customer_name}</span>
-                      {' '}— {target.product_title}
+                      {' '}— {cartTitles.join(', ')}
                     </>
                   ) : (
                     'This order'
                   )}
                 </p>
-                <p className="text-stone-400 text-sm mb-6">This permanently removes the order record. This cannot be undone.</p>
+                <p className="text-stone-400 text-sm mb-6">
+                  {cartCount > 1
+                    ? `This permanently removes all ${cartCount} items of the purchase (they share one order code). This cannot be undone.`
+                    : 'This permanently removes the order record. This cannot be undone.'}
+                </p>
                 <div className="flex gap-3">
                   <button onClick={() => setDeleteOrderConfirm(null)}
                     className="flex-1 border border-stone-200 text-stone-600 hover:bg-stone-50 font-semibold py-2.5 rounded-2xl transition-all text-sm">

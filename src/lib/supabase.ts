@@ -132,9 +132,7 @@ export type Order = {
   /** For manual orders: the staff member who made the sale. */
   seller_name?: string | null;
   created_at: string;
-};
-
-/** Audit trail: which admin did what (statuses, bookings, deletes, restocks…). */
+};/** Audit trail: which admin did what (statuses, bookings, deletes, restocks…). */
 export type AdminLog = {
   id: string;
   admin_id: string;
@@ -142,6 +140,16 @@ export type AdminLog = {
   target: string | null;
   detail: string | null;
   created_at: string;
+};
+
+/** One row per admin sign-in (logout_at set on sign-out) — Login sessions panel. */
+export type AdminLogin = {
+  id: string;
+  admin_id: string;
+  login_at: string;
+  logout_at: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
 };
 
 /** One row per stock change — orders decrement, manual sells, restocks, adjustments. */

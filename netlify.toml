@@ -1,6 +1,17 @@
 [build]
   publish = "dist"
-  functions = "netlify/functions"
+  command = "node scripts/generate-sitemap.mjs && npm run build"
+
+# ── Edge function bindings ──
+# seo-prerender rewrites social-preview meta for crawlers (Facebook/WhatsApp)
+# on every HTML route. Without this binding the file was never invoked.
+
+[[edge_functions]]
+  function = "seo-prerender"
+  path = "/*"
+
+# ── SPA fallback ──
+# (single source of truth — public/_redirects was removed)
 
 [[redirects]]
   from = "/*"

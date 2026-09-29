@@ -8,6 +8,8 @@
 //   • meta block: seller filter, date range, order count, totals (orders, qty, sales)
 //   • per-seller subtotal blocks
 //   • table: date · code · product (+size) · qty · seller · customer · payment · amount
+//     (Amount = fee-inclusive total: the full row's total_amount, or delivery-only
+//     rows where total_amount excludes the charge — those get it added back in)
 //   • footer
 
 import type { Order } from './supabase';
@@ -91,8 +93,24 @@ export function manualOrderInDateRange(o: Order, from: Date | null, to: Date | n
 export function reportHtml(orders: Order[], meta: ReportMeta): string {
   const sorted = [...orders].sort((a, b) => (rowDate(a) < rowDate(b) ? -1 : 1));
 
-  const totalAmount = sorted.reduce((s, o) => s + Number(o.total_amount ?? 0), 0);
+  // Fee-inclusive row amount: the first row of a sale carries the delivery charge
+  // recorded in store (delivery_fee) — legacy delivery-only rows store total without it.
+  const rowAmount = (o: Order) =>
+    Math.max(Number(o.total_amount ?? 0), Number(o.total_amount ?? 0) + Math.max(0, Number(o.delivery_fee ?? 0)));
+
+  const totalAmount = sorted.reduce((s, o) => s + rowAmount(o), 0);
+  const totalCollected = sorted.reduce((s, o) => s + Math.max(0, Number(o.advance_amount ?? 0)), 0);
   const totalQty = sorted.reduce((s, o) => s + (o.quantity ?? 1), 0);
+
+  // Payment label per row — the payment_mode tag first (it is the truth of how
+  // the sale settled), with a fallback for pre-migration rows.
+  const payLabelFor = (o: Order): string => {
+    const mode = (o as Order & { payment_mode?: string | null }).payment_mode;
+    if (mode === 'advance_paid') return 'Advance (delivery charge)';
+    if (mode === 'full_payment_no_delivery') return 'Full (no delivery)';
+    if (mode === 'full_payment') return 'Full + delivery';
+    return o.bkash_number ? 'bKash' : 'Cash';
+  };
 
   // Per-seller subtotals
   const bySeller = new Map<string, { count: number; amount: number }>();
@@ -100,7 +118,7 @@ export function reportHtml(orders: Order[], meta: ReportMeta): string {
     const key = o.seller_name?.trim() || 'Unknown';
     const entry = bySeller.get(key) ?? { count: 0, amount: 0 };
     entry.count += 1;
-    entry.amount += Number(o.total_amount ?? 0);
+    entry.amount += rowAmount(o);
     bySeller.set(key, entry);
   }
 
@@ -119,12 +137,13 @@ export function reportHtml(orders: Order[], meta: ReportMeta): string {
     { label: 'ORDERS', value: String(sorted.length) },
     { label: 'ITEMS', value: String(totalQty) },
     { label: 'TOTAL SALES', value: taka(totalAmount) },
+    { label: 'COLLECTED IN STORE', value: taka(totalCollected) },
   ];
 
   const rows = sorted
     .map((o) => {
       const d = rowDate(o);
-      const paid = o.bkash_number ? `bKash ··${o.bkash_number.slice(-4)}` : 'Cash';
+      const paid = `${payLabelFor(o)}${o.bkash_number ? ` ··${o.bkash_number.slice(-4)}` : ''}`;
       return `<tr>
         <td class="muted">${formatDate(d)}</td>
         <td class="muted">${esc(o.order_code ?? o.id.slice(0, 8).toUpperCase())}</td>
@@ -133,7 +152,7 @@ export function reportHtml(orders: Order[], meta: ReportMeta): string {
         <td>${esc(o.seller_name?.trim() || 'Unknown')}</td>
         <td>${esc(o.customer_name || 'Walk-in customer')}</td>
         <td class="muted">${esc(paid)}</td>
-        <td class="amt num">${taka(Number(o.total_amount ?? 0))}</td>
+        <td class="amt num">${taka(rowAmount(o))}</td>
       </tr>`;
     })
     .join('');

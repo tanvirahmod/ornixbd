@@ -13,6 +13,8 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
 function hex(buf: ArrayBuffer): string {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -21,6 +23,45 @@ Deno.serve(async (req) => {
   // Handle CORS preflight for ALL requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  // Only allowlisted admins may get upload signatures — otherwise anyone with
+  // the public anon key could upload arbitrary files to the ImageKit account.
+  try {
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const userClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+    const { data: userData, error: userError } = await userClient.auth.getUser();
+    if (userError || !userData?.user?.email) {
+      return new Response(
+        JSON.stringify({ error: 'Not signed in' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    // Check the admin allowlist with the service-role client (same pattern as steadfast-proxy).
+    const adminClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+    const { data: isAdmin } = await adminClient
+      .from('admin_users')
+      .select('email')
+      .eq('email', userData.user.email)
+      .maybeSingle();
+    if (!isAdmin) {
+      return new Response(
+        JSON.stringify({ error: 'Not an admin' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+  } catch (authErr) {
+    return new Response(
+      JSON.stringify({ error: authErr instanceof Error ? authErr.message : 'Auth failed' }),
+      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 
   try {

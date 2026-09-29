@@ -186,14 +186,22 @@ export type TranslationKey =
  | 'couponCode'
  | 'couponPlaceholder'
  | 'couponApply'
- | 'couponAppliedMsg'
- | 'couponInvalid'
- | 'couponExpired'
- | 'couponMinOrder'
- | 'couponProductsOnly'
- | 'couponRemove'
- | 'orderCodeLabel'
- | 'orderCodeSaveNote'
+ | 'couponAppliedMsg'  | 'couponInvalid'
+  | 'couponExpired'
+  | 'couponUsageLimit'
+  | 'couponMinOrder'
+  | 'couponProductsOnly'
+  | 'deliveryFeeAtCheckout'
+  | 'deliveryFeeFrom'
+  | 'deliveryFeeNotSet'
+  | 'totalNow'
+  | 'totalPlusDelivery'
+  | 'paymentUnavailableTitle'
+  | 'paymentUnavailableDesc'
+ | 'couponRemove'  | 'orderCodeLabel'
+  | 'orderCodeSaveNote'
+  | 'trackYourOrderCta'
+  | 'trackYourOrderNote'
  | 'districtLabel'
  | 'districtPlaceholder'
  | 'districtCountHint'
@@ -376,7 +384,7 @@ const en: TranslationMap = {
   payChannelNagad: 'Nagad',
   advanceAmountLabel: 'Send now',
   dueOnDeliveryLabel: 'Pay on delivery',
-  senderBkashLabel: 'Your bKash number',
+  senderBkashLabel: 'Your {{channel}} number',
   senderBkashPlaceholder: 'The number you sent money from',
   senderBkashHint: 'Used only to verify your payment — never shared.',
   codOnlyTitle: 'Cash on delivery — no advance',
@@ -406,11 +414,21 @@ const en: TranslationMap = {
   couponAppliedMsg: '{{code}} applied — you saved ৳{{amount}}',
   couponInvalid: 'This coupon code is not valid',
   couponExpired: 'This coupon has expired',
+  couponUsageLimit: 'This coupon has reached its usage limit',
   couponMinOrder: 'This coupon needs a minimum order of ৳{{amount}}',
   couponProductsOnly: 'Only valid for: {{codes}}',
+  deliveryFeeAtCheckout: 'Charged at checkout — by your area',
+  deliveryFeeFrom: 'From ৳{{amount}}',
+  deliveryFeeNotSet: 'Delivery charge is being set up — ordering is paused.',
+  paymentUnavailableTitle: 'Mobile payment temporarily unavailable',
+  paymentUnavailableDesc: 'We can\u2019t take a {{channel}} advance right now — the payment number is not configured. Please order with cash on delivery by phone, or contact us on WhatsApp.',
   couponRemove: 'Remove coupon',
   orderCodeLabel: 'Your order code',
   orderCodeSaveNote: 'Save this code — use it on the “Track Order” page anytime.',
+  trackYourOrderCta: 'Track your order',
+  trackYourOrderNote: 'This is the link to track your order — bookmark it: ornix.com.bd/track',
+  totalNow: 'Total (before delivery)',
+  totalPlusDelivery: '+ delivery charge at checkout (৳{{min}}–৳{{max}})',
   districtLabel: 'District / Zone',
   districtPlaceholder: 'Select your district…',
   districtCountHint: '{{count}} districts covered — the courier fee is set from your zone.',
@@ -487,7 +505,7 @@ const bn: TranslationMap = {
   payChannelNagad: 'নগদ',
   advanceAmountLabel: 'এখন পাঠাবেন',
   dueOnDeliveryLabel: 'ডেলিভারিতে দেবেন',
-  senderBkashLabel: 'আপনার বিকাশ নম্বর',
+  senderBkashLabel: 'আপনার {{channel}} নম্বর',
   senderBkashPlaceholder: 'যে নম্বর থেকে টাকা পাঠিয়েছেন',
   senderBkashHint: 'শুধু পেমেন্ট যাচাই করতে ব্যবহৃত হয় — কখনো শেয়ার করা হয় না।',
   codOnlyTitle: 'ক্যাশ অন ডেলিভারি — কোনো অগ্রিম নেই',
@@ -518,8 +536,14 @@ const bn: TranslationMap = {
   couponAppliedMsg: '{{code}} প্রয়োগ হয়েছে — আপনি ৳{{amount}} সাশ্রয় করেছেন',
   couponInvalid: 'এই কুপন কোডটি সঠিক নয়',
   couponExpired: 'এই কুপনের মেয়াদ শেষ হয়ে গেছে',
+  couponUsageLimit: 'এই কুপনের ব্যবহার সীমা শেষ',
   couponMinOrder: 'এই কুপনে ন্যূনতম ৳{{amount}} অর্ডার দরকার',
   couponProductsOnly: 'শুধু এগুলোর জন্য প্রযোজ্য: {{codes}}',
+  deliveryFeeAtCheckout: 'চেকআউটে অঞ্চল অনুযায়ী যোগ হবে',
+  deliveryFeeFrom: 'ন্যূনতম ৳{{amount}}',
+  deliveryFeeNotSet: 'ডেলিভারি চার্জ সেট করা হচ্ছে — অর্ডার সাময়িক বন্ধ।',
+  paymentUnavailableTitle: 'মোবাইল পেমেন্ট সাময়িকভাবে বন্ধ',
+  paymentUnavailableDesc: 'এই মুহূর্তে {{channel}} অগ্রিম নেওয়া সম্ভব হচ্ছে না — পেমেন্ট নম্বর সেট করা নেই। ক্যাশ অন ডেলিভারিতে ফোনে অর্ডার করুন বা হোয়াটসঅ্যাপে যোগাযোগ করুন।',
   couponRemove: 'কুপন সরান',
   copyShort: 'কপি',
   copiedShort: 'কপি হয়েছে!',
@@ -529,6 +553,10 @@ const bn: TranslationMap = {
   weWillContact: 'অর্ডার কনফার্ম করতে আমরা {{phone}} নম্বরে যোগাযোগ করব।',
   orderCodeLabel: 'আপনার অর্ডার কোড',
   orderCodeSaveNote: 'এই কোডটি সংরক্ষণ করুন — যেকোনো সময় "Track Order" পেজে ব্যবহার করুন।',
+  trackYourOrderCta: 'অর্ডার ট্র্যাক করুন',
+  trackYourOrderNote: 'এটিই আপনার অর্ডার ট্র্যাক করার লিংক — সংরক্ষণ করুন: ornix.com.bd/track',
+  totalNow: 'মোট (ডেলিভারি ছাড়া)',
+  totalPlusDelivery: '+ চেকআউটে ডেলিভারি চার্জ (৳{{min}}–৳{{max}})',
   cartEmpty: 'আপনার কার্ট খালি',
   infoSecure: 'আপনার তথ্য সুরক্ষিত',
   somethingWentWrong: 'কিছু একটা সমস্যা হয়েছে। আবার চেষ্টা করুন।',

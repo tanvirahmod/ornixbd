@@ -39,6 +39,38 @@ export function zoneForDistrict(district: string): DeliveryZone | null {
 
 const ALL_DISTRICTS = DELIVERY_ZONES.flatMap((z) => z.districts);
 
+/** Keys of the site_settings rows that hold the admin-set zone rates. */
+export const ZONE_RATE_KEYS = [
+  'steadfast_rate_dhaka_city',
+  'steadfast_rate_dhaka_suburban',
+  'steadfast_rate_outside_dhaka',
+] as const;
+
+export type ZoneRateMap = Record<DeliveryZone, number>;
+
+/**
+ * Parse raw site_settings values into a zone-rate map. No hardcoded fees:
+ * a blank/missing/invalid rate stays null, and consumers show "charged at
+ * checkout" instead of an invented number. The admin panel is the single
+ * source of truth — whatever is saved there is what every page uses.
+ */
+export function parseZoneRates(values: Record<string, string | null | undefined>): ZoneRateMap | null {
+  const out: Partial<ZoneRateMap> = {};
+  for (const z of DELIVERY_ZONES) {
+    const key = `steadfast_rate_${z.id}`;
+    const raw = values[key];
+    const num = raw != null && raw !== '' ? Number(raw) : NaN;
+    if (raw == null || raw === '' || isNaN(num) || num < 0) return null;
+    out[z.id] = num;
+  }
+  return out as ZoneRateMap;
+}
+
+/** Cheapest zone rate — used only as an honest "from ৳X" hint before a district is picked. */
+export function minZoneRateOf(rates: ZoneRateMap): number {
+  return Math.min(rates.dhaka_city, rates.dhaka_suburban, rates.outside_dhaka);
+}
+
 /**
  * District dropdown shown in checkout step 1. The zone drives the Steadfast
  * courier fee, so the customer's advance matches what the courier collects.
