@@ -66,7 +66,7 @@ export default function HomePage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="ornix-homepage min-h-screen">
       {/* 1. Hero Banner — full width slider */}
       <HeroBanner onNavigate={onNavigate} />
 
@@ -85,7 +85,7 @@ export default function HomePage() {
 
       {/* 4. Discounted / Sale section (only if products exist or loading) */}
       {(loading || discountedProducts.length > 0) && (
-        <div className="bg-[#F4EFEA]">
+        <div>
           <NewArrivals
             products={discountedProducts}
             loading={loading}

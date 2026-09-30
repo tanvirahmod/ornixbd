@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Plus, Minus, Instagram, Facebook, MapPin, Phone, Clock } from 'lucide-react';
 import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
+import { ORNIX_LOGO_URL } from '../lib/seo';
 
 interface HelpFooterProps {
   onNavigate: (page: string) => void;
@@ -29,7 +30,7 @@ const FAQ_ITEMS = [
     icon: '💳',
     question: 'What payment methods do you accept?',
     answer:
-      'We accept bKash payments. After placing your order, send the advance delivery fee (Tk 150) to our bKash Personal number and submit the TrxID. Cash on delivery is available for select areas.',
+      'We accept bKash and Nagad payments. After placing your order, send the advance delivery fee (Tk 150) to the bKash or Nagad Personal number shown for your selected payment method, then submit the TrxID. Cash on delivery is available for select areas.',
   },
   {
     icon: '📦',
@@ -120,18 +121,18 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
   return (
     <>
       {/* ── Help / FAQ Section ── */}
-      <section className="bg-street-beige py-14 md:py-20 px-4 sm:px-6">
+      <section className="editorial-help py-16 md:py-24 px-4 sm:px-6" data-watermark="GOOD TO KNOW">
         <div className="max-w-3xl mx-auto">
-          <div className="text-center mb-10">
-            <p className="text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
-              Got questions?
+          <div className="editorial-help__heading mb-9 md:mb-12">
+            <p className="editorial-eyebrow mb-3">
+              <span>05</span> / WE’RE HERE TO HELP
             </p>
-            <h2 className="font-display text-4xl sm:text-5xl text-black uppercase tracking-wide leading-none">
-              HELP CENTER
+            <h2 className="font-display text-5xl sm:text-6xl md:text-7xl uppercase leading-[0.9]">
+              GOOD TO <span>KNOW.</span>
             </h2>
           </div>
 
-          <div className="bg-white px-6 sm:px-8">
+          <div className="editorial-help__list px-5 sm:px-8">
             {FAQ_ITEMS.map((item) => (
               <AccordionItem
                 key={item.question}
@@ -145,7 +146,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
       </section>
 
       {/* ── Footer ── */}
-      <footer className="bg-black text-white">
+      <footer className="ornix-footer bg-black text-white">
         {/* Main footer grid */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-14 md:py-16 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
 
@@ -156,7 +157,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
               style={{ fontFamily: 'Anton, Impact, Arial Black, sans-serif' }}
             >
               <img
-                src="https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png"
+                src={ORNIX_LOGO_URL}
                 alt="ORNIX"
                 className="h-14 w-auto object-contain"
               />

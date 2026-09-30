@@ -90,7 +90,7 @@ function isValidBdMobile(raw: string): boolean {
 }
 
 export default function CheckoutPage() {
-  const { t } = useLanguage();
+  const { lang, t } = useLanguage();
   const { productId } = useParams<{ productId: string }>();
   const [searchParams] = useSearchParams();
   const isCartCheckout = productId === 'cart';
@@ -709,7 +709,7 @@ export default function CheckoutPage() {
   };  /* ── Early exits ── */
   if (loading) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+      <div lang={lang} className="store-page store-page--checkout min-h-screen bg-stone-50 flex items-center justify-center">
         <div className="animate-spin w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full" />
       </div>
     );
@@ -717,7 +717,7 @@ export default function CheckoutPage() {
 
   if (isCartCheckout && cartItems.length === 0 && !success) {
     return (
-      <div className="min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-4 px-4">
+      <div lang={lang} className="store-page store-page--checkout min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-4 px-4">
         <div className="w-20 h-20 bg-stone-100 rounded-full flex items-center justify-center">
           <ShoppingBag className="w-10 h-10 text-stone-300" />
         </div>
@@ -734,7 +734,7 @@ export default function CheckoutPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center px-4 py-8">
+      <div lang={lang} className="store-page store-page--checkout min-h-screen bg-stone-50 flex items-center justify-center px-4 py-8">
         <div className="bg-white rounded-3xl shadow-xl p-6 sm:p-10 max-w-md w-full text-center animate-fade-in-up">
           <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
             <CheckCircle className="w-10 h-10 text-emerald-500" />
@@ -892,7 +892,7 @@ export default function CheckoutPage() {
       : '';
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div lang={lang} className="store-page store-page--checkout min-h-screen bg-stone-50">
       {/* Page header: clean breadcrumb + big centered title below */}
       <div className="bg-white border-b border-stone-100">
         <div className="max-w-5xl mx-auto px-4 pt-5 pb-6 text-center">

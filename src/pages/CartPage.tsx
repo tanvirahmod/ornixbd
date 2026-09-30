@@ -39,7 +39,7 @@ export default function CartPage() {
 
   if (items.length === 0) {
     return (
-      <div className="min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-4 px-4">
+      <div className="store-page store-page--cart min-h-screen bg-stone-50 flex flex-col items-center justify-center gap-4 px-4">
         <div className="w-20 h-20 bg-stone-100 rounded-full flex items-center justify-center">
           <ShoppingBag className="w-10 h-10 text-stone-300" />
         </div>
@@ -56,7 +56,7 @@ export default function CartPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--cart min-h-screen bg-stone-50">
       <div className="max-w-5xl mx-auto px-4 pt-6 flex items-center gap-2 text-sm text-stone-500">
         <button onClick={() => onNavigate('home')} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
           <ArrowLeft className="w-4 h-4" /> {t('homeBreadcrumb')}

@@ -141,7 +141,7 @@ export default function SingleCollectionPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--listing min-h-screen bg-stone-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
         <nav className="flex items-center gap-2 text-sm text-stone-500 mb-6">
           <Link to="/" className="hover:text-stone-900 transition-colors">
@@ -155,7 +155,7 @@ export default function SingleCollectionPage() {
           <span className="text-stone-700 font-medium">{categoryName}</span>
         </nav>
 
-        <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-stone-900 uppercase tracking-tight mb-8">
+        <h1 className="store-page-title font-display text-5xl sm:text-6xl md:text-8xl font-bold text-stone-900 uppercase tracking-tight mb-8">
           {categoryName}
         </h1>
 

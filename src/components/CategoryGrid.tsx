@@ -9,14 +9,14 @@ interface CategoryGridProps {
 
 export default function CategoryGrid({ categories }: CategoryGridProps) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-12">
+    <div className="store-collection-grid grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-12">
       {categories.map((cat) => (
         <div key={cat.id} className="group">
           <Link
             to={`/collections/${slugify(cat.name)}`}
-            className="block"
+            className="store-collection-card block"
           >
-            <div className="relative aspect-[3/4] bg-street-beige rounded-3xl overflow-hidden shadow-sm">
+            <div className="store-collection-card__media relative aspect-[3/4] bg-street-beige overflow-hidden">
               <img
                 src={cat.background_image || COVER_FALLBACK}
                 alt={cat.name}
@@ -26,7 +26,7 @@ export default function CategoryGrid({ categories }: CategoryGridProps) {
                   (e.target as HTMLImageElement).src = COVER_FALLBACK;
                 }}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent" />
               <div className="absolute bottom-0 left-0 right-0 p-6">
                 <span
                   className="block font-display font-bold text-white text-3xl uppercase tracking-wider"
@@ -39,7 +39,7 @@ export default function CategoryGrid({ categories }: CategoryGridProps) {
               </div>
             </div>
           </Link>
-          <div className="flex items-center gap-2 mt-3 sm:mt-4 group-hover:text-sale transition-colors">
+          <div className="store-collection-card__caption flex items-center gap-2 mt-3 sm:mt-4 group-hover:text-sale transition-colors">
             <span className="font-bold text-stone-900 text-xs sm:text-sm uppercase tracking-wider truncate">
               {cat.name}
             </span>

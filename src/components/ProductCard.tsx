@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Product } from '../lib/supabase';
 import { productParam, getCoverImage, COVER_FALLBACK } from '../lib/utils';
@@ -13,9 +14,9 @@ export default function ProductCard({ product }: ProductCardProps) {
   const href = `/product/${productParam(product.title, product.product_code ?? product.id)}`;
 
   return (
-    <div className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden">
+    <article className="store-product-card product-card group bg-white overflow-hidden">
       <Link to={href} className="block">
-        <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
+        <div className="store-product-card__media aspect-[3/4] bg-stone-100 overflow-hidden relative">
           <img
             src={getCoverImage(product)}
             alt={product.title}
@@ -25,20 +26,25 @@ export default function ProductCard({ product }: ProductCardProps) {
               (e.target as HTMLImageElement).src = COVER_FALLBACK;
             }}
           />
+          {hasDiscount && (
+            <span className="absolute top-3 left-3 bg-sale text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1">
+              {Math.round((1 - Number(product.discount_price) / Number(product.price)) * 100)}% OFF
+            </span>
+          )}
           {soldOut && (
-            <span className="absolute top-3 left-3 bg-stone-900/85 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full">
+            <span className={`absolute top-3 ${hasDiscount ? 'right-3' : 'left-3'} bg-stone-900/85 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full`}>
               Sold Out
             </span>
           )}
         </div>
       </Link>
-      <div className="p-4">
+      <div className="store-product-card__details p-4">
         <Link to={href} className="block mb-3">
-          <h3 className="text-sm font-semibold text-stone-900 leading-tight line-clamp-2 hover:text-sale transition-colors">
+          <h3 className="store-product-card__title text-sm font-semibold text-stone-900 leading-tight line-clamp-2 hover:text-sale transition-colors">
             {product.title}
           </h3>
         </Link>
-        <div className="flex items-center gap-3 mb-4">
+        <div className="store-product-card__price flex items-center gap-3 mb-4">
           {hasDiscount ? (
             <>
               <span className="text-sm text-stone-400 line-through">
@@ -57,19 +63,22 @@ export default function ProductCard({ product }: ProductCardProps) {
         {soldOut ? (
           <div
             aria-disabled="true"
-            className="w-full flex items-center justify-center bg-stone-200 text-stone-500 font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] cursor-not-allowed select-none"
+            className="store-product-card__action w-full flex items-center justify-center bg-stone-200 text-stone-500 font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] cursor-not-allowed select-none"
           >
             Sold Out
           </div>
         ) : (
           <Link
             to={href}
-            className="w-full flex items-center justify-center bg-black text-white font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] hover:bg-stone-800 transition-colors"
+            className="store-product-card__action w-full flex items-center justify-between bg-black text-white font-bold py-3 rounded-xl text-xs uppercase tracking-[0.2em] hover:bg-stone-800 transition-colors"
           >
-            BUY NOW
+            <span>BUY NOW</span>
+            <span className="editorial-product__button-icon">
+              <ArrowRight aria-hidden="true" size={14} />
+            </span>
           </Link>
         )}
       </div>
-    </div>
+      </article>
   );
 }

@@ -12,9 +12,10 @@
 
 import QRCode from 'qrcode';
 import type { Order } from './supabase';
+import { ORNIX_LOGO_URL } from './seo';
 
 // Same logo as the storefront navbar (ImageKit CDN).
-const LOGO_URL = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
+const LOGO_URL = ORNIX_LOGO_URL;
 
 // Declared parcel weight printed on labels and sent with every booking.
 const WEIGHT_KG = 0.5;
@@ -141,7 +142,9 @@ const LABEL_CSS = `
   }
   .head { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 8px;
           border-bottom: 3px solid #000; }
-  .logo { width: 76px; height: 60px; object-fit: contain; object-position: left top; }
+  .logo-mark { width: 68px; height: 68px; flex: 0 0 68px; display: grid; place-items: center;
+               overflow: hidden; border-radius: 50%; background: #000; }
+  .logo { width: 54px; height: 54px; object-fit: contain; }
   .brand { text-align: right; }
   .brand-name { font-size: 26px; font-weight: 900; letter-spacing: 3px; }
   .merchant { font-size: 15px; color: #222; margin-top: 6px; }
@@ -187,7 +190,7 @@ function labelHtml(data: LabelData, merchantId: string | null): string {
   return `
     <div class="label">
       <div class="head">
-        <img class="logo" src="${LOGO_URL}" alt="ORNIX" />
+        <div class="logo-mark"><img class="logo" src="${LOGO_URL}" alt="ORNIX" /></div>
         <div class="brand">
           <div class="brand-name">ORNIX</div>
           <div class="merchant">Merchant ID: ${esc(merchantId || '—')}</div>

@@ -6,6 +6,7 @@ import { slugify, productParam, COVER_FALLBACK } from '../lib/utils';
 import { supabase, Product } from '../lib/supabase';
 import { useAnnouncements, useCategories, getAnnouncementText } from '../lib/siteConfig';
 import { useCart } from '../lib/CartContext';
+import { ORNIX_LOGO_URL } from '../lib/seo';
 
 // ── Search overlay ──
 function SearchOverlay({ onClose, onGoProduct }: { onClose: () => void; onGoProduct: (product: Product) => void }) {
@@ -239,7 +240,7 @@ export default function Navbar() {
       )}
 
       {/* ── Main Navbar ── */}
-      <header className={`sticky top-0 z-50 bg-white shadow-sm transition-colors duration-200 ${scrolled ? 'border-b border-black/10' : ''}`}>
+      <header className={`ornix-header sticky top-0 z-50 shadow-sm transition-colors duration-200 ${scrolled ? 'is-scrolled' : ''}`}>
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
 
           {/* ── Left: Mobile hamburger ── */}
@@ -294,7 +295,7 @@ export default function Navbar() {
                   />
                 </button>
                 {collectionsOpen && (
-                  <div className="absolute top-full left-0 mt-1 w-52 bg-white border border-black/10 shadow-xl z-50">
+                  <div className="ornix-collections-menu absolute top-full left-0 mt-3 w-56 bg-white border shadow-xl z-50">
                     {categories.length === 0 ? (
                       <div className="px-5 py-3 text-sm text-black/40">No collections yet</div>
                     ) : (
@@ -317,12 +318,13 @@ export default function Navbar() {
                 hamburger and right icons have different widths) */}
             <button
               onClick={() => navigateTo('home')}
+              aria-label="ORNIX home"
               className="absolute left-1/2 -translate-x-1/2 flex items-center hover:opacity-80 transition-opacity duration-200 lg:static lg:translate-x-0"
             >
               <img
-                src="https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png"
+                src={ORNIX_LOGO_URL}
                 alt="ORNIX"
-                className="h-12 sm:h-14 w-auto object-contain"
+                className="ornix-logo h-12 sm:h-14 w-auto object-contain"
               />
             </button>
           </div>

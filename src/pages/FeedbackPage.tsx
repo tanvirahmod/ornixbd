@@ -96,7 +96,7 @@ export default function FeedbackPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center px-4">
+      <div className="store-page store-page--feedback min-h-screen bg-stone-50 flex items-center justify-center px-4">
         <div className="bg-white rounded-3xl shadow-xl p-10 max-w-md w-full text-center animate-fade-in-up">
           <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
             <CheckCircle className="w-10 h-10 text-emerald-500" />
@@ -116,7 +116,7 @@ export default function FeedbackPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--feedback min-h-screen bg-stone-50">
       <div className="max-w-2xl mx-auto px-4 pt-6 flex items-center gap-2 text-sm text-stone-500">
         <button onClick={() => onNavigate('home')} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
           <ArrowLeft className="w-4 h-4" /> {t('homeBreadcrumb')}

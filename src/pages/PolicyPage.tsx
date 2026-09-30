@@ -32,7 +32,7 @@ const POLICIES: Policy[] = [
       {
         heading: 'Delivery Charges',
         bullets: [
-          'Delivery fee: ৳150 nationwide (paid in advance via bKash during checkout).',
+          'Delivery fee: ৳150 nationwide (paid in advance via bKash or Nagad during checkout).',
           'Free delivery on orders over ৳1000 — we cover the courier cost ourselves.',
           'Cash on Delivery (COD) is available for select areas; our team will confirm on the confirmation call.',
         ],
@@ -87,7 +87,7 @@ const POLICIES: Policy[] = [
       {
         heading: 'Refunds',
         paragraphs: [
-          'ORNIX works on an exchange-first policy — we will always try to swap you into the right size or product first. If the exact item is unavailable, we issue a full refund of the product price to your bKash within 3–5 business days. Advance delivery fees are refunded only when the issue is on us (defect or wrong item).',
+          'ORNIX works on an exchange-first policy — we will always try to swap you into the right size or product first. If the exact item is unavailable, we issue a full refund of the product price to your original bKash or Nagad wallet within 3–5 business days. Advance delivery fees are refunded only when the issue is on us (defect or wrong item).',
         ],
       },
     ],
@@ -103,7 +103,7 @@ const POLICIES: Policy[] = [
         heading: 'What We Collect',
         bullets: [
           'Your name, phone number, and delivery address — for order confirmation and delivery.',
-          'Your bKash number and transaction ID — to verify your advance payment.',
+          'Your bKash or Nagad number and transaction ID — to verify your advance payment.',
           'Basic device/browser data — to keep the site fast and working properly.',
         ],
       },
@@ -139,7 +139,7 @@ const POLICIES: Policy[] = [
       {
         heading: 'Orders & Confirmation',
         bullets: [
-          'An order is final after our team confirms it by phone and your advance delivery fee is received via bKash.',
+          'An order is final after our team confirms it by phone and your advance delivery fee is received via bKash or Nagad.',
           'If we cannot reach you within 3 days of ordering, the order may be cancelled and the slot released.',
           'Prices and stock are subject to change without notice — but never after your order is confirmed.',
         ],
@@ -147,9 +147,9 @@ const POLICIES: Policy[] = [
       {
         heading: 'Payments',
         bullets: [
-          'Advance delivery fee (৳150) is paid via bKash and verified by transaction ID.',
+          'Advance delivery fee (৳150) is paid via bKash or Nagad and verified by transaction ID.',
           'The remaining amount is paid on delivery (or per your confirmation call arrangement).',
-          'Only send payments to the bKash number shown during checkout — never to a number shared by anyone else.',
+          'Only send payments to the bKash or Nagad number shown for your selected payment method during checkout — never to a number shared by anyone else.',
         ],
       },
       {
@@ -194,7 +194,7 @@ export default function PolicyPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--policy min-h-screen bg-stone-50">
       {/* Header */}
       <section className="relative overflow-hidden bg-black text-white">
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-sale/20 rounded-full blur-3xl" />

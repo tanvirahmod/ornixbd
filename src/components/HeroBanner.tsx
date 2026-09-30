@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowRight, Sparkles } from 'lucide-react';
 import { useSiteSettings, getHeroBgImage } from '../lib/siteConfig';
 
 interface HeroBannerProps {
@@ -5,58 +6,66 @@ interface HeroBannerProps {
 }
 
 const HERO_KEYS = ['hero_background_image', 'hero_background_image_mobile'];
+const HERO_FALLBACK =
+  'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=1200';
 
 export default function HeroBanner({ onNavigate }: HeroBannerProps) {
   const { values } = useSiteSettings(HERO_KEYS);
-
-  const desktopBg = getHeroBgImage(values['hero_background_image'] ?? null);
-  // Fall back to desktop image if no mobile image is set
+  const desktopBg = getHeroBgImage(values['hero_background_image'] ?? null) || HERO_FALLBACK;
   const mobileBg = values['hero_background_image_mobile'] || desktopBg;
 
   return (
-    <section
-      className="relative w-full overflow-hidden bg-black"
-      style={{ height: 'min(92vh, 820px)' }}
-    >
-      {/*
-        Two stacked <img> elements — swap visibility via Tailwind responsive classes.
-        Mobile image: visible by default, hidden on md+
-        Desktop image: hidden by default, visible on md+
-      */}
-      {mobileBg && (
-        <img
-          src={mobileBg}
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover object-top md:hidden"
-          loading="eager"
-        />
-      )}
-      {desktopBg && (
-        <img
-          src={desktopBg}
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover object-top hidden md:block"
-          loading="eager"
-        />
-      )}
+    <section className="editorial-hero">
+      <div className="editorial-hero__inner">
+        <div className="editorial-hero__copy">
+          <p className="editorial-hero__eyebrow">
+            <span className="editorial-hero__eyebrow-line" />
+            ORNIX / THE NEW EDIT
+          </p>
 
-      {/* Giant background outline text */}
-      <div
-        className="absolute inset-0 flex items-center justify-end overflow-hidden select-none pointer-events-none"
-        aria-hidden="true"
-      >
-        <span className="hero-outline-text pr-6 opacity-20">COLLECTION</span>
-      </div>
+          <h1>
+            Style that
+            <br />
+            <span>moves</span> with you.
+          </h1>
 
-      {/* Centered Explore button */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <button
-          onClick={() => onNavigate('shop')}
-          className="border-2 border-black bg-[#D90429] text-white text-xs font-bold uppercase tracking-[0.3em] px-8 py-3 hover:bg-black transition-all duration-200"
-        >
-          EXPLORE
-        </button>
+          <p className="editorial-hero__description">
+            Everyday essentials, reimagined with a little more intention.
+            Designed in Bangladesh. Made for wherever life takes you.
+          </p>
+
+          <button
+            onClick={() => onNavigate('shop')}
+            className="editorial-hero__cta"
+          >
+            Explore the collection
+            <ArrowRight aria-hidden="true" size={17} />
+          </button>
+
+          <div className="editorial-hero__season">
+            <span>01 — 26</span>
+            <span className="editorial-hero__season-rule" />
+            <span>NEW SEASON / NEW PERSPECTIVE</span>
+          </div>
+        </div>
+
+        <div className="editorial-hero__visual">
+          <div className="editorial-hero__image-wrap">
+            <picture>
+              <source media="(max-width: 767px)" srcSet={mobileBg} />
+              <img src={desktopBg} alt="Discover the latest ORNIX collection" loading="eager" />
+            </picture>
+          </div>
+          <p className="editorial-hero__vertical" aria-hidden="true">
+            NEW COLLECTION
+          </p>
+          <Sparkles className="editorial-hero__sparkle" aria-hidden="true" />
+          <a className="editorial-hero__scroll" href="#new-arrivals" aria-label="Scroll to new arrivals">
+            <ArrowDown aria-hidden="true" size={17} />
+          </a>
+        </div>
       </div>
+      <span className="editorial-hero__index" aria-hidden="true">ORNIX® / 2026</span>
     </section>
   );
 }

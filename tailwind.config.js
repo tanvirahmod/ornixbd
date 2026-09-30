@@ -4,9 +4,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'Plus Jakarta Sans', 'Noto Sans Bengali', 'system-ui', 'sans-serif'],
-        display: ['Anton', 'Impact', 'Arial Black', 'Noto Sans Bengali', 'sans-serif'],
-        body: ['Inter', 'Plus Jakarta Sans', 'Noto Sans Bengali', 'system-ui', 'sans-serif'],
+        sans: ['Plus Jakarta Sans', 'Noto Sans Bengali', 'system-ui', 'sans-serif'],
+        display: ['Space Grotesk', 'Noto Sans Bengali', 'sans-serif'],
+        body: ['Plus Jakarta Sans', 'Noto Sans Bengali', 'system-ui', 'sans-serif'],
       },
       colors: {
         brand: {
@@ -22,9 +22,9 @@ export default {
           900: '#7c2d12',
         },
         sale: {
-          DEFAULT: '#D90429',
-          dark: '#a50320',
-          light: '#ff1a40',
+          DEFAULT: '#92785b',
+          dark: '#705b43',
+          light: '#b69a79',
         },
         street: {
           black: '#000000',

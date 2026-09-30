@@ -142,7 +142,7 @@ export default function TrackOrderPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--track min-h-screen bg-stone-50">
       {/* Header */}
       <div className="bg-white border-b border-stone-100">
         <div className="max-w-2xl mx-auto px-4 pt-6 pb-6 text-center">

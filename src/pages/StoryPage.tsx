@@ -114,7 +114,7 @@ export default function StoryPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--story min-h-screen bg-stone-50">
       {/* ── 1. HERO ── */}
       <section className="relative overflow-hidden bg-black text-white">
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-sale/20 rounded-full blur-3xl" />

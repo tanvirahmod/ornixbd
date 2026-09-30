@@ -250,9 +250,9 @@ export default function ProductPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--product min-h-screen bg-stone-50">
       {/* Breadcrumb */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6 pb-0 flex items-center gap-2 text-sm text-stone-500">
+      <div className="product-breadcrumb max-w-6xl mx-auto px-4 sm:px-6 pt-6 pb-0 flex items-center gap-2 text-sm text-stone-500">
         <button onClick={() => onNavigate('home')} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
           <ArrowLeft className="w-4 h-4" /> {t('homeBreadcrumb')}
         </button>
@@ -261,10 +261,10 @@ export default function ProductPage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 md:py-10">
-        <div className="grid md:grid-cols-2 gap-8 lg:gap-16">
+        <div className="product-layout grid md:grid-cols-2 gap-8 lg:gap-16">
           {/* Image Gallery */}
-          <div className="space-y-4">
-            <div className="relative aspect-[4/5] md:aspect-[4/5] bg-white rounded-3xl overflow-hidden shadow-md group">
+          <div className="product-gallery space-y-4">
+            <div className="product-gallery__main relative aspect-[4/5] md:aspect-[4/5] bg-white rounded-3xl overflow-hidden shadow-md group">
               <img
                 src={images[currentImageIndex].image_url}
                 alt={product.title}
@@ -318,7 +318,7 @@ export default function ProductPage() {
 
             {/* Thumbnails */}
             {images.length > 1 && (
-              <div className="flex gap-3 overflow-x-auto pb-1">
+              <div className="product-gallery__thumbnails flex gap-3 overflow-x-auto pb-1">
                 {images.map((img, i) => (
                   <button
                     key={img.id}
@@ -340,17 +340,17 @@ export default function ProductPage() {
           </div>
 
           {/* Product Info */}
-          <div className="flex flex-col gap-6">
-            <div>
+          <div className="product-info-panel flex flex-col gap-6">
+            <div className="product-info-panel__intro">
               {product.categories && (
-                <span className="inline-block text-brand-600 text-sm font-semibold mb-2">
+                <span className="product-info-panel__category inline-block text-brand-600 text-sm font-semibold mb-2">
                   {product.categories.name}
                 </span>
               )}
               <h1 className="font-display text-2xl md:text-4xl font-bold text-stone-900 leading-tight mb-4 tracking-tight">
                 {product.title}
               </h1>
-              <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+              <div className="product-info-panel__price flex items-center gap-2 sm:gap-4 flex-wrap">
                 {product.discount_price != null && product.discount_price < product.price ? (
                   <>
                     <span className="font-display text-2xl md:text-3xl font-bold text-brand-600">
@@ -388,7 +388,7 @@ export default function ProductPage() {
 
             {/* Description */}
             {product.description && (
-              <div>
+              <div className="product-info-panel__description">
                 <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2">{t('productPageDescriptionTitle')}</h3>
                 <p className="text-stone-700 leading-relaxed whitespace-pre-line">{product.description}</p>
               </div>
@@ -399,7 +399,7 @@ export default function ProductPage() {
               const m = product.size_chart_templates?.measurements;
               if (!m?.rows?.length || !m?.sizes?.length) return null;
               return (
-                <div>
+                <div className="product-size-guide">
                   <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2">{t('sizeGuideTitle')}</h3>
                   <div className="border border-stone-200 rounded-2xl overflow-hidden">
                     <table className="w-full text-sm">
@@ -429,7 +429,7 @@ export default function ProductPage() {
 
             {/* Sizes */}
             {product.sizes && product.sizes.length > 0 && (
-              <div>
+              <div className="product-size-picker">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">{t('selectSize')}</h3>
                   {sizeError && (
@@ -438,7 +438,7 @@ export default function ProductPage() {
                     </span>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2.5">
+                <div className="product-size-picker__options flex flex-wrap gap-2.5">
                   {product.sizes.map((size) => {
                     const remaining = getSizeQuantity(size);
                     const isSelected = selectedSize === size;
@@ -451,7 +451,7 @@ export default function ProductPage() {
                           const remaining = getSizeQuantity(size);
                           setQuantity((q) => Math.min(q, Math.max(1, remaining)));
                         }}
-                        className={`min-w-[3rem] px-5 py-2.5 rounded-2xl border-2 font-semibold text-sm transition-all duration-200 relative ${
+                        className={`product-size-option min-w-[3rem] px-5 py-2.5 rounded-2xl border-2 font-semibold text-sm transition-all duration-200 relative ${
                           isSelected
                             ? 'border-stone-900 bg-stone-900 text-white shadow-md scale-105'
                             : 'border-stone-200 text-stone-700 hover:border-stone-400 hover:bg-stone-50'
@@ -477,7 +477,7 @@ export default function ProductPage() {
 
             {/* Quantity — hidden when the product is fully out of stock */}
             {!isFullyOutOfStock && (
-            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+            <div className="product-quantity rounded-2xl border border-stone-200 bg-stone-50 p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold text-stone-700">Quantity</span>
                 <div className="inline-flex items-center gap-3 rounded-full border border-stone-200 bg-white px-2 py-1.5 shadow-sm">
@@ -536,7 +536,7 @@ export default function ProductPage() {
             ) : (
             <>
             {/* Add to Cart / Buy Now */}
-            <div className="mt-auto pt-2">
+            <div className="product-purchase-actions mt-auto pt-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   onClick={handleBuyNow}

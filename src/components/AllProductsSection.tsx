@@ -21,14 +21,14 @@ export default function AllProductsSection({ products, categories }: AllProducts
   if (productsByCategory.length === 0) return null;
 
   return (
-    <div className="mb-12">
-      <h2 className="font-display text-2xl sm:text-3xl font-bold text-stone-900 uppercase tracking-wider mb-8">
+    <div className="store-all-products mb-12">
+      <h2 className="store-all-products__heading font-display text-2xl sm:text-3xl font-bold text-stone-900 uppercase tracking-wider mb-8">
         {t('allProducts')}
       </h2>
       <div className="space-y-10">
         {productsByCategory.map(({ category, products: catProducts }) => (
-          <div key={category.id}>
-            <div className="flex items-center justify-between mb-6">
+          <div key={category.id} className="store-product-category">
+            <div className="store-product-category__heading flex items-center justify-between mb-6">
               <h3 className="font-display text-xl font-bold text-stone-900 uppercase tracking-wider">
                 {category.name}
               </h3>

@@ -84,7 +84,7 @@ export default function ShopBySizePage() {
   );
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="store-page store-page--sizes min-h-screen bg-stone-50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 md:py-12">
         {/* Header */}
         <div className="text-center mb-10">
@@ -157,15 +157,17 @@ export default function ShopBySizePage() {
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {matching.map((product) => {
                       const ps = (product.product_sizes ?? []).find((s) => normSize(s.size) === selectedSize);
+                      const remaining = ps?.quantity ?? 0;
+                      const isLowStock = remaining <= 3;
                       const hasDiscount =
                         product.discount_price != null && Number(product.discount_price) < Number(product.price);
                       return (
                         <Link
                           key={product.id}
                           to={`/product/${productParam(product.title, product.product_code ?? product.id)}`}
-                          className="bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden hover:shadow-md hover:-translate-y-0.5 transition-all"
+                          className="store-product-card bg-white rounded-3xl shadow-sm border border-stone-100 overflow-hidden hover:shadow-md hover:-translate-y-0.5 transition-all"
                         >
-                          <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
+                          <div className="store-product-card__media aspect-[3/4] bg-stone-100 overflow-hidden relative">
                             <img
                               src={getCoverImage(product)}
                               alt={product.title}
@@ -173,15 +175,25 @@ export default function ShopBySizePage() {
                               loading="lazy"
                               onError={(e) => { (e.target as HTMLImageElement).src = COVER_FALLBACK; }}
                             />
-                            <span className="absolute top-3 right-3 bg-stone-900/85 text-white text-xs font-bold px-2.5 py-1 rounded-full">
-                              {selectedSize} · {ps?.quantity ?? 0} left
-                            </span>
+                            <div
+                              className={`size-stock-indicator${isLowStock ? ' size-stock-indicator--low' : ''}`}
+                              aria-label={`${remaining} ${remaining === 1 ? 'unit' : 'units'} remaining in size ${selectedSize}`}
+                            >
+                              <span className="size-stock-indicator__size">
+                                <span>SIZE</span>
+                                <strong>{selectedSize}</strong>
+                              </span>
+                              <span className="size-stock-indicator__count">
+                                <strong>{remaining}</strong>
+                                <span>LEFT</span>
+                              </span>
+                            </div>
                           </div>
-                          <div className="p-4">
-                            <h3 className="text-sm font-semibold text-stone-900 leading-tight line-clamp-2 mb-2">
+                          <div className="store-product-card__details p-4">
+                            <h3 className="store-product-card__title text-sm font-semibold text-stone-900 leading-tight line-clamp-2 mb-2">
                               {product.title}
                             </h3>
-                            <div className="flex items-center gap-2">
+                            <div className="store-product-card__price flex items-center gap-2">
                               {hasDiscount ? (
                                 <>
                                   <span className="text-xs text-stone-400 line-through">৳{Number(product.price).toFixed(0)}</span>

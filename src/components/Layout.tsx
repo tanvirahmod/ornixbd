@@ -14,11 +14,13 @@ export default function Layout() {
   }, [pathname]);
 
   return (
-    <>
+    <div className="storefront">
       <Navbar />
-      <Outlet />
+      <main className="storefront-content">
+        <Outlet />
+      </main>
       <HelpFooter onNavigate={navigateTo} />
       <WhatsAppFloat />
-    </>
+    </div>
   );
 }

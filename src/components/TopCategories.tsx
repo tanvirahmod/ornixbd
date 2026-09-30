@@ -1,3 +1,4 @@
+import { ArrowRight, ArrowUpRight } from 'lucide-react';
 import { useCategories } from '../lib/siteConfig';
 import { slugify } from '../lib/utils';
 
@@ -15,43 +16,42 @@ export default function TopCategories({ onNavigate }: TopCategoriesProps) {
   const skeletonCount = 6;
 
   return (
-    <section className="bg-white py-14 md:py-20 px-4 sm:px-6">
+    <section className="editorial-categories py-16 md:py-28 px-4 sm:px-6" data-watermark="THE EDIT">
       <div className="max-w-7xl mx-auto">
-        {/* Section header */}
-        <div className="flex items-end justify-between mb-8 md:mb-10">
-          <div>
-            <p className="text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
-              Browse by category
+        <div className="editorial-section-heading flex items-end justify-between mb-8 md:mb-12">
+          <div className="editorial-section-heading__title">
+            <p className="editorial-eyebrow mb-3">
+              <span>01</span> / FIND YOUR UNIFORM
             </p>
-            <h2 className="font-display text-4xl sm:text-5xl md:text-6xl text-black uppercase tracking-wide leading-none">
-              TOP CATEGORIES
+            <h2 className="font-display text-5xl sm:text-6xl md:text-8xl uppercase leading-[0.88]">
+              THE <span>EDIT</span>
             </h2>
+            <p className="editorial-section-note mt-4">Pieces for every version of you.</p>
           </div>
           <button
             onClick={() => onNavigate('shop')}
-            className="hidden sm:inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.15em] text-black hover:text-[#D90429] transition-colors border-b-2 border-black hover:border-[#D90429] pb-0.5"
+            className="editorial-round-link hidden sm:inline-flex items-center gap-3"
           >
-            VIEW ALL
+            ALL CATEGORIES <ArrowRight aria-hidden="true" size={16} />
           </button>
         </div>
 
-        {/* Grid */}
-        <div className="grid grid-cols-3 gap-3 md:gap-4">
+        <div className="editorial-category-grid">
           {loading
             ? Array.from({ length: skeletonCount }).map((_, i) => (
                 <div
                   key={i}
-                  className="bg-stone-100 animate-pulse"
-                  style={{ aspectRatio: '3/4' }}
+                  className="editorial-category-skeleton animate-pulse"
                 />
               ))
-            : categories.map((cat) => (
+            : categories.map((cat, index) => (
                 <CategoryCard
                   key={cat.id}
                   label={cat.name}
                   image={cat.background_image ?? FALLBACK_IMAGE}
                   slug={slugify(cat.name)}
                   onNavigate={onNavigate}
+                  index={index + 1}
                 />
               ))}
         </div>
@@ -60,9 +60,9 @@ export default function TopCategories({ onNavigate }: TopCategoriesProps) {
         <div className="sm:hidden mt-6 text-center">
           <button
             onClick={() => onNavigate('shop')}
-            className="btn-black px-10 py-4"
+            className="editorial-round-link mx-auto mt-7 inline-flex items-center gap-3"
           >
-            VIEW ALL CATEGORIES
+            VIEW ALL CATEGORIES <ArrowRight aria-hidden="true" size={16} />
           </button>
         </div>
       </div>
@@ -75,50 +75,38 @@ function CategoryCard({
   image,
   slug,
   onNavigate,
+  index,
 }: {
   label: string;
   image: string;
   slug: string;
   onNavigate: (page: string, param?: string) => void;
+  index: number;
 }) {
   return (
     <button
       onClick={() => onNavigate('collections', slug)}
-      className="group relative overflow-hidden bg-street-beige"
-      style={{ aspectRatio: '3/4' }}
+      className="editorial-category group relative overflow-hidden"
     >
-      {/* Image */}
       <img
         src={image}
         alt={label}
-        className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+        className="editorial-category__image absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
         loading="lazy"
         onError={(e) => {
           (e.target as HTMLImageElement).src = FALLBACK_IMAGE;
         }}
       />
-
-      {/* Gradient at bottom */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
-
-      {/* Red hover overlay */}
-      <div className="absolute inset-0 bg-[#D90429]/0 group-hover:bg-[#D90429]/20 transition-all duration-300" />
-
-      {/* Label */}
-      <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-4">
-        <span
-          className="block font-display text-white uppercase leading-tight break-words"
-          style={{
-            fontSize: 'clamp(1rem, 4.2vw, 2.7rem)',
-            WebkitTextStroke: '1px #000000',
-            paintOrder: 'stroke fill',
-            textShadow: '0 1px 6px rgba(0,0,0,0.6)',
-            letterSpacing: '0.04em',
-          }}
-        >
+      <span className="editorial-category__shade absolute inset-0" />
+      <span className="editorial-category__number absolute top-4 left-4 sm:top-6 sm:left-6">
+        0{index}
+      </span>
+      <span className="editorial-category__label absolute bottom-4 left-4 right-4 sm:bottom-7 sm:left-6 sm:right-6">
+        <span>
           {label}
         </span>
-      </div>
+        <ArrowUpRight className="editorial-category__arrow" aria-hidden="true" />
+      </span>
     </button>
   );
 }

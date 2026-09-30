@@ -1,72 +1,59 @@
+import { ArrowRight, MoveUpRight } from 'lucide-react';
+
 interface BrandBioProps {
   onNavigate: (page: string) => void;
 }
 
+const STATS = [
+  { value: '10K+', label: 'Pieces out in the world' },
+  { value: '100%', label: 'Quality, no shortcuts' },
+  { value: 'BD', label: 'Proudly made here' },
+];
+
 export default function BrandBio({ onNavigate }: BrandBioProps) {
   return (
-    <section className="bg-black text-white py-16 md:py-24 px-4 sm:px-6">
-      <div className="max-w-4xl mx-auto text-center">
-        {/* Eyebrow */}
-        <p className="text-xs font-bold tracking-[0.4em] uppercase text-[#D90429] mb-5">
-          Our Story
-        </p>
-
-        {/* Big heading */}
-        <h2
-          className="font-display text-white uppercase leading-none mb-8"
-          style={{ fontSize: 'clamp(2.5rem, 7vw, 6rem)', letterSpacing: '0.04em' }}
-        >
-          WEAR THE CULTURE.
-          <br />
-          LIVE THE STREETS.
-        </h2>
-
-        {/* Divider */}
-        <div className="flex items-center justify-center gap-4 mb-8">
-          <span className="flex-1 max-w-24 h-px bg-white/20" />
-          <span className="text-[#D90429] text-xl">✦</span>
-          <span className="flex-1 max-w-24 h-px bg-white/20" />
+    <section className="editorial-story" data-watermark="ORNIX">
+      <div className="editorial-story__inner">
+        <div className="editorial-story__intro">
+          <p className="editorial-eyebrow"><span>04</span> / MORE THAN WHAT YOU WEAR</p>
+          <h2>
+            MADE HERE.
+            <br />
+            <span>WORN</span> EVERYWHERE.
+          </h2>
+          <button
+            onClick={() => onNavigate('story')}
+            className="editorial-round-link editorial-round-link--light mt-8 inline-flex items-center gap-3"
+          >
+            GET TO KNOW US <MoveUpRight aria-hidden="true" size={16} />
+          </button>
         </div>
 
-        {/* Brand story */}
-        <p className="text-white/70 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto mb-4 font-medium">
-          ORNIX was born in the streets of Bangladesh — built for those who
-          move with purpose and dress with intent. We craft every piece using
-          premium fabrics that hold their shape, color, and structure wash after
-          wash.
-        </p>
-        <p className="text-white/55 text-sm sm:text-base leading-relaxed max-w-xl mx-auto mb-12">
-          From drop-shoulder tees to statement hoodies, our collections blend
-          urban streetwear culture with Bangladeshi craftsmanship. Durable. Bold.
-          Unapologetically you.
-        </p>
+        <div className="editorial-story__manifesto">
+          <span className="editorial-story__mark" aria-hidden="true">BD</span>
+          <p className="editorial-story__lead">
+            ORNIX was born in Bangladesh for people who move with purpose and
+            dress with intent.
+          </p>
+          <p className="editorial-story__body">
+            Thoughtful fits. Fabrics that last. Local craftsmanship with a
+            point of view. We make everyday streetwear feel like your own.
+          </p>
+          <div className="editorial-story__signature">
+            <span className="editorial-story__signature-line" />
+            <span>BUILT FOR THE WAY YOU MOVE</span>
+            <ArrowRight aria-hidden="true" size={15} />
+          </div>
+        </div>
+      </div>
 
-        {/* CTA */}
-        <button
-          onClick={() => onNavigate('shop')}
-          className="bg-white text-black font-bold uppercase tracking-[0.2em] text-sm px-12 py-4 hover:bg-[#D90429] hover:text-white transition-all duration-200"
-        >
-          SHOP NOW
-        </button>
-
-        {/* Stats row */}
-        <div className="mt-16 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-6 border-t border-white/10 pt-12">
-          {[
-            { value: '10K+', label: 'Products Delivered' },
-            { value: '100%', label: 'Quality Assured' },
-            { value: '3–4 Days', label: 'Delivery Time' },
-            { value: 'BD', label: 'Made in Bangladesh' },
-          ].map((stat) => (
-            <div key={stat.label} className="text-center">
-              <p
-                className="font-display text-white uppercase"
-                style={{ fontSize: 'clamp(1.8rem, 5vw, 3.5rem)' }}
-              >
-                {stat.value}
-              </p>
-              <p className="text-white/40 text-[10px] sm:text-xs font-semibold tracking-[0.2em] uppercase mt-1 break-words">
-                {stat.label}
-              </p>
+      <div className="editorial-story__stats">
+        <div className="editorial-story__stats-inner">
+          {STATS.map((stat, index) => (
+            <div className="editorial-story__stat" key={stat.label}>
+              <span className="editorial-story__stat-index">0{index + 1}</span>
+              <strong>{stat.value}</strong>
+              <span>{stat.label}</span>
             </div>
           ))}
         </div>

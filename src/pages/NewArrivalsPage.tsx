@@ -55,7 +55,7 @@ export default function NewArrivalsPage() {
   }, [page]);
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="store-page store-page--listing min-h-screen bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
 
         {/* Breadcrumb */}
@@ -66,14 +66,14 @@ export default function NewArrivalsPage() {
         </nav>
 
         {/* Header */}
-        <div className="mb-10">
-          <p className="text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
-            Just Dropped
+        <div className="store-page-heading mb-10">
+          <p className="store-page-heading__eyebrow text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
+            02 / JUST DROPPED
           </p>
-          <h1 className="font-display text-4xl sm:text-5xl md:text-6xl text-black uppercase tracking-wide leading-none">
+          <h1 className="font-display text-5xl sm:text-6xl md:text-8xl text-black uppercase tracking-wide leading-none">
             NEW ARRIVALS
           </h1>
-          <p className="text-sm text-black/50 mt-3 font-medium">
+          <p className="store-page-heading__description text-sm text-black/50 mt-3 font-medium">
             Fresh drops updated weekly — get yours before they sell out.
           </p>
           {!loading && totalCount > 0 && (

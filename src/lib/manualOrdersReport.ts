@@ -13,9 +13,10 @@
 //   • footer
 
 import type { Order } from './supabase';
+import { ORNIX_LOGO_URL } from './seo';
 
 // Same logo as the storefront navbar / parcel labels (ImageKit CDN).
-const LOGO_URL = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
+const LOGO_URL = ORNIX_LOGO_URL;
 
 function esc(v: unknown): string {
   return String(v ?? '')

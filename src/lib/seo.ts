@@ -1,6 +1,7 @@
 export const SITE_URL = 'https://ornix.com.bd';
 export const SITE_NAME = 'ORNIX';
-export const DEFAULT_OG_IMAGE = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
+export const ORNIX_LOGO_URL = 'https://ik.imagekit.io/oy2vruqkz/ornix_logo_transparent%20(2).png';
+export const DEFAULT_OG_IMAGE = ORNIX_LOGO_URL;
 export const DEFAULT_DESCRIPTION = 'ORNIX — Modern streetwear from Bangladesh. Bold fashion, quality fabrics, nationwide delivery. Shop the latest collections online.';
 
 function updateMetaTag(attr: 'name' | 'property', key: string, value: string) {

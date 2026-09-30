@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, Category } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
+import { Sparkles } from 'lucide-react';
 import CategoryGrid from '../components/CategoryGrid';
 import AllProductsSection from '../components/AllProductsSection';
 import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
@@ -49,21 +50,21 @@ export default function ShopPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-stone-50">
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
-        {/* ── Heading section (kept intact) ── */}
-        <div className="text-center mx-auto max-w-2xl mb-10">
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-600 mb-3">
-            {t('shop')}
-          </p>
-          <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-stone-900 tracking-tight mb-4">
-            {t('shopCollection')}
-          </h1>
-          <p className="text-stone-600 leading-relaxed">
-            {t('premiumFashion')}
-          </p>
+    <div className="store-page store-page--shop min-h-screen bg-stone-50">
+      <section className="store-collection-intro relative overflow-hidden bg-black text-white">
+        <div className="store-collection-intro__glow store-collection-intro__glow--top" />
+        <div className="store-collection-intro__glow store-collection-intro__glow--bottom" />
+        <div className="store-collection-intro__content relative max-w-4xl mx-auto px-4 sm:px-6 py-16 md:py-24 text-center">
+          <span className="store-collection-intro__eyebrow inline-flex items-center gap-2 uppercase">
+            <Sparkles aria-hidden="true" />
+            {t('shop')} · ORNIX COLLECTIONS
+          </span>
+          <h1 className="font-display uppercase">{t('shopCollection')}</h1>
+          <p>{t('premiumFashion')}</p>
         </div>
+      </section>
 
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
         {loading ? (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">

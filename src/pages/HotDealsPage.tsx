@@ -62,7 +62,7 @@ export default function HotDealsPage() {
   }, [page]);
 
   return (
-    <div className="min-h-screen bg-[#F4EFEA]">
+    <div className="store-page store-page--listing store-page--deals min-h-screen bg-[#F4EFEA]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
 
         {/* Breadcrumb */}
@@ -73,14 +73,14 @@ export default function HotDealsPage() {
         </nav>
 
         {/* Header */}
-        <div className="mb-10">
-          <p className="text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
-            Limited time offers
+        <div className="store-page-heading mb-10">
+          <p className="store-page-heading__eyebrow text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
+            03 / LIMITED TIME OFFERS
           </p>
-          <h1 className="font-display text-4xl sm:text-5xl md:text-6xl text-black uppercase tracking-wide leading-none">
+          <h1 className="font-display text-5xl sm:text-6xl md:text-8xl text-black uppercase tracking-wide leading-none">
             HOT DEALS
           </h1>
-          <p className="text-sm text-black/50 mt-3 font-medium">
+          <p className="store-page-heading__description text-sm text-black/50 mt-3 font-medium">
             Limited-time discounts — updated automatically when offers are live.
           </p>
           {!loading && totalCount > 0 && (
