@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';import {
   Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler, ShieldCheck,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
-   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown, KeyRound, LogIn, Smartphone, Wifi
+   Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown, KeyRound, LogIn, Smartphone, Wifi,
+   LayoutGrid, LayoutList, Rows3
 } from 'lucide-react';
 import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon, AdminLog, AdminLogin, StockMovement, Expense, Seller, SizeChartTemplate } from '../lib/supabase';
 import { runBounded } from '../lib/supabaseQuery';
@@ -22,6 +23,596 @@ import { WHATSAPP_ORDER_KEY, WHATSAPP_CHAT_KEY, normalizeWhatsAppNumber } from '
 
 type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'manual' | 'finance' | 'coupons' | 'feedback' | 'settings';
 type ModalMode = 'add' | 'edit';
+
+type OrderViewMode = 'comfort' | 'compact' | 'grid';
+
+/** Comfort / Compact / Grid density switch for the order lists. */
+function ViewToggle({ value, onChange }: { value: OrderViewMode; onChange: (v: OrderViewMode) => void }) {
+  const opts: Array<{ key: OrderViewMode; icon: JSX.Element; label: string }> = [
+    { key: 'comfort', icon: <LayoutList className="w-4 h-4" />, label: 'Comfort — full cards' },
+    { key: 'compact', icon: <Rows3 className="w-4 h-4" />, label: 'Compact — dense rows' },
+    { key: 'grid', icon: <LayoutGrid className="w-4 h-4" />, label: 'Grid — dense tiles' },
+  ];
+  return (
+    <div className="flex items-center gap-0.5 bg-white border border-stone-200 rounded-xl p-0.5" role="group" aria-label="List density">
+      {opts.map((o) => (
+        <button
+          key={o.key}
+          onClick={() => onChange(o.key)}
+          title={o.label}
+          aria-pressed={value === o.key}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            value === o.key ? 'bg-stone-900 text-white shadow-sm' : 'text-stone-500 hover:bg-stone-100'
+          }`}
+        >
+          {o.icon}
+          <span className="hidden lg:inline">{o.key === 'comfort' ? 'Comfort' : o.key === 'compact' ? 'Compact' : 'Grid'}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** One purchase (order_code) in the Orders tab — a multi-item cart shares one code. */
+type StoreGroup = {
+  code: string;
+  key: string;
+  rows: Order[];
+  createdAt: string;
+  total: number;
+  due: number;
+  status: OrderStatus;
+};
+
+/** One in-store sale (order_code) in the Manual Orders tab. */
+type ManualGroup = {
+  code: string;
+  key: string;
+  rows: Order[];
+  customer: string;
+  phone: string;
+  seller: string | null;
+  address: string;
+  createdAt: string;
+  total: number;
+  /** Sum of amounts still collected on delivery (COD) — 'delivery-only' sales. */
+  due: number;
+  /** Sum collected up front in store: delivery charge, wallet advance, or both. */
+  collected: number;
+  /** 'advance_paid' = customer sent the delivery-fee advance, 'full_payment' = everything settled in store. */
+  paymentMode: string | null;
+  status: OrderStatus;
+};
+
+/** Dot color for an order group's Steadfast booking stage (compact/grid views). */
+function STORE_STAGE_DOT(b: boolean, stage: SteadfastStage | null): string {
+  if (!b) return 'bg-stone-300';
+  switch (stage) {
+    case 'in_review': return 'bg-sky-400';
+    case 'picked_up': return 'bg-amber-400';
+    case 'in_transit': return 'bg-orange-400';
+    case 'delivered': return 'bg-emerald-500';
+    case 'cancelled': return 'bg-red-400';
+    default: return 'bg-stone-400';
+  }
+}
+
+function orderStageOf(b: boolean, rows: Order[]): SteadfastStage | null {
+  if (!b) return null;
+  const raw = rows.find((r) => r.steadfast_status)?.steadfast_status ?? null;
+  return (raw as SteadfastStage) ?? null;
+}
+
+/** Orders tab — COMPACT view: one dense row per purchase, all actions intact. */
+function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, orderStatusOpen, setOrderStatusOpen, setGroupStatus, setDeleteOrderConfirm, updatingDelivery, sendingToSteadfast, handleSendToSteadfast, checkingSteadfast, refreshGroupStatuses, handlePrintGroupLabel, steadfastConfigured }: {
+  groups: StoreGroup[];
+  selectedOrderIds: Set<string>;
+  toggleGroupSelection: (g: StoreGroup) => void;
+  orderStatusOpen: string | null;
+  setOrderStatusOpen: (v: string | null) => void;
+  setGroupStatus: (g: StoreGroup, s: OrderStatus) => void;
+  setDeleteOrderConfirm: (v: string | null) => void;
+  updatingDelivery: string | null;
+  sendingToSteadfast: string | null;
+  handleSendToSteadfast: (o: Order) => void;
+  checkingSteadfast: (key: string) => boolean;
+  refreshGroupStatuses: (g: StoreGroup) => void;
+  handlePrintGroupLabel: (g: StoreGroup) => void;
+  steadfastConfigured: boolean;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-stone-100 shadow-sm divide-y divide-stone-100 overflow-hidden">
+      {groups.map((g) => {
+        const firstRow = g.rows[0];
+        const sharedCodes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+        const booked = sharedCodes.length > 0;
+        return (
+          <div key={g.key} className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-stone-50 transition-colors border-l-4 ${
+            g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
+          }`}>
+            <input
+              type="checkbox"
+              checked={g.rows.every((o) => selectedOrderIds.has(o.id))}
+              onChange={() => toggleGroupSelection(g)}
+              title="Select the whole purchase for bulk actions"
+              className="w-4 h-4 accent-brand-500 flex-shrink-0 cursor-pointer"
+            />
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 font-bold text-xs ${
+              g.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : g.status === 'canceled' ? 'bg-red-100 text-red-500' : 'bg-amber-100 text-amber-700'
+            }`}>
+              {(firstRow.customer_name || '?').trim().charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <p className="font-semibold text-stone-900 text-sm truncate">{firstRow.customer_name || 'Unknown customer'}</p>
+                <span className="font-mono text-[11px] font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.code}</span>
+                <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                  {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                </span>
+                {g.rows.length > 1 && (
+                  <span className="text-[11px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.rows.length} items</span>
+                )}
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STORE_STAGE_DOT(booked, orderStageOf(booked, g.rows))}`} title={booked ? 'Booked with Steadfast' : 'Not booked'} />
+              </div>
+              <p className="text-xs text-stone-500 truncate mt-0.5">
+                {firstRow.customer_phone}
+                {' · '}{firstRow.product_title}{g.rows.length > 1 ? ` +${g.rows.length - 1} more` : ''}
+                {firstRow.selected_size ? ` · ${firstRow.selected_size}` : ''}
+                {' · '}{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="font-bold text-stone-900 text-sm leading-tight">৳{g.total.toLocaleString('en-IN')}</p>
+              {g.due > 0 && <p className="text-[11px] font-semibold text-amber-600 leading-tight">Due ৳{g.due.toLocaleString('en-IN')}</p>}
+            </div>
+            {/* Status dropdown — same options as the comfort cards */}
+            <div className="relative flex-shrink-0">
+              <button
+                onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
+                disabled={updatingDelivery === g.key}
+                className={`flex items-center px-2 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${
+                  g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                    : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                }`}
+              >
+                {updatingDelivery === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : g.status === 'delivered' ? <Truck className="w-3.5 h-3.5" /> : g.status === 'canceled' ? <XCircle className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {orderStatusOpen === g.key && (
+                <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                  {([
+                    { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
+                    { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
+                    { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setGroupStatus(g, opt.value)}
+                      className={`w-full px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
+                        g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <div className="border-t border-stone-100 my-1" />
+                  <button
+                    onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
+                    className="w-full px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
+                  >
+                    Delete order
+                  </button>
+                </div>
+              )}
+            </div>
+            {/* Courier action (booking / tracking) */}
+            {booked ? (
+              <div className="hidden md:flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => refreshGroupStatuses(g)}
+                  disabled={checkingSteadfast(g.key)}
+                  title="Refresh Steadfast status"
+                  className="text-stone-400 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                >
+                  {checkingSteadfast(g.key) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                </button>
+                <a
+                  href={`https://steadfast.com.bd/t/${sharedCodes[0]}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Track on Steadfast"
+                  className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
+                >
+                  ↗
+                </a>
+                <button
+                  onClick={() => handlePrintGroupLabel(g)}
+                  title="Print the Steadfast parcel sticker for this purchase"
+                  className="text-stone-400 hover:text-brand-600 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : g.status !== 'canceled' && steadfastConfigured ? (
+              <button
+                onClick={() => void handleSendToSteadfast(firstRow)}
+                disabled={sendingToSteadfast === g.key}
+                title="Book one pickup for all items of this purchase"
+                className="hidden sm:flex items-center gap-1 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-2.5 py-1.5 rounded-full disabled:opacity-60 transition-all flex-shrink-0"
+              >
+                {sendingToSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                Book
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Orders tab — GRID view: dense tiles, one per purchase. */
+function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupStatus, setDeleteOrderConfirm, updatingDelivery, sendingToSteadfast, handleSendToSteadfast, steadfastConfigured }: {
+  groups: StoreGroup[];
+  orderStatusOpen: string | null;
+  setOrderStatusOpen: (v: string | null) => void;
+  setGroupStatus: (g: StoreGroup, s: OrderStatus) => void;
+  setDeleteOrderConfirm: (v: string | null) => void;
+  updatingDelivery: string | null;
+  sendingToSteadfast: string | null;
+  handleSendToSteadfast: (o: Order) => void;
+  steadfastConfigured: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+      {groups.map((g) => {
+        const firstRow = g.rows[0];
+        const sharedCodes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+        const booked = sharedCodes.length > 0;
+        return (
+          <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-3.5 hover:shadow-md transition-shadow ${
+            g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
+          }`}>
+            <div className="flex items-center gap-2">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 font-bold text-xs ${
+                g.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : g.status === 'canceled' ? 'bg-red-100 text-red-500' : 'bg-amber-100 text-amber-700'
+              }`}>
+                {(firstRow.customer_name || '?').trim().charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-stone-900 text-sm truncate">{firstRow.customer_name || 'Unknown customer'}</p>
+                <p className="text-[11px] text-stone-500 truncate">{firstRow.customer_phone}</p>
+              </div>
+              <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[11px]">
+              <span className="font-mono font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full">{g.code}</span>
+              <span className="text-stone-400">{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+              <span className={`w-2 h-2 rounded-full ${STORE_STAGE_DOT(booked, orderStageOf(booked, g.rows))}`} title={booked ? 'Booked with Steadfast' : 'Not booked'} />
+              {booked && <span className="font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full truncate max-w-[110px]">{sharedCodes[0]}</span>}
+            </div>
+            <div className="mt-2 space-y-0.5">
+              {(g.rows.length > 2 ? g.rows.slice(0, 2) : g.rows).map((r) => (
+                <p key={r.id} className="text-xs text-stone-700 truncate">
+                  {r.quantity ?? 1}× {r.product_title}{r.selected_size ? ` · ${r.selected_size}` : ''}
+                </p>
+              ))}
+              {g.rows.length > 2 && <p className="text-[11px] text-stone-400">+{g.rows.length - 2} more items</p>}
+            </div>
+            <p className="text-[11px] text-stone-400 mt-2 truncate" title={firstRow.customer_address}>{firstRow.customer_address}</p>
+            <div className="mt-2 pt-2 border-t border-stone-100 flex items-center justify-between gap-2">
+              <div>
+                <p className="font-bold text-stone-900 text-sm leading-tight">৳{g.total.toLocaleString('en-IN')}</p>
+                {g.due > 0 && <p className="text-[11px] font-semibold text-amber-600 leading-tight">Due ৳{g.due.toLocaleString('en-IN')}</p>}
+              </div>
+              <div className="relative">
+                <button
+                  onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
+                  disabled={updatingDelivery === g.key}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${
+                    g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                      : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                        : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                  }`}
+                >
+                  {updatingDelivery === g.key ? <Loader2 className="w-3 h-3 animate-spin" /> : g.status === 'delivered' ? <Truck className="w-3 h-3" /> : g.status === 'canceled' ? <XCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                {orderStatusOpen === g.key && (
+                  <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                    {([
+                      { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
+                      { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
+                      { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
+                    ]).map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setGroupStatus(g, opt.value)}
+                        className={`w-full px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
+                          g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                    <div className="border-t border-stone-100 my-1" />
+                    <button
+                      onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
+                      className="w-full px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
+                    >
+                      Delete order
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            {!booked && g.status !== 'canceled' && steadfastConfigured && (
+              <button
+                onClick={() => void handleSendToSteadfast(firstRow)}
+                disabled={sendingToSteadfast === g.key}
+                className="mt-2 w-full flex items-center justify-center gap-1 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-2.5 py-1.5 rounded-full disabled:opacity-60 transition-all"
+              >
+                {sendingToSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                {sendingToSteadfast === g.key ? 'Booking…' : 'Book Steadfast pickup'}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Manual Orders tab — COMPACT view: one dense row per in-store sale. */
+function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setManualGroupStatus, setDeleteOrderConfirm, sendingToSteadfast, handleBookManualGroup, checkingSteadfast, handleRefreshManualGroup, handlePrintManualGroup, printingLabels, steadfastConfigured }: {
+  groups: ManualGroup[];
+  manualStatusOpen: string | null;
+  setManualStatusOpen: (v: string | null) => void;
+  setManualGroupStatus: (g: ManualGroup, s: OrderStatus) => void;
+  setDeleteOrderConfirm: (v: string | null) => void;
+  sendingToSteadfast: string | null;
+  handleBookManualGroup: (g: ManualGroup) => void;
+  checkingSteadfast: string | null;
+  handleRefreshManualGroup: (g: ManualGroup) => void;
+  handlePrintManualGroup: (g: ManualGroup) => void;
+  printingLabels: string | null;
+  steadfastConfigured: boolean;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-stone-100 shadow-sm divide-y divide-stone-100 overflow-hidden">
+      {groups.map((g) => {
+        const sharedCode = g.rows.find((r) => r.tracking_code)?.tracking_code ?? null;
+        const booked = !!sharedCode;
+        return (
+          <div key={g.key} className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-stone-50 transition-colors border-l-4 ${
+            g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
+          }`}>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 font-bold text-xs ${
+              g.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : g.status === 'canceled' ? 'bg-red-100 text-red-500' : 'bg-amber-100 text-amber-700'
+            }`}>
+              {(g.customer || '?').trim().charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <p className="font-semibold text-stone-900 text-sm truncate">{g.customer || 'Walk-in customer'}</p>
+                <span className="font-mono text-[11px] font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.code}</span>
+                <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                  {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                </span>
+                {g.rows.length > 1 && (
+                  <span className="text-[11px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.rows.length} items</span>
+                )}
+                {booked && <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STORE_STAGE_DOT(true, (g.rows.find((r) => r.steadfast_status)?.steadfast_status as SteadfastStage) ?? null)}`} title="Booked with Steadfast" />}
+              </div>
+              <p className="text-xs text-stone-500 truncate mt-0.5">
+                {g.rows[0].product_title}{g.rows.length > 1 ? ` +${g.rows.length - 1} more` : ''}
+                {g.seller ? ` · by ${g.seller}` : ''}
+                {' · '}{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="font-bold text-stone-900 text-sm leading-tight">৳{g.total.toLocaleString('en-IN')}</p>
+              {g.due > 0 ? (
+                <p className="text-[11px] font-semibold text-amber-600 leading-tight">Due ৳{g.due.toLocaleString('en-IN')}</p>
+              ) : g.collected > 0 ? (
+                <p className="text-[11px] font-semibold text-emerald-600 leading-tight">Paid in store</p>
+              ) : null}
+            </div>
+            <div className="relative flex-shrink-0">
+              <button
+                onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
+                className={`flex items-center px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                    : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                }`}
+              >
+                {g.status === 'delivered' ? <Truck className="w-3.5 h-3.5" /> : g.status === 'canceled' ? <XCircle className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {manualStatusOpen === g.key && (
+                <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                  {([
+                    { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
+                    { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
+                    { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setManualGroupStatus(g, opt.value)}
+                      className={`w-full px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
+                        g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <div className="border-t border-stone-100 my-1" />
+                  <button
+                    onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
+                    className="w-full px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
+                  >
+                    Delete sale
+                  </button>
+                </div>
+              )}
+            </div>
+            {booked ? (
+              <div className="hidden md:flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => void handleRefreshManualGroup(g)}
+                  disabled={checkingSteadfast === g.key}
+                  title="Refresh Steadfast status"
+                  className="text-stone-400 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                >
+                  {checkingSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                </button>
+                <a href={`https://steadfast.com.bd/t/${sharedCode}`} target="_blank" rel="noreferrer" title="Track on Steadfast" className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors">↗</a>
+                <button
+                  onClick={() => void handlePrintManualGroup(g)}
+                  disabled={printingLabels === g.key}
+                  title="Print the parcel sticker for this sale"
+                  className="text-stone-400 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                >
+                  {printingLabels === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            ) : g.status !== 'canceled' && steadfastConfigured ? (
+              <button
+                onClick={() => void handleBookManualGroup(g)}
+                disabled={sendingToSteadfast === g.key}
+                title="Book one pickup for all items in this sale"
+                className="hidden sm:flex items-center gap-1 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-2.5 py-1.5 rounded-full disabled:opacity-60 transition-all flex-shrink-0"
+              >
+                {sendingToSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                Book
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Manual Orders tab — GRID view: dense tiles, one per in-store sale. */
+function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManualGroupStatus, setDeleteOrderConfirm, sendingToSteadfast, handleBookManualGroup, steadfastConfigured }: {
+  groups: ManualGroup[];
+  manualStatusOpen: string | null;
+  setManualStatusOpen: (v: string | null) => void;
+  setManualGroupStatus: (g: ManualGroup, s: OrderStatus) => void;
+  setDeleteOrderConfirm: (v: string | null) => void;
+  sendingToSteadfast: string | null;
+  handleBookManualGroup: (g: ManualGroup) => void;
+  steadfastConfigured: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+      {groups.map((g) => {
+        const sharedCode = g.rows.find((r) => r.tracking_code)?.tracking_code ?? null;
+        const booked = !!sharedCode;
+        return (
+          <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-3.5 hover:shadow-md transition-shadow ${
+            g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
+          }`}>
+            <div className="flex items-center gap-2">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 font-bold text-xs ${
+                g.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : g.status === 'canceled' ? 'bg-red-100 text-red-500' : 'bg-amber-100 text-amber-700'
+              }`}>
+                {(g.customer || '?').trim().charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-stone-900 text-sm truncate">{g.customer || 'Walk-in customer'}</p>
+                <p className="text-[11px] text-stone-500 truncate">{g.phone && g.phone !== '—' ? g.phone : 'In-store sale'}{g.seller ? ` · ${g.seller}` : ''}</p>
+              </div>
+              <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[11px]">
+              <span className="font-mono font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full">{g.code}</span>
+              <span className="text-stone-400">{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+              {booked && <span className="font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full truncate max-w-[110px]">{sharedCode}</span>}
+            </div>
+            <div className="mt-2 space-y-0.5">
+              {(g.rows.length > 2 ? g.rows.slice(0, 2) : g.rows).map((r) => (
+                <p key={r.id} className="text-xs text-stone-700 truncate">
+                  {r.quantity ?? 1}× {r.product_title}{r.selected_size ? ` · ${r.selected_size}` : ''}
+                </p>
+              ))}
+              {g.rows.length > 2 && <p className="text-[11px] text-stone-400">+{g.rows.length - 2} more items</p>}
+            </div>
+            {g.address && g.address !== '—' && (
+              <p className="text-[11px] text-stone-400 mt-2 truncate" title={g.address}>{g.address}</p>
+            )}
+            <div className="mt-2 pt-2 border-t border-stone-100 flex items-center justify-between gap-2">
+              <div>
+                <p className="font-bold text-stone-900 text-sm leading-tight">৳{g.total.toLocaleString('en-IN')}</p>
+                {g.due > 0 ? (
+                  <p className="text-[11px] font-semibold text-amber-600 leading-tight">Due ৳{g.due.toLocaleString('en-IN')}</p>
+                ) : g.collected > 0 ? (
+                  <p className="text-[11px] font-semibold text-emerald-600 leading-tight">Paid in store</p>
+                ) : null}
+              </div>
+              <div className="relative">
+                <button
+                  onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                      : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                        : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                  }`}
+                >
+                  {g.status === 'delivered' ? <Truck className="w-3 h-3" /> : g.status === 'canceled' ? <XCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                {manualStatusOpen === g.key && (
+                  <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                    {([
+                      { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
+                      { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
+                      { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
+                    ]).map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setManualGroupStatus(g, opt.value)}
+                        className={`w-full px-4 py-2.5 text-sm font-medium text-left transition-colors hover:bg-stone-50 ${
+                          g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                    <div className="border-t border-stone-100 my-1" />
+                    <button
+                      onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
+                      className="w-full px-4 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50 text-left transition-colors"
+                    >
+                      Delete sale
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            {!booked && g.status !== 'canceled' && steadfastConfigured && (
+              <button
+                onClick={() => void handleBookManualGroup(g)}
+                disabled={sendingToSteadfast === g.key}
+                className="mt-2 w-full flex items-center justify-center gap-1 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-200 px-2.5 py-1.5 rounded-full disabled:opacity-60 transition-all"
+              >
+                {sendingToSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                {sendingToSteadfast === g.key ? 'Booking…' : 'Book Steadfast pickup'}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // Compact page list for pagination: 1 … 4 5 6 … 12
 function pageNumbers(current: number, total: number): (number | '…')[] {
@@ -139,6 +730,15 @@ export default function AdminPage() {
   const [orderSearch, setOrderSearch] = useState('');
   const [orderPage, setOrderPage] = useState(1);
   const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
+  // List density: 'comfort' (current full cards) | 'compact' (dense rows) | 'grid' (dense tiles)
+  const [orderView, setOrderView] = useState<'comfort' | 'compact' | 'grid'>(
+    () => (localStorage.getItem('ornix_orders_view') as 'comfort' | 'compact' | 'grid') || 'comfort'
+  );
+  useEffect(() => { localStorage.setItem('ornix_orders_view', orderView); }, [orderView]);
+  const [manualView, setManualView] = useState<'comfort' | 'compact' | 'grid'>(
+    () => (localStorage.getItem('ornix_manual_view') as 'comfort' | 'compact' | 'grid') || 'comfort'
+  );
+  useEffect(() => { localStorage.setItem('ornix_manual_view', manualView); }, [manualView]);
   const [deliveryStageFilter, setDeliveryStageFilter] = useState<'all' | SteadfastStage | 'not_booked'>('all');
   const ORDER_PAGE_SIZE = 15;
   const [refreshing, setRefreshing] = useState(false);
@@ -531,15 +1131,6 @@ export default function AdminPage() {
   // A multi-item cart checkout inserts one row per item, all sharing one
   // order_code. The Orders tab shows ONE card per purchase (like a receipt);
   // the rows ride along as the card's item list.
-  type StoreGroup = {
-    code: string;
-    key: string;
-    rows: Order[];
-    createdAt: string;
-    total: number;
-    due: number;
-    status: OrderStatus;
-  };
   const storeGroups: StoreGroup[] = useMemo(() => {
     const map = new Map<string, StoreGroup>();
     for (const o of [...storeOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))) {
@@ -568,24 +1159,6 @@ export default function AdminPage() {
 
   // ── Manual-orders history: group multi-row sales by order_code so each
   // purchase renders as one card (mirroring the Orders tab's per-order look). ──
-  type ManualGroup = {
-    code: string;
-    key: string;
-    rows: Order[];
-    customer: string;
-    phone: string;
-    seller: string | null;
-    address: string;
-    createdAt: string;
-    total: number;
-    /** Sum of amounts still collected on delivery (COD) — 'delivery-only' sales. */
-    due: number;
-    /** Sum collected up front in store: delivery charge, wallet advance, or both. */
-    collected: number;
-    /** 'advance_paid' = customer sent the delivery-fee advance, 'full_payment' = everything settled in store. */
-    paymentMode: string | null;
-    status: OrderStatus;
-  };
   const manualGroups: ManualGroup[] = useMemo(() => {
     const map = new Map<string, ManualGroup>();
     for (const o of [...manualOrders].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))) {
@@ -859,11 +1432,14 @@ export default function AdminPage() {
     setPrintingLabels(null);
   };
 
-  const orderTotalPages = Math.max(1, Math.ceil(filteredGroups.length / ORDER_PAGE_SIZE));
+  // Grid/compact views pack more items per screen than full cards, so the page
+  // size follows the active density.
+  const orderPageSize = orderView === 'grid' ? 24 : orderView === 'compact' ? 30 : ORDER_PAGE_SIZE;
+  const orderTotalPages = Math.max(1, Math.ceil(filteredGroups.length / orderPageSize));
   const orderSafePage = Math.min(orderPage, orderTotalPages);
   const pagedGroups = filteredGroups.slice(
-    (orderSafePage - 1) * ORDER_PAGE_SIZE,
-    orderSafePage * ORDER_PAGE_SIZE
+    (orderSafePage - 1) * orderPageSize,
+    orderSafePage * orderPageSize
   );
 
   const getOrderPricing = (order: Order) => {
@@ -3954,6 +4530,10 @@ export default function AdminPage() {
                   </button>
                 </p>
               </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="hidden sm:block"><ViewToggle value={orderView} onChange={(v) => { setOrderView(v); setOrderPage(1); }} /></div>
+                <div className="sm:hidden"><ViewToggle value={orderView} onChange={(v) => { setOrderView(v); setOrderPage(1); }} /></div>
+              </div>
               <div className="relative w-full sm:w-80">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
                 <input
@@ -4175,6 +4755,35 @@ export default function AdminPage() {
                 icon={<ShoppingBag className="w-6 h-6" />}
                 title={storeGroups.length === 0 ? 'No orders yet' : 'No orders match your filters.'}
                 hint={storeGroups.length === 0 ? 'New orders will appear here in real time.' : 'Try a different search term or status filter.'}
+              />
+            ) : orderView === 'compact' ? (
+              <OrdersCompactView
+                groups={pagedGroups}
+                selectedOrderIds={selectedOrderIds}
+                toggleGroupSelection={toggleGroupSelection}
+                orderStatusOpen={orderStatusOpen}
+                setOrderStatusOpen={setOrderStatusOpen}
+                setGroupStatus={setGroupStatus}
+                setDeleteOrderConfirm={setDeleteOrderConfirm}
+                updatingDelivery={updatingDelivery}
+                sendingToSteadfast={sendingToSteadfast}
+                handleSendToSteadfast={(o) => void handleSendToSteadfast(o)}
+                checkingSteadfast={(key) => checkingSteadfast === key}
+                refreshGroupStatuses={(g) => void handleRefreshGroupStatus(g)}
+                handlePrintGroupLabel={handlePrintGroupLabel}
+                steadfastConfigured={steadfastConfigured}
+              />
+            ) : orderView === 'grid' ? (
+              <OrdersGridView
+                groups={pagedGroups}
+                orderStatusOpen={orderStatusOpen}
+                setOrderStatusOpen={setOrderStatusOpen}
+                setGroupStatus={setGroupStatus}
+                setDeleteOrderConfirm={setDeleteOrderConfirm}
+                updatingDelivery={updatingDelivery}
+                sendingToSteadfast={sendingToSteadfast}
+                handleSendToSteadfast={handleSendToSteadfast}
+                steadfastConfigured={steadfastConfigured}
               />
             ) : (
               <>
@@ -5013,18 +5622,45 @@ export default function AdminPage() {
                     className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
                   />
                 </div>
+                <ViewToggle value={manualView} onChange={setManualView} />
               </div>
 
               {/* History — Orders-tab-style cards, grouped by purchase (order_code) */}
+              {manualFilteredGroups.length === 0 ? (
+                <EmptyState
+                  icon={<Store className="w-6 h-6" />}
+                  title={manualGroups.length === 0 ? 'No in-store sales recorded yet' : 'No sales match your filters.'}
+                  hint={manualGroups.length === 0 ? 'Use the form above to record walk-in purchases.' : 'Try a different search term or status filter.'}
+                />
+              ) : manualView === 'compact' ? (
+                <ManualCompactView
+                  groups={manualFilteredGroups}
+                  manualStatusOpen={manualStatusOpen}
+                  setManualStatusOpen={setManualStatusOpen}
+                  setManualGroupStatus={setManualGroupStatus}
+                  setDeleteOrderConfirm={setDeleteOrderConfirm}
+                  sendingToSteadfast={sendingToSteadfast}
+                  handleBookManualGroup={(g) => void handleBookManualGroup(g)}
+                  checkingSteadfast={checkingSteadfast}
+                  handleRefreshManualGroup={(g) => void handleRefreshManualGroup(g)}
+                  handlePrintManualGroup={(g) => void handlePrintManualGroup(g)}
+                  printingLabels={printingLabels}
+                  steadfastConfigured={steadfastConfigured}
+                />
+              ) : manualView === 'grid' ? (
+                <ManualGridView
+                  groups={manualFilteredGroups}
+                  manualStatusOpen={manualStatusOpen}
+                  setManualStatusOpen={setManualStatusOpen}
+                  setManualGroupStatus={setManualGroupStatus}
+                  setDeleteOrderConfirm={setDeleteOrderConfirm}
+                  sendingToSteadfast={sendingToSteadfast}
+                  handleBookManualGroup={(g) => void handleBookManualGroup(g)}
+                  steadfastConfigured={steadfastConfigured}
+                />
+              ) : (
               <div className="space-y-2">
-                {manualFilteredGroups.length === 0 ? (
-                  <EmptyState
-                    icon={<Store className="w-6 h-6" />}
-                    title={manualGroups.length === 0 ? 'No in-store sales recorded yet' : 'No sales match your filters.'}
-                    hint={manualGroups.length === 0 ? 'Use the form above to record walk-in purchases.' : 'Try a different search term or status filter.'}
-                  />
-                ) : (
-                  manualFilteredGroups.map((g) => {
+                {false ? null : manualFilteredGroups.map((g) => {
                     const firstRow = g.rows[0];
                     const codDue = g.due;
                     return (
@@ -5275,9 +5911,9 @@ export default function AdminPage() {
                       </div>
                     </div>
                     );
-                  })
-                )}
+                  })}
               </div>
+            )}
             </div>
           );
         })()}
