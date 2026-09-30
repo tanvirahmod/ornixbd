@@ -1570,3 +1570,138 @@ $$;
 grant execute on function public.admin_decrement_stock(jsonb) to authenticated;
 grant execute on function public.admin_restore_order_stock(uuid[]) to authenticated;
 grant execute on function public.log_failed_login(text, text) to anon, authenticated;
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- ── 9) REPAIR: re-assert storefront RLS policies ──
+--
+-- The LIVE database drifted from this file: anonymous INSERTs on `orders`
+-- (checkout!) and `feedback` (contact form) returned 42501 "new row violates
+-- row-level security policy" — the insert policies were missing or stricter
+-- than intended, while reads still worked. This section re-creates the exact
+-- policy set the storefront contract requires (same as the lockdown section
+-- above), so re-running it always heals the schema:
+--   • public SELECT on catalog/settings tables
+--   • public INSERT on orders + feedback (checkout & contact form)
+--   • admin-only everything else, via is_admin()
+-- IDEMPOTENT — safe to re-run any number of times.
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- orders: public can create (checkout) — everything else is admin-only or via RPC
+drop policy if exists "anon_select_orders" on public.orders;
+drop policy if exists "anon_insert_orders" on public.orders;
+drop policy if exists "anon_update_orders" on public.orders;
+drop policy if exists "anon_delete_orders" on public.orders;
+drop policy if exists "public_insert_orders" on public.orders;
+create policy "public_insert_orders" on public.orders for insert to anon, authenticated with check (true);
+drop policy if exists "admin_all_orders" on public.orders;
+create policy "admin_all_orders" on public.orders for all to authenticated using (is_admin()) with check (is_admin());
+
+-- feedback: public contact form submits; reading/managing is admin-only
+drop policy if exists "anon_select_feedback" on public.feedback;
+drop policy if exists "anon_insert_feedback" on public.feedback;
+drop policy if exists "anon_update_feedback" on public.feedback;
+drop policy if exists "anon_delete_feedback" on public.feedback;
+drop policy if exists "public_insert_feedback" on public.feedback;
+create policy "public_insert_feedback" on public.feedback for insert to anon, authenticated with check (true);
+drop policy if exists "admin_all_feedback" on public.feedback;
+create policy "admin_all_feedback" on public.feedback for all to authenticated using (is_admin()) with check (is_admin());
+
+-- products / images / sizes / categories / size charts: public read
+drop policy if exists "anon_select_products" on public.products;
+drop policy if exists "anon_insert_products" on public.products;
+drop policy if exists "anon_update_products" on public.products;
+drop policy if exists "anon_delete_products" on public.products;
+drop policy if exists "public_read_products" on public.products;
+create policy "public_read_products" on public.products for select to anon, authenticated using (true);
+drop policy if exists "admin_all_products" on public.products;
+create policy "admin_all_products" on public.products for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "anon_select_product_images" on public.product_images;
+drop policy if exists "anon_insert_product_images" on public.product_images;
+drop policy if exists "anon_update_product_images" on public.product_images;
+drop policy if exists "anon_delete_product_images" on public.product_images;
+drop policy if exists "public_read_product_images" on public.product_images;
+create policy "public_read_product_images" on public.product_images for select to anon, authenticated using (true);
+drop policy if exists "admin_all_product_images" on public.product_images;
+create policy "admin_all_product_images" on public.product_images for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "Allow public read product_sizes" on public.product_sizes;
+drop policy if exists "Allow public insert product_sizes" on public.product_sizes;
+drop policy if exists "Allow public update product_sizes" on public.product_sizes;
+drop policy if exists "Allow public delete product_sizes" on public.product_sizes;
+drop policy if exists "public_read_product_sizes" on public.product_sizes;
+create policy "public_read_product_sizes" on public.product_sizes for select to anon, authenticated using (true);
+drop policy if exists "admin_all_product_sizes" on public.product_sizes;
+create policy "admin_all_product_sizes" on public.product_sizes for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "anon_select_categories" on public.categories;
+drop policy if exists "anon_insert_categories" on public.categories;
+drop policy if exists "anon_update_categories" on public.categories;
+drop policy if exists "anon_delete_categories" on public.categories;
+drop policy if exists "public_read_categories" on public.categories;
+create policy "public_read_categories" on public.categories for select to anon, authenticated using (true);
+drop policy if exists "admin_all_categories" on public.categories;
+create policy "admin_all_categories" on public.categories for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "size_chart_templates fully accessible" on public.size_chart_templates;
+drop policy if exists "public_read_size_charts" on public.size_chart_templates;
+create policy "public_read_size_charts" on public.size_chart_templates for select to anon, authenticated using (true);
+drop policy if exists "admin_all_size_charts" on public.size_chart_templates;
+create policy "admin_all_size_charts" on public.size_chart_templates for all to authenticated using (is_admin()) with check (is_admin());
+
+-- announcements / site_settings / coupons: public read (coupons & announcements limited to active rows)
+drop policy if exists "anon_select_announcements" on public.announcements;
+drop policy if exists "anon_all_announcements" on public.announcements;
+drop policy if exists "public_read_active_announcements" on public.announcements;
+create policy "public_read_active_announcements" on public.announcements for select to anon, authenticated using (is_active = true);
+drop policy if exists "admin_all_announcements" on public.announcements;
+create policy "admin_all_announcements" on public.announcements for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "anon_select_site_settings" on public.site_settings;
+drop policy if exists "anon_all_site_settings" on public.site_settings;
+drop policy if exists "public_read_site_settings" on public.site_settings;
+create policy "public_read_site_settings" on public.site_settings for select to anon, authenticated using (true);
+drop policy if exists "admin_all_site_settings" on public.site_settings;
+create policy "admin_all_site_settings" on public.site_settings for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "anon_select_coupons" on public.coupons;
+drop policy if exists "anon_insert_coupons" on public.coupons;
+drop policy if exists "anon_update_coupons" on public.coupons;
+drop policy if exists "anon_delete_coupons" on public.coupons;
+drop policy if exists "public_read_active_coupons" on public.coupons;
+create policy "public_read_active_coupons" on public.coupons for select to anon, authenticated
+  using (is_active = true and (expires_at is null or expires_at > now()));
+drop policy if exists "admin_all_coupons" on public.coupons;
+create policy "admin_all_coupons" on public.coupons for all to authenticated using (is_admin()) with check (is_admin());
+
+-- expenses / stock_movements / admin_log / sellers — admin only
+drop policy if exists "expenses fully accessible" on public.expenses;
+drop policy if exists "admin_all_expenses" on public.expenses;
+create policy "admin_all_expenses" on public.expenses for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "stock movements fully accessible" on public.stock_movements;
+drop policy if exists "admin_all_stock_movements" on public.stock_movements;
+create policy "admin_all_stock_movements" on public.stock_movements for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "admin log fully accessible" on public.admin_log;
+drop policy if exists "admin_all_admin_log" on public.admin_log;
+create policy "admin_all_admin_log" on public.admin_log for all to authenticated using (is_admin()) with check (is_admin());
+
+drop policy if exists "sellers fully accessible" on public.sellers;
+drop policy if exists "admin_all_sellers" on public.sellers;
+create policy "admin_all_sellers" on public.sellers for all to authenticated using (is_admin()) with check (is_admin());
+
+-- Ensure the storefront RPCs are executable after any function recreation.
+-- Exception-guarded: a grant for a function that doesn't exist yet must never
+-- abort the whole batch.
+do $$
+begin
+  begin grant execute on function public.track_order(text, text) to anon, authenticated; exception when others then null; end;
+  begin grant execute on function public.checkout_decrement_stock(jsonb) to anon, authenticated; exception when others then null; end;
+  begin grant execute on function public.checkout_restore_stock(jsonb) to anon, authenticated; exception when others then null; end;
+  begin grant execute on function public.checkout_restore_coupon(text) to anon, authenticated; exception when others then null; end;
+  begin grant execute on function public.checkout_redeem_coupon(text, numeric, text[], boolean) to anon, authenticated; exception when others then null; end;
+  begin grant execute on function public.log_failed_login(text, text) to anon, authenticated; exception when others then null; end;
+  begin grant execute on function public.admin_decrement_stock(jsonb) to authenticated; exception when others then null; end;
+  begin grant execute on function public.admin_restore_order_stock(uuid[]) to authenticated; exception when others then null; end;
+end $$;

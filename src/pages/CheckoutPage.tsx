@@ -328,8 +328,27 @@ export default function CheckoutPage() {
 
   const goToStep = (next: CheckoutStep) => {
     setStep(next);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // After a step change — and after the order-confirmation screen appears —
+  // the new content is much shorter than the old one, so the viewport would
+  // stay scrolled far below it. Wait for React to commit the new layout
+  // (double requestAnimationFrame), then animate back to the top. Starting a
+  // fresh smooth scroll here also cancels any smooth-scroll animation still
+  // running from the previous state (html has scroll-behavior: smooth in
+  // index.css), so the scroll always lands exactly on top.
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [step, success]);
 
   /* ── Step 1 validation ── */
   const validateAddress = () => {
@@ -703,8 +722,8 @@ export default function CheckoutPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center px-4">
-        <div className="bg-white rounded-3xl shadow-xl p-10 max-w-md w-full text-center animate-fade-in-up">
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center px-4 py-8">
+        <div className="bg-white rounded-3xl shadow-xl p-6 sm:p-10 max-w-md w-full text-center animate-fade-in-up">
           <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
             <CheckCircle className="w-10 h-10 text-emerald-500" />
           </div>
@@ -878,8 +897,12 @@ export default function CheckoutPage() {
 
       <div className="max-w-5xl mx-auto px-4 py-6 md:py-8">
         <div className="grid md:grid-cols-5 gap-6 lg:gap-10">
-          {/* ── Sidebar: summary + coupon ── */}
-          <div className="md:col-span-2 space-y-4 min-w-0">
+          {/* ── Sidebar: summary + coupon ──
+              Code order: sidebar first, form second. The order-* classes put
+              the FORM on top for phones (order-1) so a step change or the
+              success screen is what the customer sees — no scrolling — while
+              desktop keeps summary-left / steps-right. */}
+          <div className="order-2 md:order-1 md:col-span-2 space-y-4 min-w-0">
             <div className="bg-white rounded-3xl shadow-sm border border-stone-100 p-5 md:sticky md:top-20">
               <h2 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-4">{t('orderSummary')}</h2>
               <div className="space-y-4">
@@ -986,7 +1009,7 @@ export default function CheckoutPage() {
           </div>
 
           {/* ── Main column: steps ── */}
-          <div className="md:col-span-3 min-w-0">
+          <div className="order-1 md:order-2 md:col-span-3 min-w-0">
             {/* Step bar sits directly above the form container — underlined steps */}
             <div className="bg-white rounded-2xl shadow-sm border border-stone-100 px-2 sm:px-4 mb-4 flex items-center">
               {steps.map((s) => {
