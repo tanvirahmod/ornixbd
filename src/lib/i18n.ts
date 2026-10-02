@@ -196,6 +196,7 @@ export type TranslationKey =
   | 'deliveryFeeNotSet'
   | 'totalNow'
   | 'totalPlusDelivery'
+  | 'totalPlusDeliveryFlat'
   | 'paymentUnavailableTitle'
   | 'paymentUnavailableDesc'
  | 'couponRemove'  | 'orderCodeLabel'
@@ -356,7 +357,7 @@ const en: TranslationMap = {
   addressSubtitle: 'Where should we deliver your order?',
   enterYourFullName: 'Enter your full name',
   phonePlaceholder: '+8801721415263',
-  fullAddressPlaceholder: 'House, Road, Area, District — full delivery address',
+  fullAddressPlaceholder: 'House, Road, Area — full delivery address',
   continueToDelivery: 'Continue to Delivery',
   deliveryHeading: 'Delivery Method',
   deliverySubtitle: 'Choose how you want your order delivered.',
@@ -427,8 +428,9 @@ const en: TranslationMap = {
   orderCodeSaveNote: 'Save this code — use it on the “Track Order” page anytime.',
   trackYourOrderCta: 'Track your order',
   trackYourOrderNote: 'This is the link to track your order — bookmark it: ornix.com.bd/track',
-  totalNow: 'Total (before delivery)',
-  totalPlusDelivery: '+ delivery charge at checkout (৳{{min}}–৳{{max}})',
+  totalNow: 'Total (including delivery charge)',
+  totalPlusDelivery: 'delivery charge at checkout (৳{{min}}–৳{{max}})',
+  totalPlusDeliveryFlat: 'delivery charge at checkout (৳{{amount}}) countrywide',
   districtLabel: 'District / Zone',
   districtPlaceholder: 'Select your district…',
   districtCountHint: '{{count}} districts covered — the courier fee is set from your zone.',
@@ -468,9 +470,9 @@ const bn: TranslationMap = {
   fullName: 'পুরো নাম',
   enterYourFullName: 'আপনার পুরো নাম লিখুন',
   phoneNumber: 'মোবাইল নম্বর',
-  phonePlaceholder: '+8801721415263',
+  phonePlaceholder: 'এখানে মোবাইল নম্বর লিখুন',
   deliveryAddress: 'ডেলিভারি ঠিকানা',
-  fullAddressPlaceholder: 'বাড়ি, রোড, এলাকা, জেলা — সম্পূর্ণ ঠিকানা লিখুন',
+  fullAddressPlaceholder: 'বাড়ি, রোড, এলাকা — সম্পূর্ণ ঠিকানা লিখুন',
   continueToDelivery: 'ডেলিভারিতে এগিয়ে যান',
   fullNameRequired: 'পুরো নাম লিখুন',
   phoneRequired: 'মোবাইল নম্বর দিন',
@@ -555,8 +557,9 @@ const bn: TranslationMap = {
   orderCodeSaveNote: 'এই কোডটি সংরক্ষণ করুন — যেকোনো সময় "Track Order" পেজে ব্যবহার করুন।',
   trackYourOrderCta: 'অর্ডার ট্র্যাক করুন',
   trackYourOrderNote: 'এটিই আপনার অর্ডার ট্র্যাক করার লিংক — সংরক্ষণ করুন: ornix.com.bd/track',
-  totalNow: 'মোট (ডেলিভারি ছাড়া)',
-  totalPlusDelivery: '+ চেকআউটে ডেলিভারি চার্জ (৳{{min}}–৳{{max}})',
+  totalNow: 'মোট (ডেলিভারি চার্জ সহ)',
+  totalPlusDelivery: 'চেকআউটে ডেলিভারি চার্জ (৳{{min}}–৳{{max}})',
+  totalPlusDeliveryFlat: 'চেকআউটে ডেলিভারি চার্জ (৳{{amount}}) সারাদেশে',
   cartEmpty: 'আপনার কার্ট খালি',
   infoSecure: 'আপনার তথ্য সুরক্ষিত',
   somethingWentWrong: 'কিছু একটা সমস্যা হয়েছে। আবার চেষ্টা করুন।',

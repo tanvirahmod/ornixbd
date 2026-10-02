@@ -23,7 +23,7 @@ const POLICIES: Policy[] = [
       {
         heading: 'Delivery Timelines',
         bullets: [
-          'Inside Dhaka: 1–2 business days after order confirmation.',
+          'Inside Dhaka: 3-5 business days after order confirmation.',
           'Outside Dhaka: 3–5 business days, depending on your area.',
           'Orders are confirmed by phone call before dispatch — please keep your phone reachable.',
           'Fridays and public holidays are non-dispatch days.',
@@ -33,7 +33,7 @@ const POLICIES: Policy[] = [
         heading: 'Delivery Charges',
         bullets: [
           'Delivery fee: ৳150 nationwide (paid in advance via bKash or Nagad during checkout).',
-          'Free delivery on orders over ৳1000 — we cover the courier cost ourselves.',
+          'Free delivery on orders over ৳3000 — we cover the courier cost ourselves.',
           'Cash on Delivery (COD) is available for select areas; our team will confirm on the confirmation call.',
         ],
       },

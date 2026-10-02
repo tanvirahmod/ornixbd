@@ -3,3 +3,5 @@ Allow: /
 Disallow: /admin
 Disallow: /checkout
 Disallow: /cart
+
+Sitemap: https://ornix.com.bd/sitemap.xml

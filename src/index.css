@@ -1791,6 +1791,35 @@
 .store-page--checkout[lang="bn"] textarea::placeholder { color: #aaa49a; }
 .store-page--checkout .bg-brand-50\/60 { background-color: rgba(195,174,143,.1); }
 
+/* bKash / Nagad advance-payment card: dark surfaces with wallet-brand accents.
+   The pastel pink/orange gradients otherwise stay light while their stone text
+   is remapped to cream — light-on-light and unreadable in the dark storefront. */
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 {
+  background: linear-gradient(135deg, #2b2023 0%, #26211e 100%);
+  border-color: #5a3a44;
+}
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 {
+  background: linear-gradient(135deg, #2c241c 0%, #26211e 100%);
+  border-color: #5f4a2e;
+}
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .border-pink-100,
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .border-pink-200 { border-color: #4a2f38; }
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .border-orange-100,
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .border-orange-200 { border-color: #4a3a26; }
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .bg-white\/80 { background-color: #22211f; }
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .bg-white\/80 { background-color: #22211f; }
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .text-pink-600 { color: #f9a8d4; }
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .hover\:text-pink-700:hover { color: #fbcfe8; }
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .text-orange-600,
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .text-orange-500 { color: #fdba74; }
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .hover\:text-orange-700:hover { color: #fed7aa; }
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .bg-pink-100,
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .hover\:bg-pink-100:hover { background-color: rgba(249, 168, 212, .14); }
+.storefront-content .bg-gradient-to-br.from-pink-50.to-rose-50 .hover\:bg-pink-200:hover { background-color: rgba(249, 168, 212, .24); }
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .bg-orange-100,
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .hover\:bg-orange-100:hover { background-color: rgba(253, 186, 116, .14); }
+.storefront-content .bg-gradient-to-br.from-orange-50.to-amber-50 .hover\:bg-orange-200:hover { background-color: rgba(253, 186, 116, .24); }
+
 .store-page--track > div:first-child {
   background: #1b1b19;
   border-color: #302e2a;

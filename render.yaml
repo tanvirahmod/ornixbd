@@ -1,0 +1,30 @@
+# Render Blueprint — ORNIX static site
+#
+# Deploy with "New +" → "Blueprint" in the Render dashboard (it reads this
+# file), or configure a static site manually with the same values.
+#
+# You will be prompted for VITE_SUPABASE_ANON_KEY (sync: false) on first
+# deploy — paste the value from .env. It is the same public anon key the
+# browser already uses; it is NOT a secret.
+#
+# The `/*` rewrite is the SPA fallback: any path without a real file
+# (including all prerendered /product/... and /collections/... files, which
+# Render serves first) is served index.html so react-router handles it.
+
+services:
+  - type: web
+    name: ornix
+    runtime: static
+    buildCommand: npm run build:render
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: VITE_SUPABASE_URL
+        value: https://uzuzffvnukhdckaqqvfa.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

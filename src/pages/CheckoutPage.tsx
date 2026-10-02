@@ -357,7 +357,6 @@ export default function CheckoutPage() {
     if (!form.phone.trim()) next.phone = t('phoneRequired');
     else if (!isValidBdMobile(form.phone)) next.phone = t('phoneInvalidBd');
     if (!form.address.trim()) next.address = t('addressRequired');
-    else if (form.address.trim().length < 10) next.address = t('addressTooShort');
     // Steadfast delivers by district — require it so the courier charge matches the destination
     if (!form.deliveryDistrict) next.deliveryDistrict = t('districtRequired');
     if (!form.deliveryThana) next.deliveryThana = t('thanaRequired');

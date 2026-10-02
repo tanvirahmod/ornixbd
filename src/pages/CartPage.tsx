@@ -32,10 +32,11 @@ export default function CartPage() {
   const minDeliveryFee = parsedRates ? minZoneRateOf(parsedRates) : null;
   const maxDeliveryFee = parsedRates ? Math.max(parsedRates.dhaka_city, parsedRates.dhaka_suburban, parsedRates.outside_dhaka) : null;
 
-  // The delivery charge depends on the district (picked at checkout), so the
-  // cart shows the product total plus an honest fee RANGE — no invented
-  // "total" that pretends delivery is free.
-  const total = subtotal;
+  // The delivery charge (admin-set zone rates, Settings → Delivery &
+  // Payments) is included in the total, exactly like checkout charges it.
+  // When every zone costs the same it's a flat countrywide rate, so the
+  // total is exact; otherwise the note shows the zone range.
+  const total = subtotal + (minDeliveryFee ?? 0);
 
   if (items.length === 0) {
     return (
@@ -173,7 +174,11 @@ export default function CartPage() {
                   <span className="font-display font-bold text-stone-900 text-lg">৳{total.toFixed(0)}</span>
                 </div>
                 {minDeliveryFee != null && (
-                  <p className="text-[11px] text-stone-400 text-right">{t('totalPlusDelivery', { min: minDeliveryFee, max: maxDeliveryFee ?? minDeliveryFee })}</p>
+                  <p className="text-[11px] text-stone-400 text-right">
+                    {maxDeliveryFee != null && maxDeliveryFee !== minDeliveryFee
+                      ? t('totalPlusDelivery', { min: minDeliveryFee, max: maxDeliveryFee })
+                      : t('totalPlusDeliveryFlat', { amount: minDeliveryFee })}
+                  </p>
                 )}
               </div>
               <button
