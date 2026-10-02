@@ -514,20 +514,18 @@ export default function ProductPage() {
 
             {/* Fully out of stock notice */}
             {isFullyOutOfStock ? (
-              <div className="relative overflow-hidden rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 p-6 text-center">
-                <div className="absolute -top-8 -right-8 w-28 h-28 bg-amber-200/40 rounded-full blur-2xl" />
-                <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-rose-200/40 rounded-full blur-2xl" />
+              <div className="product-unavailable-notice relative overflow-hidden p-6 text-center">
                 <div className="relative">
-                  <div className="w-14 h-14 mx-auto mb-4 bg-white shadow-md rounded-full flex items-center justify-center">
-                    <Sparkles className="w-7 h-7 text-amber-500" />
+                  <div className="product-unavailable-notice__icon w-14 h-14 mx-auto mb-4 rounded-full flex items-center justify-center">
+                    <Sparkles className="w-7 h-7" />
                   </div>
-                  <h3 className="font-display text-xl font-bold text-stone-900 mb-2">
+                  <h3 className="product-unavailable-notice__title font-display text-xl font-bold mb-2">
                     {t('productUnavailableTitle')}
                   </h3>
-                  <p className="text-sm text-stone-600 leading-relaxed max-w-md mx-auto mb-3">
+                  <p className="product-unavailable-notice__body text-sm leading-relaxed max-w-md mx-auto mb-3">
                     {t('productUnavailableBody')}
                   </p>
-                  <p className="text-sm font-semibold text-brand-600 flex items-center justify-center gap-1.5">
+                  <p className="product-unavailable-notice__thanks text-sm font-semibold flex items-center justify-center gap-1.5">
                     <BellRing className="w-4 h-4" />
                     {t('productUnavailableThanks')}
                   </p>

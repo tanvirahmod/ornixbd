@@ -1757,6 +1757,21 @@
 .store-page--product .product-size-guide th { color: #c3b49f; }
 .store-page--product .product-size-guide td,
 .store-page--product .product-size-guide th { border-color: #393630; }
+.store-page--product .product-unavailable-notice {
+  border: 1px solid #48443d;
+  border-radius: .55rem;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(195,174,143,.1), transparent 58%),
+    #242320;
+}
+.store-page--product .product-unavailable-notice__icon {
+  border: 1px solid #48443d;
+  background: #171716;
+  color: #d0b794;
+}
+.store-page--product .product-unavailable-notice__title { color: #f2f0eb; }
+.store-page--product .product-unavailable-notice__body { color: #c5c0b7; }
+.store-page--product .product-unavailable-notice__thanks { color: #d0b794; }
 .store-page--product .product-size-option {
   border-color: #48443d;
   background: #22211f;
