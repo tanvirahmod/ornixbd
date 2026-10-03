@@ -73,7 +73,7 @@ export default function HotDealsPage() {
         </nav>
 
         {/* Header */}
-        <div className="store-page-heading mb-10">
+        <div className="store-page-heading store-watermark mb-10" data-watermark="HOT DEALS">
           <p className="store-page-heading__eyebrow text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
             03 / LIMITED TIME OFFERS
           </p>

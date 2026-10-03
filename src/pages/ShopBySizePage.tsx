@@ -87,7 +87,7 @@ export default function ShopBySizePage() {
     <div className="store-page store-page--sizes min-h-screen bg-stone-50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 md:py-12">
         {/* Header */}
-        <div className="text-center mb-10">
+        <div className="store-watermark text-center mb-10" data-watermark="SHOP BY SIZE">
           <div className="inline-flex items-center justify-center w-14 h-14 bg-brand-100 rounded-2xl mb-4">
             <Ruler className="w-7 h-7 text-brand-600" />
           </div>

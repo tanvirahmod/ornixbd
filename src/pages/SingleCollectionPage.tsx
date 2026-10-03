@@ -155,9 +155,11 @@ export default function SingleCollectionPage() {
           <span className="text-stone-700 font-medium">{categoryName}</span>
         </nav>
 
-        <h1 className="store-page-title font-display text-5xl sm:text-6xl md:text-8xl font-bold text-stone-900 uppercase tracking-tight mb-8">
-          {categoryName}
-        </h1>
+        <div className="store-watermark mb-8" data-watermark={categoryName}>
+          <h1 className="store-page-title font-display text-5xl sm:text-6xl md:text-8xl font-bold text-stone-900 uppercase tracking-tight">
+            {categoryName}
+          </h1>
+        </div>
 
         <div className="flex items-center justify-between mb-8">
           <div className="relative">

@@ -66,7 +66,7 @@ export default function NewArrivalsPage() {
         </nav>
 
         {/* Header */}
-        <div className="store-page-heading mb-10">
+        <div className="store-page-heading store-watermark mb-10" data-watermark="NEW ARRIVALS">
           <p className="store-page-heading__eyebrow text-xs font-bold tracking-[0.3em] uppercase text-[#D90429] mb-2">
             02 / JUST DROPPED
           </p>

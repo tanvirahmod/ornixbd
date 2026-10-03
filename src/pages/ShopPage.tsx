@@ -51,7 +51,10 @@ export default function ShopPage() {
 
   return (
     <div className="store-page store-page--shop min-h-screen bg-stone-50">
-      <section className="store-collection-intro relative overflow-hidden bg-black text-white">
+      <section
+        className="store-collection-intro store-watermark relative overflow-hidden bg-black text-white"
+        data-watermark="COLLECTIONS"
+      >
         <div className="store-collection-intro__glow store-collection-intro__glow--top" />
         <div className="store-collection-intro__glow store-collection-intro__glow--bottom" />
         <div className="store-collection-intro__content relative max-w-4xl mx-auto px-4 sm:px-6 py-16 md:py-24 text-center">
