@@ -7,8 +7,8 @@
 # deploy — paste the value from .env. It is the same public anon key the
 # browser already uses; it is NOT a secret.
 #
-# Product, collection, and public content routes are prerendered as real files.
-# Rewrite only the app routes that do not have a prerendered HTML file.
+# Route extensionless URLs to the prerendered HTML files generated at build
+# time. Keep SPA rewrites only for app routes without prerendered files.
 
 services:
   - type: web
@@ -24,6 +24,39 @@ services:
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
     routes:
+      - type: rewrite
+        source: /product/*
+        destination: /product/*/index.html
+      - type: rewrite
+        source: /collections/*
+        destination: /collections/*/index.html
+      - type: rewrite
+        source: /collections
+        destination: /collections/index.html
+      - type: rewrite
+        source: /new-arrivals
+        destination: /new-arrivals/index.html
+      - type: rewrite
+        source: /hot-deals
+        destination: /hot-deals/index.html
+      - type: rewrite
+        source: /shop-by-size
+        destination: /shop-by-size/index.html
+      - type: rewrite
+        source: /shop-by-size/*
+        destination: /index.html
+      - type: rewrite
+        source: /story
+        destination: /story/index.html
+      - type: rewrite
+        source: /policies
+        destination: /policies/index.html
+      - type: rewrite
+        source: /track
+        destination: /track/index.html
+      - type: rewrite
+        source: /feedback
+        destination: /feedback/index.html
       - type: rewrite
         source: /cart
         destination: /index.html
