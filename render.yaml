@@ -26,37 +26,37 @@ services:
     routes:
       - type: rewrite
         source: /product/*
-        destination: /product/*/index.html
+        destination: /product/*.html
       - type: rewrite
         source: /collections/*
-        destination: /collections/*/index.html
+        destination: /collections/*.html
       - type: rewrite
         source: /collections
-        destination: /collections/index.html
+        destination: /collections.html
       - type: rewrite
         source: /new-arrivals
-        destination: /new-arrivals/index.html
+        destination: /new-arrivals.html
       - type: rewrite
         source: /hot-deals
-        destination: /hot-deals/index.html
+        destination: /hot-deals.html
       - type: rewrite
         source: /shop-by-size
-        destination: /shop-by-size/index.html
+        destination: /shop-by-size.html
       - type: rewrite
         source: /shop-by-size/*
         destination: /index.html
       - type: rewrite
         source: /story
-        destination: /story/index.html
+        destination: /story.html
       - type: rewrite
         source: /policies
-        destination: /policies/index.html
+        destination: /policies.html
       - type: rewrite
         source: /track
-        destination: /track/index.html
+        destination: /track.html
       - type: rewrite
         source: /feedback
-        destination: /feedback/index.html
+        destination: /feedback.html
       - type: rewrite
         source: /cart
         destination: /index.html
@@ -68,7 +68,4 @@ services:
         destination: /index.html
       - type: rewrite
         source: /shop
-        destination: /index.html
-      - type: rewrite
-        source: /shop-by-size/*
         destination: /index.html
