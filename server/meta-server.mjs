@@ -20,7 +20,7 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 3001);
-const SITE_URL = 'https://ornix.com.bd';
+const SITE_URL = 'https://www.ornix.com.bd';
 const SITE_NAME = 'ORNIX';
 const DEFAULT_IMAGE = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
 const DEFAULT_DESCRIPTION = 'ORNIX — Modern streetwear from Bangladesh. Bold fashion, quality fabrics, nationwide delivery. Shop the latest collections online.';

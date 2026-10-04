@@ -16,7 +16,7 @@
 
 import type { Context } from 'https://deno.land/x/edge_function_types@0.1.0/mod.ts';
 
-const SITE_URL = 'https://ornix.com.bd';
+const SITE_URL = 'https://www.ornix.com.bd';
 const SITE_NAME = 'ORNIX';
 const DEFAULT_IMAGE = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
 const DEFAULT_DESCRIPTION = 'ORNIX — Modern streetwear from Bangladesh. Bold fashion, quality fabrics, nationwide delivery. Shop the latest collections online.';

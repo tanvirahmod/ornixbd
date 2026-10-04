@@ -19,15 +19,15 @@
 // at runtime (src/pages/*), and slugs mirror src/lib/utils.ts (slugify +
 // productParam), so a prerendered path always equals the app's own link.
 //
-// FAIL-OPEN: any DB error degrades to static-page prerender; any unexpected
-// error exits 0 with a warning. The deploy must never fail because of SEO.
+// A missing credential, database error, or failed write exits non-zero so a
+// deployment cannot silently publish product/category routes without SEO.
 //
 // Run: node scripts/prerender.mjs   (after vite build — see build:render)
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
-const SITE_URL = 'https://ornix.com.bd';
+const SITE_URL = 'https://www.ornix.com.bd';
 const SITE_NAME = 'ORNIX';
 // Must match DEFAULT_IMAGE in netlify/edge-functions/seo-prerender.ts + index.html og:image.
 const DEFAULT_IMAGE = 'https://ik.imagekit.io/oy2vruqkz/images-photoaidcom-cropped.png';
@@ -137,7 +137,7 @@ function writeRoute(routePath, html) {
     writeFileSync(flatFile, html);
     written.push(routePath);
   } catch (err) {
-    warn(`could not write ${routePath} (${err.message})`);
+    throw new Error(`could not write ${routePath} (${err.message})`);
   }
 }
 
@@ -194,8 +194,7 @@ let categoryCount = 0;
 
 async function prerenderFromDb() {
   if (!SUPABASE_URL || !ANON_KEY) {
-    warn('no Supabase env — skipping product/category prerender.');
-    return;
+    throw new Error('VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are required to prerender product and collection pages.');
   }
 
   const products = (await dbFetch(
@@ -327,7 +326,8 @@ async function prerenderFromDb() {
 try {
   await prerenderFromDb();
 } catch (err) {
-  warn(`DB prerender failed (${err.message}) — shipping static pages only. Site is unaffected.`);
+  console.error(`prerender: ERROR — ${err.message}`);
+  process.exitCode = 1;
 }
 
 log(`wrote ${written.length} route files: ${categoryCount} categories, ${productCount} products, ${written.length - categoryCount - productCount} static.`);

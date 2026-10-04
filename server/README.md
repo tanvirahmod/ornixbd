@@ -120,7 +120,7 @@ After DNS + SSL are live:
 
 ```bash
 # Should return HTML containing the PRODUCT title:
-curl -s -A "facebookexternalhit" https://ornix.com.bd/product/drop-shoulder-tee-prd-00012 | grep -o '<title>[^<]*</title>'
+curl -s -A "facebookexternalhit" https://www.ornix.com.bd/product/drop-shoulder-tee-prd-00012 | grep -o '<title>[^<]*</title>'
 ```
 
 Then use the Facebook Sharing Debugger (developers.facebook.com/tools/debug)

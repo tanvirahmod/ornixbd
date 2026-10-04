@@ -24,7 +24,7 @@ export default function HomePage() {
       '@context': 'https://schema.org',
       '@type': 'Organization',
       name: SITE_NAME,
-      url: 'https://ornix.com.bd',
+      url: 'https://www.ornix.com.bd',
       logo: DEFAULT_OG_IMAGE,
       description: DEFAULT_DESCRIPTION,
     });

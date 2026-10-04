@@ -1,11 +1,11 @@
 // Generates public/sitemap.xml from the live database before every build:
 // static pages + every category and product page (with lastmod timestamps).
-// Wired into netlify.toml's build command, so deploys always ship a fresh
+// Wired into hosting build commands, so deploys always ship a fresh
 // sitemap. Falls back to a static-only sitemap if the DB is unreachable.
 // Run:  node scripts/generate-sitemap.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const SITE_URL = 'https://ornix.com.bd';
+const SITE_URL = 'https://www.ornix.com.bd';
 const now = new Date().toISOString().slice(0, 10);
 
 const env = (() => {
@@ -60,10 +60,11 @@ if (SUPABASE_URL && ANON_KEY) {
     // Products: /product/<slugified-title>-<lowercase code> — the same URL
     // shape ProductCard builds. Use today as lastmod (the table has no
     // reliable updated_at column).
-    const prods = (await dbFetch('products?select=title,product_code')) ?? [];
+    const prods = (await dbFetch('products?select=id,title,product_code')) ?? [];
     for (const p of prods) {
-      if (!p.product_code) continue;
-      add(`${SITE_URL}/product/${slugify(p.title)}-${p.product_code.toLowerCase()}`, 'weekly', '0.7');
+      const code = p.product_code ?? p.id;
+      if (!p.title || !code) continue;
+      add(`${SITE_URL}/product/${slugify(p.title)}-${String(code).toLowerCase()}`, 'weekly', '0.7');
       dynamicCount++;
     }
   } catch (err) {
