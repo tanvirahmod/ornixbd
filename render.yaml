@@ -7,9 +7,8 @@
 # deploy — paste the value from .env. It is the same public anon key the
 # browser already uses; it is NOT a secret.
 #
-# The `/*` rewrite is the SPA fallback: any path without a real file
-# (including all prerendered /product/... and /collections/... files, which
-# Render serves first) is served index.html so react-router handles it.
+# Product, collection, and public content routes are prerendered as real files.
+# Rewrite only the app routes that do not have a prerendered HTML file.
 
 services:
   - type: web
@@ -26,5 +25,17 @@ services:
         sync: false
     routes:
       - type: rewrite
-        source: /*
+        source: /cart
+        destination: /index.html
+      - type: rewrite
+        source: /checkout/*
+        destination: /index.html
+      - type: rewrite
+        source: /admin
+        destination: /index.html
+      - type: rewrite
+        source: /shop
+        destination: /index.html
+      - type: rewrite
+        source: /shop-by-size/*
         destination: /index.html
