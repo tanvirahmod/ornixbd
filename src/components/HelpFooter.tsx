@@ -128,7 +128,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
               <span>05</span> / WE’RE HERE TO HELP
             </p>
             <h2 className="font-display text-5xl sm:text-6xl md:text-7xl uppercase leading-[0.9]">
-              GOOD TO <span>KNOW.</span>
+              GOOD <span>TO KNOW.</span>
             </h2>
           </div>
 

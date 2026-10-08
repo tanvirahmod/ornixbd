@@ -980,6 +980,7 @@
   user-select: none;
   transform: translateX(-50%);
 }
+.store-watermark[data-watermark] h1 span { color: rgba(247,246,243,.38); }
 .store-page--shop .store-collection-intro.store-watermark::before {
   top: 50%;
   transform: translate(-50%, -50%);

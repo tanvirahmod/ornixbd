@@ -1,6 +1,6 @@
 import { ArrowRight } from 'lucide-react';
 import { Product } from '../lib/supabase';
-import { productParam } from '../lib/utils';
+import { productParam, splitWatermarkedTitle } from '../lib/utils';
 
 interface NewArrivalsProps {
   products: Product[];
@@ -127,6 +127,7 @@ export default function NewArrivals({
   showDiscount = false,
 }: NewArrivalsProps) {
   const viewAllTarget = showDiscount ? 'hot-deals' : 'new-arrivals';
+  const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle(title);
 
   return (
     <section
@@ -141,7 +142,8 @@ export default function NewArrivals({
               <span>{showDiscount ? '03' : '02'}</span> / {showDiscount ? 'THE LAST CALL' : 'FRESH OFF THE PRESS'}
             </p>
             <h2 className="font-display text-5xl sm:text-6xl md:text-8xl uppercase leading-[0.88]">
-              {title}
+              {titleFirstWord}
+              {titleRemainingWords && <> <span>{titleRemainingWords}</span></>}
             </h2>
             <p className="editorial-section-note mt-4">{subtitle}</p>
           </div>

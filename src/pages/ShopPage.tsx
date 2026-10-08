@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { supabase, Product, Category } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { Sparkles } from 'lucide-react';
+import { splitWatermarkedTitle } from '../lib/utils';
 import CategoryGrid from '../components/CategoryGrid';
 import AllProductsSection from '../components/AllProductsSection';
 import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 export default function ShopPage() {
   const { t } = useLanguage();
+  const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle(t('shopCollection'));
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,7 +64,10 @@ export default function ShopPage() {
             <Sparkles aria-hidden="true" />
             {t('shop')} · ORNIX COLLECTIONS
           </span>
-          <h1 className="font-display uppercase">{t('shopCollection')}</h1>
+          <h1 className="font-display uppercase">
+            {titleFirstWord}
+            {titleRemainingWords && <> <span>{titleRemainingWords}</span></>}
+          </h1>
           <p>{t('premiumFashion')}</p>
         </div>
       </section>

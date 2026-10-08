@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Package } from 'lucide-react';
 import { supabase, Product } from '../lib/supabase';
+import { splitWatermarkedTitle } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
 import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 const PAGE_SIZE = 12;
 
 export default function NewArrivalsPage() {
+  const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle('NEW ARRIVALS');
   const [products, setProducts] = useState<Product[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -71,7 +73,7 @@ export default function NewArrivalsPage() {
             02 / JUST DROPPED
           </p>
           <h1 className="font-display text-5xl sm:text-6xl md:text-8xl text-black uppercase tracking-wide leading-none">
-            NEW ARRIVALS
+            {titleFirstWord} <span>{titleRemainingWords}</span>
           </h1>
           <p className="store-page-heading__description text-sm text-black/50 mt-3 font-medium">
             Fresh drops updated weekly — get yours before they sell out.

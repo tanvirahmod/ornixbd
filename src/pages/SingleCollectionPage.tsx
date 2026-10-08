@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronDown, Package } from 'lucide-react';
 import { useParams, Link } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
-import { slugify } from '../lib/utils';
+import { slugify, splitWatermarkedTitle } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_OG_IMAGE } from '../lib/seo';
 
@@ -116,6 +116,7 @@ export default function SingleCollectionPage() {
     'price-low-high': t('priceLowToHigh'),
     'price-high-low': t('priceHighToLow'),
   };
+  const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle(categoryName);
 
   if (loading) {
     return (
@@ -157,7 +158,8 @@ export default function SingleCollectionPage() {
 
         <div className="store-watermark mb-8" data-watermark={categoryName}>
           <h1 className="store-page-title font-display text-5xl sm:text-6xl md:text-8xl font-bold text-stone-900 uppercase tracking-tight">
-            {categoryName}
+            {titleFirstWord}
+            {titleRemainingWords && <> <span>{titleRemainingWords}</span></>}
           </h1>
         </div>
 

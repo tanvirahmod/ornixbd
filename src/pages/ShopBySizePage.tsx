@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Ruler, Package, Loader2 } from 'lucide-react';
 import { supabase, Product } from '../lib/supabase';
+import { splitWatermarkedTitle } from '../lib/utils';
 import { useCategories } from '../lib/siteConfig';
 import { getCoverImage, COVER_FALLBACK, productParam } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_NAME, DEFAULT_DESCRIPTION } from '../lib/seo';
 
 export default function ShopBySizePage() {
+  const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle('Shop by Size');
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
@@ -92,7 +94,7 @@ export default function ShopBySizePage() {
             <Ruler className="w-7 h-7 text-brand-600" />
           </div>
           <h1 className="font-display text-3xl md:text-4xl font-bold text-stone-900 tracking-tight mb-2">
-            Shop by Size
+            {titleFirstWord} <span>{titleRemainingWords}</span>
           </h1>
           <p className="text-stone-500 text-sm max-w-lg mx-auto">
             Pick your size and see every product we have in stock for it right now.

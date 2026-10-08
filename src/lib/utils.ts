@@ -17,6 +17,11 @@ export function productParam(title: string, productCode: string): string {
   return `${slugify(title)}-${productCode.toLowerCase()}`;
 }
 
+export function splitWatermarkedTitle(title: string): [string, string] {
+  const [firstWord = '', ...remainingWords] = title.trim().split(/\s+/);
+  return [firstWord, remainingWords.join(' ')];
+}
+
 /** Possible product_code values encoded at the end of a product URL param,
  *  most likely first: a generated code (`PRD-00001`), a custom code with no
  *  hyphen (`R0YAL304`), or a custom code that itself contains a hyphen
