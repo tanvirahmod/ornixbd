@@ -4504,7 +4504,16 @@ export default function AdminPage() {
                       </div>
                       <div className="p-4">
                         <h3 className="font-semibold text-stone-900 text-sm leading-snug mb-1">{product.title}</h3>
-                        <p className="text-xs text-stone-500 mb-3">{product.stock_count} total in stock</p>
+                        <p className="text-xs text-stone-500 mb-3">
+                          {product.stock_count} total in stock
+                          <span className="text-stone-700 font-medium">
+                            {' · '}{formatBDT(
+                              product.discount_price != null && product.discount_price < product.price
+                                ? Number(product.discount_price)
+                                : Number(product.price)
+                            )}
+                          </span>
+                        </p>
 
                         {product.sizes.length > 0 && product.product_sizes && product.product_sizes.length > 0 ? (
                           <div className="space-y-2">
