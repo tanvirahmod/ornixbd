@@ -944,6 +944,7 @@ export default function AdminPage() {
   // One line per product: a sale can mix several products / sizes.
   type ManualLine = { product_id: string; product_code: string; size: string; quantity: string; amount: string };
   const [manualLines, setManualLines] = useState<ManualLine[]>([{ product_id: '', product_code: '', size: '', quantity: '1', amount: '' }]);
+  const [manualProductPicker, setManualProductPicker] = useState<{ lineIndex: number; query: string } | null>(null);
   const [manualForm, setManualForm] = useState({
     customer_name: '', customer_phone: '',
     seller_name: '', bkash: '',
@@ -5319,6 +5320,16 @@ export default function AdminPage() {
                       ? lineProduct.product_sizes?.find((ps) => ps.size === line.size)
                       : null;
                     const lineAvailable = lineSizeEntry ? lineSizeEntry.quantity : (lineProduct?.stock_count ?? 0);
+                    const productSearchQuery = manualProductPicker?.lineIndex === idx
+                      ? manualProductPicker.query.trim().toLowerCase()
+                      : '';
+                    const matchingManualProducts = products
+                      .filter((product) =>
+                        !productSearchQuery ||
+                        product.title.toLowerCase().includes(productSearchQuery) ||
+                        (product.product_code ?? '').toLowerCase().includes(productSearchQuery)
+                      )
+                      .sort((a, b) => a.title.localeCompare(b.title));
                     const updateLine = (patch: Partial<ManualLine>) =>
                       setManualLines((lines) => lines.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
                     return (
@@ -5339,27 +5350,57 @@ export default function AdminPage() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                       <div className="sm:col-span-2">
                         <label className="block text-sm font-medium text-stone-700 mb-1.5">Product *</label>
-                        <select
-                          value={line.product_id}
-                          onChange={(e) => {
-                            const p = products.find((x) => x.id === e.target.value);
-                            const unit = unitPriceOf(p);
-                            updateLine({
-                              product_id: e.target.value,
-                              product_code: p?.product_code ?? '',
-                              size: '',
-                              amount: unit > 0 ? String(unit * lineQty) : '',
-                            });
-                          }}
-                          className="w-full border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
-                        >
-                          <option value="">Select a product…</option>
-                          {[...products].sort((a, b) => a.title.localeCompare(b.title)).map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.title} — ৳{Number(p.discount_price ?? p.price).toFixed(0)} ({p.stock_count} in stock)
-                            </option>
-                          ))}
-                        </select>
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
+                          <input
+                            type="search"
+                            value={manualProductPicker?.lineIndex === idx
+                              ? manualProductPicker.query
+                              : lineProduct
+                                ? `${lineProduct.title}${lineProduct.product_code ? ` · ${lineProduct.product_code}` : ''}`
+                                : ''}
+                            onFocus={() => setManualProductPicker({ lineIndex: idx, query: '' })}
+                            onChange={(e) => setManualProductPicker({ lineIndex: idx, query: e.target.value })}
+                            onBlur={() => setManualProductPicker((picker) => picker?.lineIndex === idx ? null : picker)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') setManualProductPicker(null);
+                            }}
+                            placeholder="Search product by name or code…"
+                            autoComplete="off"
+                            className="w-full border border-stone-200 rounded-xl pl-10 pr-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                          />
+                          {manualProductPicker?.lineIndex === idx && (
+                            <div className="absolute z-30 top-full left-0 right-0 mt-1 max-h-64 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl">
+                              {matchingManualProducts.length === 0 ? (
+                                <p className="px-3.5 py-3 text-sm text-stone-500">No products match your search.</p>
+                              ) : (
+                                matchingManualProducts.map((p) => (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => {
+                                      const unit = unitPriceOf(p);
+                                      updateLine({
+                                        product_id: p.id,
+                                        product_code: p.product_code ?? '',
+                                        size: '',
+                                        amount: unit > 0 ? String(unit * lineQty) : '',
+                                      });
+                                      setManualProductPicker(null);
+                                    }}
+                                    className="w-full px-3.5 py-2.5 text-left hover:bg-stone-50 border-b border-stone-100 last:border-b-0"
+                                  >
+                                    <span className="block text-sm font-medium text-stone-800">{p.title}</span>
+                                    <span className="block text-xs text-stone-500">
+                                      {p.product_code ? `${p.product_code} · ` : ''}{formatBDT(unitPriceOf(p))} · {p.stock_count} in stock
+                                    </span>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-stone-700 mb-1.5">Size {lineProduct && lineProduct.sizes.length > 0 ? '*' : ''}</label>
