@@ -1,21 +1,26 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Package } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Loader2, Package } from 'lucide-react';
 import { supabase, Product } from '../lib/supabase';
 import { splitWatermarkedTitle } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
 import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
+import { getProductListingSnapshot, setProductListingSnapshot } from '../lib/productListingCache';
+import { useProductListingScroll } from '../lib/useProductListingScroll';
 
 const PAGE_SIZE = 12;
 
 export default function NewArrivalsPage() {
+  const location = useLocation();
+  const cacheKey = `new-arrivals:${location.key}`;
+  const cachedListing = getProductListingSnapshot(cacheKey);
+  useProductListingScroll(cacheKey, cachedListing?.scrollY);
   const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle('NEW ARRIVALS');
-  const [products, setProducts] = useState<Product[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const [products, setProducts] = useState<Product[]>(cachedListing?.products ?? []);
+  const [totalCount, setTotalCount] = useState(cachedListing?.totalCount ?? 0);
+  const [loadedPages, setLoadedPages] = useState(cachedListing?.loadedPages ?? 0);
+  const [loading, setLoading] = useState(!cachedListing);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     setSEO({
@@ -27,44 +32,101 @@ export default function NewArrivalsPage() {
   }, []);
 
   useEffect(() => {
-    async function fetchPage() {
+    let active = true;
+
+    async function fetchFirstPage() {
+      const cached = getProductListingSnapshot(cacheKey);
+      if (cached) {
+        setProducts(cached.products);
+        setTotalCount(cached.totalCount);
+        setLoadedPages(cached.loadedPages);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-
-      const from = (page - 1) * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
-
       const { data, error, count } = await supabase
         .from('products')
         .select('*, product_images(id, image_url, display_order)', { count: 'exact' })
         .order('created_at', { ascending: false })
-        .range(from, to);
+        .range(0, PAGE_SIZE - 1);
 
-      if (!error && data) {
-        setProducts(
-          data.map((p) => ({
-            ...p,
-            product_images: (p.product_images as Product['product_images'])?.sort(
-              (a, b) => a.display_order - b.display_order
-            ),
-          }))
-        );
-        setTotalCount(count ?? 0);
+      if (!active) return;
+      if (error) {
+        console.error('Failed to load new arrivals:', error);
+        setLoading(false);
+        return;
       }
+
+      const firstPage = (data ?? []).map((product) => ({
+        ...product,
+        product_images: (product.product_images as Product['product_images'])?.sort(
+          (a, b) => a.display_order - b.display_order
+        ),
+      }));
+      const countOfProducts = count ?? 0;
+      const firstLoadedPages = firstPage.length > 0 ? 1 : 0;
+      setProducts(firstPage);
+      setTotalCount(countOfProducts);
+      setLoadedPages(firstLoadedPages);
+      setProductListingSnapshot(cacheKey, {
+        products: firstPage,
+        totalCount: countOfProducts,
+        loadedPages: firstLoadedPages,
+      });
       setLoading(false);
     }
-    fetchPage();
-  }, [page]);
+
+    fetchFirstPage();
+    return () => { active = false; };
+  }, [cacheKey]);
+
+  async function loadMore() {
+    if (loadingMore || products.length >= totalCount) return;
+
+    setLoadingMore(true);
+    const from = loadedPages * PAGE_SIZE;
+    const { data, error } = await supabase
+      .from('products')
+      .select('*, product_images(id, image_url, display_order)')
+      .order('created_at', { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) {
+      console.error('Failed to load more new arrivals:', error);
+      setLoadingMore(false);
+      return;
+    }
+
+    const nextPage = (data ?? []).map((product) => ({
+      ...product,
+      product_images: (product.product_images as Product['product_images'])?.sort(
+        (a, b) => a.display_order - b.display_order
+      ),
+    }));
+    const nextProducts = [...products, ...nextPage];
+    const nextLoadedPages = loadedPages + 1;
+    setProducts(nextProducts);
+    setLoadedPages(nextLoadedPages);
+    setProductListingSnapshot(cacheKey, {
+      products: nextProducts,
+      totalCount,
+      loadedPages: nextLoadedPages,
+    });
+    setLoadingMore(false);
+  }
 
   return (
     <div className="store-page store-page--listing min-h-screen bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
 
         {/* Breadcrumb */}
-        <nav className="flex items-center gap-2 text-sm text-stone-500 mb-6">
-          <Link to="/" className="hover:text-stone-900 transition-colors">Home</Link>
-          <span className="text-stone-300">/</span>
-          <span className="text-stone-700 font-medium">New Arrivals</span>
+        <nav aria-label="Breadcrumb" className="mb-6 text-sm text-stone-500">
+          <ol className="flex items-center gap-2">
+            <li><Link to="/" className="hover:text-stone-900 transition-colors">Home</Link></li>
+            <li aria-hidden="true" className="text-stone-300">/</li>
+            <li aria-current="page" className="font-medium text-stone-700">New Arrivals</li>
+          </ol>
         </nav>
 
         {/* Header */}
@@ -105,53 +167,21 @@ export default function NewArrivalsPage() {
           </div>
         )}
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 mt-12">
+        {products.length > 0 && (
+          <p className="mt-6 text-center text-sm text-stone-600" aria-live="polite">
+            Showing {products.length} of {totalCount} products
+          </p>
+        )}
+        {products.length < totalCount && (
+          <div className="mt-5 flex justify-center">
             <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="flex items-center gap-1 px-4 py-2.5 text-sm font-bold uppercase tracking-wide border-2 border-black text-black hover:bg-black hover:text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+              type="button"
+              onClick={loadMore}
+              disabled={loadingMore || loading}
+              className="inline-flex min-w-40 items-center justify-center gap-2 border-2 border-black bg-black px-6 py-3 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-stone-800 disabled:cursor-wait disabled:opacity-70"
             >
-              <ChevronLeft className="w-4 h-4" /> Prev
-            </button>
-
-            <div className="flex items-center gap-1">
-              {Array.from({ length: totalPages }).map((_, i) => {
-                const p = i + 1;
-                // Always show first, last, current, and neighbours
-                const show =
-                  p === 1 ||
-                  p === totalPages ||
-                  Math.abs(p - page) <= 1;
-                if (!show) {
-                  // Show ellipsis only once between gaps
-                  if (p === 2 && page > 3) return <span key={p} className="px-1 text-stone-400">…</span>;
-                  if (p === totalPages - 1 && page < totalPages - 2) return <span key={p} className="px-1 text-stone-400">…</span>;
-                  return null;
-                }
-                return (
-                  <button
-                    key={p}
-                    onClick={() => setPage(p)}
-                    className={`w-10 h-10 text-sm font-bold border-2 transition-all duration-200 ${
-                      p === page
-                        ? 'bg-black border-black text-white'
-                        : 'border-black text-black hover:bg-black hover:text-white'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="flex items-center gap-1 px-4 py-2.5 text-sm font-bold uppercase tracking-wide border-2 border-black text-black hover:bg-black hover:text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              Next <ChevronRight className="w-4 h-4" />
+              {loadingMore && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {loadingMore ? 'Loading...' : 'Load More'}
             </button>
           </div>
         )}

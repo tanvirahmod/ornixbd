@@ -13,8 +13,18 @@ export const ORD_LBL = 'text-[11px] font-semibold uppercase tracking-wider text-
 // Pill colors per order status (used on order cards)
 export const ORDER_STATUS_PILL: Record<string, string> = {
   pending: 'bg-amber-50 text-amber-600 border border-amber-200',
+  bkash_nagad_paid: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  booked: 'bg-sky-50 text-sky-700 border border-sky-200',
   delivered: 'bg-emerald-50 text-emerald-600 border border-emerald-200',
   canceled: 'bg-red-50 text-red-600 border border-red-200',
+};
+
+export const ORDER_STATUS_LABEL: Record<string, string> = {
+  pending: 'Pending',
+  bkash_nagad_paid: 'b-kash/Nagad Paid',
+  booked: 'Booked',
+  delivered: 'Delivered',
+  canceled: 'Canceled',
 };
 
 // Tone palette for the finance summary cards

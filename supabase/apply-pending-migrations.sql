@@ -1705,3 +1705,11 @@ begin
   begin grant execute on function public.admin_decrement_stock(jsonb) to authenticated; exception when others then null; end;
   begin grant execute on function public.admin_restore_order_stock(uuid[]) to authenticated; exception when others then null; end;
 end $$;
+
+-- Manual order statuses: verified mobile payment and ready/booked state.
+ALTER TABLE public.orders
+  DROP CONSTRAINT IF EXISTS orders_status_check;
+
+ALTER TABLE public.orders
+  ADD CONSTRAINT orders_status_check
+  CHECK (status IN ('pending', 'bkash_nagad_paid', 'booked', 'delivered', 'canceled'));

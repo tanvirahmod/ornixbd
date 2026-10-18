@@ -1,21 +1,26 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Tag } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Tag } from 'lucide-react';
 import { supabase, Product } from '../lib/supabase';
 import { splitWatermarkedTitle } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
 import { setSEO, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
+import { getProductListingSnapshot, setProductListingSnapshot } from '../lib/productListingCache';
+import { useProductListingScroll } from '../lib/useProductListingScroll';
 
 const PAGE_SIZE = 12;
 
 export default function HotDealsPage() {
+  const location = useLocation();
+  const cacheKey = `hot-deals:${location.key}`;
+  const cachedListing = getProductListingSnapshot(cacheKey);
+  useProductListingScroll(cacheKey, cachedListing?.scrollY);
   const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle('HOT DEALS');
-  const [products, setProducts] = useState<Product[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const [products, setProducts] = useState<Product[]>(cachedListing?.products ?? []);
+  const [allDeals, setAllDeals] = useState<Product[]>(cachedListing?.allProducts ?? []);
+  const [totalCount, setTotalCount] = useState(cachedListing?.totalCount ?? 0);
+  const [loadedPages, setLoadedPages] = useState(cachedListing?.loadedPages ?? 0);
+  const [loading, setLoading] = useState(!cachedListing);
 
   useEffect(() => {
     setSEO({
@@ -27,9 +32,20 @@ export default function HotDealsPage() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+
     async function fetchPage() {
+      const cached = getProductListingSnapshot(cacheKey);
+      if (cached) {
+        setProducts(cached.products);
+        setAllDeals(cached.allProducts ?? []);
+        setTotalCount(cached.totalCount);
+        setLoadedPages(cached.loadedPages);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
 
       // Fetch ALL discounted products to filter client-side
       // (Supabase JS v2 can't compare two columns in a WHERE clause)
@@ -39,39 +55,66 @@ export default function HotDealsPage() {
         .not('discount_price', 'is', null)
         .order('created_at', { ascending: false });
 
-      if (!error && data) {
-        // Only keep rows where discount_price is genuinely lower than price
-        const deals = data
-          .filter(
-            (p) => p.discount_price != null && Number(p.discount_price) < Number(p.price)
-          )
-          .map((p) => ({
-            ...p,
-            product_images: (p.product_images as Product['product_images'])?.sort(
-              (a, b) => a.display_order - b.display_order
-            ),
-          }));
-
-        setTotalCount(deals.length);
-
-        // Slice the current page
-        const from = (page - 1) * PAGE_SIZE;
-        setProducts(deals.slice(from, from + PAGE_SIZE));
+      if (!active) return;
+      if (error) {
+        console.error('Failed to load hot deals:', error);
+        setLoading(false);
+        return;
       }
+
+      // Only keep rows where discount_price is genuinely lower than price.
+      const deals = (data ?? [])
+        .filter((product) => product.discount_price != null && Number(product.discount_price) < Number(product.price))
+        .map((product) => ({
+          ...product,
+          product_images: (product.product_images as Product['product_images'])?.sort(
+            (a, b) => a.display_order - b.display_order
+          ),
+        }));
+      const firstPage = deals.slice(0, PAGE_SIZE);
+      const firstLoadedPages = firstPage.length > 0 ? 1 : 0;
+      setAllDeals(deals);
+      setProducts(firstPage);
+      setTotalCount(deals.length);
+      setLoadedPages(firstLoadedPages);
+      setProductListingSnapshot(cacheKey, {
+        products: firstPage,
+        allProducts: deals,
+        totalCount: deals.length,
+        loadedPages: firstLoadedPages,
+      });
       setLoading(false);
     }
     fetchPage();
-  }, [page]);
+    return () => { active = false; };
+  }, [cacheKey]);
+
+  function loadMore() {
+    if (products.length >= totalCount) return;
+
+    const nextLoadedPages = loadedPages + 1;
+    const nextProducts = allDeals.slice(0, nextLoadedPages * PAGE_SIZE);
+    setProducts(nextProducts);
+    setLoadedPages(nextLoadedPages);
+    setProductListingSnapshot(cacheKey, {
+      products: nextProducts,
+      allProducts: allDeals,
+      totalCount,
+      loadedPages: nextLoadedPages,
+    });
+  }
 
   return (
     <div className="store-page store-page--listing store-page--deals min-h-screen bg-[#F4EFEA]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-14">
 
         {/* Breadcrumb */}
-        <nav className="flex items-center gap-2 text-sm text-stone-500 mb-6">
-          <Link to="/" className="hover:text-stone-900 transition-colors">Home</Link>
-          <span className="text-stone-300">/</span>
-          <span className="text-stone-700 font-medium">Hot Deals</span>
+        <nav aria-label="Breadcrumb" className="mb-6 text-sm text-stone-500">
+          <ol className="flex items-center gap-2">
+            <li><Link to="/" className="hover:text-stone-900 transition-colors">Home</Link></li>
+            <li aria-hidden="true" className="text-stone-300">/</li>
+            <li aria-current="page" className="font-medium text-stone-700">Hot Deals</li>
+          </ol>
         </nav>
 
         {/* Header */}
@@ -112,51 +155,20 @@ export default function HotDealsPage() {
           </div>
         )}
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 mt-12">
+        {products.length > 0 && (
+          <p className="mt-6 text-center text-sm text-stone-600" aria-live="polite">
+            Showing {products.length} of {totalCount} products
+          </p>
+        )}
+        {products.length < totalCount && (
+          <div className="mt-5 flex justify-center">
             <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="flex items-center gap-1 px-4 py-2.5 text-sm font-bold uppercase tracking-wide border-2 border-black text-black hover:bg-black hover:text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+              type="button"
+              onClick={loadMore}
+              disabled={loading}
+              className="inline-flex min-w-40 items-center justify-center gap-2 border-2 border-black bg-black px-6 py-3 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-stone-800 disabled:cursor-wait disabled:opacity-70"
             >
-              <ChevronLeft className="w-4 h-4" /> Prev
-            </button>
-
-            <div className="flex items-center gap-1">
-              {Array.from({ length: totalPages }).map((_, i) => {
-                const p = i + 1;
-                const show =
-                  p === 1 ||
-                  p === totalPages ||
-                  Math.abs(p - page) <= 1;
-                if (!show) {
-                  if (p === 2 && page > 3) return <span key={p} className="px-1 text-stone-400">…</span>;
-                  if (p === totalPages - 1 && page < totalPages - 2) return <span key={p} className="px-1 text-stone-400">…</span>;
-                  return null;
-                }
-                return (
-                  <button
-                    key={p}
-                    onClick={() => setPage(p)}
-                    className={`w-10 h-10 text-sm font-bold border-2 transition-all duration-200 ${
-                      p === page
-                        ? 'bg-black border-black text-white'
-                        : 'border-black text-black hover:bg-black hover:text-white'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="flex items-center gap-1 px-4 py-2.5 text-sm font-bold uppercase tracking-wide border-2 border-black text-black hover:bg-black hover:text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              Next <ChevronRight className="w-4 h-4" />
+              Load More
             </button>
           </div>
         )}

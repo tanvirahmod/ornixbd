@@ -95,7 +95,7 @@ export type ProductSize = {
   quantity: number;
 };
 
-export type OrderStatus = 'pending' | 'delivered' | 'canceled';
+export type OrderStatus = 'pending' | 'bkash_nagad_paid' | 'booked' | 'delivered' | 'canceled';
 
 export type Order = {
   id: string;

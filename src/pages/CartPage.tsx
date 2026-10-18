@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { ArrowLeft, Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
@@ -58,13 +58,13 @@ export default function CartPage() {
 
   return (
     <div className="store-page store-page--cart min-h-screen bg-stone-50">
-      <div className="max-w-5xl mx-auto px-4 pt-6 flex items-center gap-2 text-sm text-stone-500">
-        <button onClick={() => onNavigate('home')} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
-          <ArrowLeft className="w-4 h-4" /> {t('homeBreadcrumb')}
-        </button>
-        <span className="text-stone-300">/</span>
-        <span className="text-stone-700 font-medium">{t('cartTitle')}</span>
-      </div>
+      <nav aria-label="Breadcrumb" className="max-w-5xl mx-auto px-4 pt-6 text-sm text-stone-500">
+        <ol className="flex items-center gap-2">
+          <li><Link to="/" className="hover:text-stone-900 transition-colors">{t('homeBreadcrumb')}</Link></li>
+          <li aria-hidden="true" className="text-stone-300">/</li>
+          <li aria-current="page" className="font-medium text-stone-700">{t('cartTitle')}</li>
+        </ol>
+      </nav>
 
       <div className="max-w-5xl mx-auto px-4 py-6 md:py-10">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-6">

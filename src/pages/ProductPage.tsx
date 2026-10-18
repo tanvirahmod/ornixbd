@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck, Check, Sparkles, BellRing, Download, Loader2, MessageCircle } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, ShoppingCart, Package, AlertCircle, Truck, ShieldCheck, Check, Sparkles, BellRing, Download, Loader2, MessageCircle } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
 import { supabase, Product } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
-import { extractProductCodeCandidates, productParam } from '../lib/utils';
+import { extractProductCodeCandidates, productParam, slugify } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
 import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
 
@@ -252,13 +252,41 @@ export default function ProductPage() {
   return (
     <div className="store-page store-page--product min-h-screen bg-stone-50">
       {/* Breadcrumb */}
-      <div className="product-breadcrumb max-w-6xl mx-auto px-4 sm:px-6 pt-6 pb-0 flex items-center gap-2 text-sm text-stone-500">
-        <button onClick={() => onNavigate('home')} className="flex items-center gap-1 hover:text-stone-900 transition-colors">
-          <ArrowLeft className="w-4 h-4" /> {t('homeBreadcrumb')}
-        </button>
-        <span className="text-stone-300">/</span>
-        <span className="truncate text-stone-700 font-medium">{product.title}</span>
-      </div>
+      <nav
+        className="product-breadcrumb max-w-6xl mx-auto px-4 sm:px-6 pt-6 pb-0 text-sm text-stone-500"
+        aria-label="Breadcrumb"
+      >
+        <ol className="flex min-w-0 items-center gap-2">
+          <li className="shrink-0">
+            <Link to="/" className="hover:text-stone-900 transition-colors">
+              {t('homeBreadcrumb')}
+            </Link>
+          </li>
+          {product.categories && (
+            <>
+              <li aria-hidden="true" className="text-stone-300">/</li>
+              <li className="shrink-0">
+                <Link to="/collections" className="hover:text-stone-900 transition-colors">
+                  {t('collections')}
+                </Link>
+              </li>
+              <li aria-hidden="true" className="text-stone-300">/</li>
+              <li className="min-w-0">
+                <Link
+                  to={`/collections/${slugify(product.categories.name)}`}
+                  className="block truncate hover:text-stone-900 transition-colors"
+                >
+                  {product.categories.name}
+                </Link>
+              </li>
+            </>
+          )}
+          <li aria-hidden="true" className="text-stone-300">/</li>
+          <li aria-current="page" className="min-w-0 truncate font-medium text-stone-700">
+            {product.title}
+          </li>
+        </ol>
+      </nav>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 md:py-10">
         <div className="product-layout grid md:grid-cols-2 gap-8 lg:gap-16">

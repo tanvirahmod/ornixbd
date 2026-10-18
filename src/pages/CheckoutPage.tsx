@@ -3,7 +3,7 @@ import {
   Check, ChevronRight, CheckCircle, Loader2, User, Phone, MapPin, Wallet, Hash,
   ShieldCheck, ShoppingBag, Truck, Tag, X, Pencil, Banknote, AlertTriangle, PackageSearch,
 } from 'lucide-react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { supabase, Product, Coupon } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
 import ZoneSelect, { zoneForDistrict, parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS, type ZoneRateMap } from '../components/ZoneSelect';
@@ -12,6 +12,7 @@ import { useNavigation } from '../lib/navigation';
 import { useCart, CartItem } from '../lib/CartContext';
 import { COVER_FALLBACK } from '../lib/utils';
 import { setSEO, SITE_NAME } from '../lib/seo';
+import { isValidBdMobile, toAsciiDigits } from '../lib/bdPhone';
 
 /* ────────────────────────────────────────────────────────────
    CHECKOUT CONSTANTS — tweak numbers here
@@ -67,26 +68,6 @@ function loadPersistedCheckout(): { name: string; phone: string; address: string
   } catch {
     return null;
   }
-}
-
-/** Map Bengali (০-৯) and Arabic-Indic (٠-٩) digits to ASCII so users typing
- *  with a Bangla keyboard still produce valid phone numbers / TrxIDs. */
-export function toAsciiDigits(raw: string): string {
-  return raw.replace(/[\u09E6-\u09EF\u0660-\u0669]/g, (d) => {
-    const code = d.charCodeAt(0);
-    return String.fromCharCode(code - (code >= 0x09e6 ? 0x09e6 : 0x0660) + 48);
-  });
-}
-
-/** Normalizes a BD mobile number: transliterates Bangla digits, keeps digits and a single leading + */
-function normalizeBdPhone(raw: string): string {
-  const trimmed = toAsciiDigits(raw).replace(/[\s\-()]/g, '');
-  return trimmed.startsWith('+') ? `+${trimmed.slice(1).replace(/\D/g, '')}` : trimmed.replace(/\D/g, '');
-}
-
-function isValidBdMobile(raw: string): boolean {
-  const normalized = normalizeBdPhone(raw);
-  return /^(?:(?:\+|00)?880|0)?1[3-9]\d{8}$/.test(normalized);
 }
 
 export default function CheckoutPage() {
@@ -895,13 +876,13 @@ export default function CheckoutPage() {
       {/* Page header: clean breadcrumb + big centered title below */}
       <div className="bg-white border-b border-stone-100">
         <div className="max-w-5xl mx-auto px-4 pt-5 pb-6 text-center">
-          <div className="flex items-center justify-center gap-2 text-sm text-stone-400">
-            <button onClick={() => onNavigate('home')} className="hover:text-stone-700 transition-colors">
-              {t('home')}
-            </button>
-            <span className="text-stone-300">/</span>
-            <span className="text-stone-600 font-medium">{t('checkoutTitle')}</span>
-          </div>
+          <nav aria-label="Breadcrumb" className="text-sm text-stone-400">
+            <ol className="flex items-center justify-center gap-2">
+              <li><Link to="/" className="hover:text-stone-700 transition-colors">{t('home')}</Link></li>
+              <li aria-hidden="true" className="text-stone-300">/</li>
+              <li aria-current="page" className="font-medium text-stone-600">{t('checkoutTitle')}</li>
+            </ol>
+          </nav>
           <h1 className="mt-1.5 font-display text-3xl sm:text-4xl font-bold text-stone-900">{t('checkoutTitle')}</h1>
         </div>
       </div>

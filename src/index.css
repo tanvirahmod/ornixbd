@@ -1157,7 +1157,7 @@
   color: #77736c;
   font-size: .78rem;
 }
-.product-breadcrumb button:hover { color: #806849; }
+.product-breadcrumb a:hover { color: #806849; }
 .product-gallery { min-width: 0; }
 .product-gallery__main {
   border: 1px solid #e4dfd6;

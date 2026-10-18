@@ -11,9 +11,9 @@ import ImageUploader from '../components/ImageUploader';
 import { zoneForDistrict, DELIVERY_ZONES, type DeliveryZone } from '../components/ZoneSelect';
 import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
 import ThanaSelect from '../components/ThanaSelect';
-import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, FinCard, FinDelta, DailyBars, EmptyState, ToastStack, nextToastId, type Toast } from '../admin/ui';
+import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, ORDER_STATUS_LABEL, FinCard, FinDelta, DailyBars, EmptyState, ToastStack, nextToastId, type Toast } from '../admin/ui';
 import { printLabels, type StickersPerPage } from '../lib/parcelLabel';
-import { toAsciiDigits } from './CheckoutPage';
+import { normalizeBdMobileForCourier, toAsciiDigits } from '../lib/bdPhone';
 import { printManualOrdersReport, manualOrderInDateRange } from '../lib/manualOrdersReport';
 import { printFinanceReport, type FinanceReportRow } from '../lib/financeReport';
 import { useAdminAuth, ALL_CAPABILITIES } from '../lib/useAdminAuth';
@@ -84,6 +84,40 @@ type ManualGroup = {
   status: OrderStatus;
 };
 
+const ORDER_STATUS_OPTIONS: Array<{
+  value: OrderStatus;
+  label: string;
+  icon: JSX.Element;
+  activeCls: string;
+}> = [
+  { value: 'pending', label: 'Pending', icon: <Clock className="w-4 h-4" />, activeCls: 'bg-amber-50 text-amber-700' },
+  { value: 'bkash_nagad_paid', label: 'b-kash/Nagad Paid', icon: <Banknote className="w-4 h-4" />, activeCls: 'bg-emerald-50 text-emerald-700' },
+  { value: 'booked', label: 'Booked', icon: <CheckCircle2 className="w-4 h-4" />, activeCls: 'bg-sky-50 text-sky-700' },
+  { value: 'delivered', label: 'Delivered', icon: <Truck className="w-4 h-4" />, activeCls: 'bg-emerald-50 text-emerald-700' },
+  { value: 'canceled', label: 'Canceled', icon: <XCircle className="w-4 h-4" />, activeCls: 'bg-red-50 text-red-700' },
+];
+
+function orderStatusIcon(status: OrderStatus, className: string) {
+  const Icon = status === 'delivered'
+    ? Truck
+    : status === 'canceled'
+      ? XCircle
+      : status === 'bkash_nagad_paid'
+        ? Banknote
+        : status === 'booked'
+          ? CheckCircle2
+          : Clock;
+  return <Icon className={className} />;
+}
+
+function orderStatusButtonClass(status: OrderStatus): string {
+  if (status === 'delivered') return 'bg-emerald-500 text-white hover:bg-emerald-400';
+  if (status === 'canceled') return 'bg-red-100 text-red-600 hover:bg-red-200';
+  if (status === 'bkash_nagad_paid') return 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200';
+  if (status === 'booked') return 'bg-sky-100 text-sky-800 hover:bg-sky-200';
+  return 'bg-stone-100 text-stone-700 hover:bg-stone-200';
+}
+
 /** Dot color for an order group's Steadfast booking stage (compact/grid views). */
 function STORE_STAGE_DOT(b: boolean, stage: SteadfastStage | null): string {
   if (!b) return 'bg-stone-300';
@@ -147,7 +181,7 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
                 <p className="font-semibold text-stone-900 text-sm truncate">{firstRow.customer_name || 'Unknown customer'}</p>
                 <span className="font-mono text-[11px] font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.code}</span>
                 <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
-                  {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                  {ORDER_STATUS_LABEL[g.status]}
                 </span>
                 {g.rows.length > 1 && (
                   <span className="text-[11px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.rows.length} items</span>
@@ -170,22 +204,15 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
               <button
                 onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
                 disabled={updatingDelivery === g.key}
-                className={`flex items-center px-2 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${
-                  g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                    : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                }`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
               >
-                {updatingDelivery === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : g.status === 'delivered' ? <Truck className="w-3.5 h-3.5" /> : g.status === 'canceled' ? <XCircle className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
+                {updatingDelivery === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : orderStatusIcon(g.status, 'w-3.5 h-3.5')}
+                <span className="hidden sm:inline">{ORDER_STATUS_LABEL[g.status]}</span>
                 <ChevronDown className="w-3 h-3" />
               </button>
               {orderStatusOpen === g.key && (
-                <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
-                  {([
-                    { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
-                    { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
-                    { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
-                  ]).map((opt) => (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                  {ORDER_STATUS_OPTIONS.map((opt) => (
                     <button
                       key={opt.value}
                       onClick={() => setGroupStatus(g, opt.value)}
@@ -193,7 +220,7 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
                         g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
                       }`}
                     >
-                      {opt.label}
+                      <span className="inline-flex items-center gap-2">{opt.icon}{opt.label}</span>
                     </button>
                   ))}
                   <div className="border-t border-stone-100 my-1" />
@@ -285,7 +312,7 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
                 <p className="text-[11px] text-stone-500 truncate">{firstRow.customer_phone}</p>
               </div>
               <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
-                {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                {ORDER_STATUS_LABEL[g.status]}
               </span>
             </div>
             <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[11px]">
@@ -312,22 +339,14 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
                 <button
                   onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
                   disabled={updatingDelivery === g.key}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${
-                    g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                      : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                        : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                  }`}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
                 >
-                  {updatingDelivery === g.key ? <Loader2 className="w-3 h-3 animate-spin" /> : g.status === 'delivered' ? <Truck className="w-3 h-3" /> : g.status === 'canceled' ? <XCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                  {updatingDelivery === g.key ? <Loader2 className="w-3 h-3 animate-spin" /> : orderStatusIcon(g.status, 'w-3 h-3')}
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {orderStatusOpen === g.key && (
-                  <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
-                    {([
-                      { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
-                      { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
-                      { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
-                    ]).map((opt) => (
+                  <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                    {ORDER_STATUS_OPTIONS.map((opt) => (
                       <button
                         key={opt.value}
                         onClick={() => setGroupStatus(g, opt.value)}
@@ -335,7 +354,7 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
                           g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
                         }`}
                       >
-                        {opt.label}
+                        <span className="inline-flex items-center gap-2">{opt.icon}{opt.label}</span>
                       </button>
                     ))}
                     <div className="border-t border-stone-100 my-1" />
@@ -400,7 +419,7 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
                 <p className="font-semibold text-stone-900 text-sm truncate">{g.customer || 'Walk-in customer'}</p>
                 <span className="font-mono text-[11px] font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.code}</span>
                 <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
-                  {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                  {ORDER_STATUS_LABEL[g.status]}
                 </span>
                 {g.rows.length > 1 && (
                   <span className="text-[11px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.rows.length} items</span>
@@ -424,22 +443,15 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
             <div className="relative flex-shrink-0">
               <button
                 onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
-                className={`flex items-center px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                    : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                }`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${orderStatusButtonClass(g.status)}`}
               >
-                {g.status === 'delivered' ? <Truck className="w-3.5 h-3.5" /> : g.status === 'canceled' ? <XCircle className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
+                {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
+                <span className="hidden sm:inline">{ORDER_STATUS_LABEL[g.status]}</span>
                 <ChevronDown className="w-3 h-3" />
               </button>
               {manualStatusOpen === g.key && (
-                <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
-                  {([
-                    { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
-                    { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
-                    { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
-                  ]).map((opt) => (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                  {ORDER_STATUS_OPTIONS.map((opt) => (
                     <button
                       key={opt.value}
                       onClick={() => setManualGroupStatus(g, opt.value)}
@@ -447,7 +459,10 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
                         g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
                       }`}
                     >
+                      <span className="inline-flex items-center gap-2">
+                        {opt.icon}
                       {opt.label}
+                      </span>
                     </button>
                   ))}
                   <div className="border-t border-stone-100 my-1" />
@@ -529,7 +544,7 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
                 <p className="text-[11px] text-stone-500 truncate">{g.phone && g.phone !== '—' ? g.phone : 'In-store sale'}{g.seller ? ` · ${g.seller}` : ''}</p>
               </div>
               <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
-                {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                {ORDER_STATUS_LABEL[g.status]}
               </span>
             </div>
             <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[11px]">
@@ -560,22 +575,14 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
               <div className="relative">
                 <button
                   onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all ${
-                    g.status === 'delivered' ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                      : g.status === 'canceled' ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                        : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                  }`}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all ${orderStatusButtonClass(g.status)}`}
                 >
-                  {g.status === 'delivered' ? <Truck className="w-3 h-3" /> : g.status === 'canceled' ? <XCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                  {orderStatusIcon(g.status, 'w-3 h-3')}
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {manualStatusOpen === g.key && (
-                  <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
-                    {([
-                      { value: 'pending' as OrderStatus, label: 'Pending', activeCls: 'bg-amber-50 text-amber-700' },
-                      { value: 'delivered' as OrderStatus, label: 'Delivered', activeCls: 'bg-emerald-50 text-emerald-700' },
-                      { value: 'canceled' as OrderStatus, label: 'Canceled', activeCls: 'bg-red-50 text-red-700' },
-                    ]).map((opt) => (
+                  <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                    {ORDER_STATUS_OPTIONS.map((opt) => (
                       <button
                         key={opt.value}
                         onClick={() => setManualGroupStatus(g, opt.value)}
@@ -583,7 +590,10 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
                           g.status === opt.value ? `${opt.activeCls} font-semibold` : 'text-stone-700'
                         }`}
                       >
+                        <span className="inline-flex items-center gap-2">
+                          {opt.icon}
                         {opt.label}
+                        </span>
                       </button>
                     ))}
                     <div className="border-t border-stone-100 my-1" />
@@ -724,6 +734,7 @@ export default function AdminPage() {
   const [productPage, setProductPage] = useState(1);
   const PRODUCT_PAGE_SIZE = 12;
   const [stockSearch, setStockSearch] = useState('');
+  const [stockGlobalSearch, setStockGlobalSearch] = useState('');
   const [stockPage, setStockPage] = useState(1);
   const STOCK_PAGE_SIZE = 12;
   const [stockSelectedCategory, setStockSelectedCategory] = useState<string | null>(null);
@@ -745,6 +756,7 @@ export default function AdminPage() {
   const ORDER_PAGE_SIZE = 15;
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Order[]>([]);
+  const [stockNotifications, setStockNotifications] = useState<AdminLog[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [updatingDelivery, setUpdatingDelivery] = useState<string | null>(null);
   const [orderStatusOpen, setOrderStatusOpen] = useState<string | null>(null);
@@ -1154,6 +1166,8 @@ export default function AdminPage() {
 
   // ── Dashboard at-a-glance stats (Orders tab is website orders only, one purchase = one order) ──
   const pendingOrders = storeGroups.filter((g) => g.status === 'pending').length;
+  const bkashNagadPaidOrders = storeGroups.filter((g) => g.status === 'bkash_nagad_paid').length;
+  const bookedStatusOrders = storeGroups.filter((g) => g.status === 'booked').length;
   const deliveredOrders = storeGroups.filter((g) => g.status === 'delivered').length;
   const canceledOrders = storeGroups.filter((g) => g.status === 'canceled').length;
   const manualOrders = orders.filter((o) => o.order_source === 'manual');
@@ -1199,6 +1213,8 @@ export default function AdminPage() {
   const manualStatusCounts: Record<'all' | OrderStatus, number> = {
     all: manualGroups.length,
     pending: manualGroups.filter((g) => g.status === 'pending').length,
+    bkash_nagad_paid: manualGroups.filter((g) => g.status === 'bkash_nagad_paid').length,
+    booked: manualGroups.filter((g) => g.status === 'booked').length,
     delivered: manualGroups.filter((g) => g.status === 'delivered').length,
     canceled: manualGroups.filter((g) => g.status === 'canceled').length,
   };
@@ -1256,20 +1272,22 @@ export default function AdminPage() {
     productSafePage * PRODUCT_PAGE_SIZE
   );
 
-  const filteredStockProducts = stockSelectedCategory === null
-    ? []
-    : products
-        .filter((product) =>
-          stockSelectedCategory === '__uncategorized__'
-            ? !product.category_id
-            : product.category_id === stockSelectedCategory
+  const stockQuery = (stockSelectedCategory === null ? stockGlobalSearch : stockSearch).trim().toLowerCase();
+  const filteredStockProducts = products
+    .filter((product) => stockSelectedCategory === null
+      ? Boolean(stockQuery) && (
+          product.title.toLowerCase().includes(stockQuery) ||
+          (product.product_code ?? '').toLowerCase().includes(stockQuery)
         )
-        .filter((product) => {
-          const q = stockSearch.trim().toLowerCase();
-          return !q ||
-            product.title.toLowerCase().includes(q) ||
-            (product.product_code ?? '').toLowerCase().includes(q);
-        });
+      : stockSelectedCategory === '__uncategorized__'
+        ? !product.category_id
+        : product.category_id === stockSelectedCategory
+    )
+    .filter((product) => {
+      if (!stockQuery) return true;
+      return product.title.toLowerCase().includes(stockQuery) ||
+        (product.product_code ?? '').toLowerCase().includes(stockQuery);
+    });
   const stockTotalPages = Math.max(1, Math.ceil(filteredStockProducts.length / STOCK_PAGE_SIZE));
   const stockSafePage = Math.min(stockPage, stockTotalPages);
   const pagedStockProducts = filteredStockProducts.slice(
@@ -1974,6 +1992,9 @@ export default function AdminPage() {
         (payload) => {
           const entry = payload.new as AdminLog;
           if (!entry?.id) return;
+          if (isSuperAdmin && entry.action === 'stock_sell') {
+            setStockNotifications((prev) => (prev.some((log) => log.id === entry.id) ? prev : [entry, ...prev]));
+          }
           setAdminLogs((prev) => {
             if (prev.some((l) => l.id === entry.id)) return prev;
             // logAdmin() optimistically appends a local-… twin of this row
@@ -2001,7 +2022,7 @@ export default function AdminPage() {
     }
 
     return () => { supabase.removeChannel(channel); };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isSuperAdmin, currentAdminId]);
 
   async function fetchAll() {
     setLoading(true);
@@ -2534,8 +2555,8 @@ export default function AdminPage() {
   const applyOrderStatus = async (orderId: string, status: OrderStatus, opts?: { via?: string; silent?: boolean }) => {
     setUpdatingDelivery(orderId);
 
-    const prevOrders = orders;
-    const prevNotifications = notifications;
+    const previousOrder = orders.find((order) => order.id === orderId);
+    const previousNotification = notifications.find((notification) => notification.id === orderId);
     setOrders((prev) => prev.map((order) => (
       order.id === orderId ? { ...order, status, delivered: status === 'delivered' } : order
     )));
@@ -2545,9 +2566,17 @@ export default function AdminPage() {
 
     const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
     if (error) {
-      setOrders(prevOrders);
-      setNotifications(prevNotifications);
+      if (previousOrder) {
+        setOrders((prev) => prev.map((order) => order.id === orderId ? previousOrder : order));
+      }
+      if (previousNotification) {
+        setNotifications((prev) => prev.map((notification) => (
+          notification.id === orderId ? previousNotification : notification
+        )));
+      }
       showToast('error', `Failed to update order status: ${error.message}`);
+      setUpdatingDelivery(null);
+      return false;
     } else {
       // Audit only after the change actually saved — a failed update must not
       // leave a log entry claiming it happened.
@@ -2558,10 +2587,11 @@ export default function AdminPage() {
         const row = orders.find((o) => o.id === orderId);
         if (row) await restoreOrderStock([row]);
       }
-      if (!opts?.silent) showToast('success', `Order marked as ${status}.`);
+      if (!opts?.silent) showToast('success', `Order marked as ${ORDER_STATUS_LABEL[status]}.`);
     }
 
     setUpdatingDelivery(null);
+    return true;
   };
 
   const handleDeleteOrder = async (orderId: string) => {
@@ -2600,15 +2630,20 @@ export default function AdminPage() {
   };
 
   // Status for every row of a purchase (the card's dropdown).
-  const setGroupStatus = (g: StoreGroup, status: OrderStatus) => {
+  const setGroupStatus = async (g: StoreGroup, status: OrderStatus) => {
     setOrderStatusOpen(null);
     if (status === 'canceled') {
       // Destructive — the confirm modal cancels every row sharing the code.
       setCancelOrderConfirm(g.rows[0]?.id ?? null);
       return;
     }
-    for (const row of g.rows) {
-      if (row.status !== status) void applyOrderStatus(row.id, status);
+    const rowsToUpdate = g.rows.filter((row) => row.status !== status);
+    if (rowsToUpdate.length === 0) return;
+    const results = await Promise.all(
+      rowsToUpdate.map((row) => applyOrderStatus(row.id, status, { silent: true }))
+    );
+    if (results.some(Boolean)) {
+      showToast('success', `Order marked as ${ORDER_STATUS_LABEL[status]}.`);
     }
   };
 
@@ -2700,8 +2735,8 @@ export default function AdminPage() {
   // tracking code back to every row.
   const bookCartConsignment = async (rows: Order[]): Promise<string | null> => {
     if (rows.length === 0) return null;
-    const phone = rows[0].customer_phone;
-    if (!/^01[3-9]\d{8}$/.test(phone)) {
+    const phone = normalizeBdMobileForCourier(rows[0].customer_phone);
+    if (!phone) {
       showToast('error', `${rows[0].order_code ?? 'Order'}: Steadfast needs a valid 11-digit customer phone to book a pickup.`);
       return null;
     }
@@ -2817,8 +2852,8 @@ export default function AdminPage() {
     }
     // Steadfast rejects consignments without a real 11-digit mobile — the
     // customer phone is optional in the manual form, so check before booking.
-    const phone = targets[0].customer_phone;
-    if (!/^01[3-9]\d{8}$/.test(phone)) {
+    const phone = normalizeBdMobileForCourier(targets[0].customer_phone);
+    if (!phone) {
       showToast('error', 'Steadfast needs a valid 11-digit customer phone (e.g. 01712345678) to book a pickup.');
       return;
     }
@@ -2909,7 +2944,7 @@ export default function AdminPage() {
   };
 
   // Status for every row of the sale (the Orders-tab dropdown, group-wide).
-  const setManualGroupStatus = (g: ManualGroup, status: OrderStatus) => {
+  const setManualGroupStatus = async (g: ManualGroup, status: OrderStatus) => {
     setManualStatusOpen(null);
     if (status === 'canceled') {
       // Destructive — reuse the shared confirm modal; the click handler
@@ -2917,15 +2952,19 @@ export default function AdminPage() {
       setCancelOrderConfirm(g.rows[0]?.id ?? null);
       return;
     }
-    for (const row of g.rows) {
-      if (row.status !== status) void applyOrderStatus(row.id, status);
+    const rowsToUpdate = g.rows.filter((row) => row.status !== status);
+    if (rowsToUpdate.length === 0) return;
+    const results = await Promise.all(
+      rowsToUpdate.map((row) => applyOrderStatus(row.id, status, { silent: true }))
+    );
+    if (results.some(Boolean)) {
+      showToast('success', `Order marked as ${ORDER_STATUS_LABEL[status]}.`);
     }
   };
 
   const handleSellProduct = async (productId: string, size: string | null, currentQty: number) => {
     if (currentQty <= 0) return;
     void stockDelta(productId, size, -1, 'manual_sell');
-    void logAdmin('stock_sell', productId, size ? `1 unit of size ${size}` : '1 unit');
 
     // Optimistic local update — mirrors what the server-side decrement does.
     if (size) {
@@ -2949,6 +2988,7 @@ export default function AdminPage() {
     const { error } = await supabase.rpc('admin_decrement_stock', {
       p_items: [{ product_id: productId, size: size ?? null, quantity: 1 }],
     });
+    let stockUpdated = !error;
     if (error) {
       // Migration may not be applied yet — fall back to the old direct writes.
       if (size) {
@@ -2963,7 +3003,17 @@ export default function AdminPage() {
         .from('products')
         .update({ stock_count: Math.max(0, (products.find((p) => p.id === productId)?.stock_count ?? 1) - 1) })
         .eq('id', productId);
-      if (productError) await fetchAll();
+      if (productError) {
+        stockUpdated = false;
+        await fetchAll();
+      } else {
+        stockUpdated = true;
+      }
+    }
+    if (stockUpdated) {
+      const productTitle = products.find((product) => product.id === productId)?.title ?? 'Product';
+      const detail = `${productTitle}${size ? ` (${size})` : ''} · 1 unit`;
+      void logAdmin('stock_sell', productId, detail);
     }
   };
 
@@ -2990,7 +3040,11 @@ export default function AdminPage() {
 
   const unreadFeedback = feedbackList.filter((f) => !f.read).length;
 
-  const unreadCount = notifications.length;
+  const bellNotifications = [
+    ...notifications.map((order) => ({ kind: 'order' as const, id: order.id, createdAt: order.created_at, order })),
+    ...stockNotifications.map((log) => ({ kind: 'stock' as const, id: log.id, createdAt: log.created_at, log })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const unreadCount = bellNotifications.length;
 
   const openAddAnnouncement = () => {
     setAnnText('');
@@ -3528,8 +3582,8 @@ export default function AdminPage() {
     const phoneRaw = manualForm.customer_phone.trim();
     let phoneDigits = '';
     if (phoneRaw !== '') {
-      phoneDigits = '0' + toAsciiDigits(phoneRaw).replace(/[\s\-()]/g, '').replace(/^\+?88/, '').replace(/^0+/, '');
-      if (!/^01[3-9]\d{8}$/.test(phoneDigits)) {
+      phoneDigits = normalizeBdMobileForCourier(phoneRaw) ?? '';
+      if (!phoneDigits) {
         showToast('error', 'Customer phone must be a valid BD mobile, e.g. 01712345678.');
         return;
       }
@@ -3928,32 +3982,45 @@ export default function AdminPage() {
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotifPanel(false)} />
                   <div className="absolute right-0 top-12 z-50 w-80 max-h-96 overflow-y-auto bg-white rounded-2xl shadow-2xl border border-stone-100 animate-fade-in-up">
                     <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 sticky top-0 bg-white">
-                      <span className="font-semibold text-stone-900 text-sm">New Orders</span>
+                      <span className="font-semibold text-stone-900 text-sm">Notifications</span>
                       {unreadCount > 0 && (
                         <button
-                          onClick={() => { setNotifications([]); setShowNotifPanel(false); }}
+                          onClick={() => { setNotifications([]); setStockNotifications([]); setShowNotifPanel(false); }}
                           className="text-xs text-brand-600 hover:text-brand-700 font-medium"
                         >
                           Mark all read
                         </button>
                       )}
                     </div>
-                    {notifications.length === 0 ? (
+                    {bellNotifications.length === 0 ? (
                       <div className="px-4 py-8 text-center text-sm text-stone-400">
                         <Bell className="w-8 h-8 mx-auto mb-2 text-stone-200" />
                         No new notifications
                       </div>
                     ) : (
                       <div className="divide-y divide-stone-100">
-                        {notifications.map((n) => (
-                          <div key={n.id} className="px-4 py-3 hover:bg-stone-50 transition-colors">
+                        {bellNotifications.map((item) => (
+                          <div key={item.id} className="px-4 py-3 hover:bg-stone-50 transition-colors">
                             <div className="flex items-start gap-2">
                               <div className="w-2 h-2 bg-brand-500 rounded-full mt-1.5 flex-shrink-0" />
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-stone-900 truncate">{n.product_title}</p>
-                                <p className="text-xs text-stone-500 truncate">{n.customer_name} • {n.customer_phone}</p>
+                                {item.kind === 'order' ? (
+                                  <>
+                                    <p className="text-sm font-medium text-stone-900 truncate">{item.order.product_title}</p>
+                                    <p className="text-xs text-stone-500 truncate">{item.order.customer_name} • {item.order.customer_phone}</p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="text-sm font-medium text-stone-900 truncate">
+                                      Stock reduced: {products.find((product) => product.id === item.log.target)?.title ?? item.log.detail ?? 'Product'}
+                                    </p>
+                                    <p className="text-xs text-stone-500 truncate">
+                                      By {item.log.admin_id}
+                                    </p>
+                                  </>
+                                )}
                                 <p className="text-[11px] text-stone-400 mt-0.5">
-                                  {new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                  {new Date(item.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                 </p>
                               </div>
                             </div>
@@ -4211,7 +4278,7 @@ export default function AdminPage() {
                 {stockSelectedCategory === null ? (
                   <>
                     <h2 className="font-display text-xl font-bold text-stone-900">Stock Management</h2>
-                    <p className="text-sm text-stone-500">Pick a category to see its products. Updates sync across all admins instantly.</p>
+                    <p className="text-sm text-stone-500">Browse categories or search by product name or code. Updates sync across all admins instantly.</p>
                   </>
                 ) : (
                   <>
@@ -4261,6 +4328,20 @@ export default function AdminPage() {
                 </button>
               </div>
             </div>
+
+            {stockSelectedCategory === null && (
+              <div className="relative mb-6">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <input
+                  type="search"
+                  value={stockGlobalSearch}
+                  onChange={(e) => { setStockGlobalSearch(e.target.value); setStockPage(1); }}
+                  placeholder="Search all products by name or product code..."
+                  aria-label="Search stock products by name or product code"
+                  className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                />
+              </div>
+            )}
 
             {/* ── Stock page category picker modal ── */}
             {stockCatPickerOpen && (
@@ -4336,7 +4417,7 @@ export default function AdminPage() {
             )}
 
             {/* Category list view */}
-            {stockSelectedCategory === null ? (
+            {stockSelectedCategory === null && !stockGlobalSearch.trim() ? (
               categories.length === 0 && products.every((p) => p.category_id) ? (
                 <EmptyState
                   icon={<Tag className="w-6 h-6" />}
@@ -4388,21 +4469,23 @@ export default function AdminPage() {
             ) : (
             <>
             {/* Products-in-category view */}
-            <div className="relative mb-6">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-              <input
-                type="text"
-                value={stockSearch}
-                onChange={(e) => { setStockSearch(e.target.value); setStockPage(1); }}
-                placeholder="Search products..."
-                className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
-              />
-            </div>
+            {stockSelectedCategory !== null && (
+              <div className="relative mb-6">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <input
+                  type="text"
+                  value={stockSearch}
+                  onChange={(e) => { setStockSearch(e.target.value); setStockPage(1); }}
+                  placeholder="Search products..."
+                  className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
+                />
+              </div>
+            )}
 
             {filteredStockProducts.length === 0 ? (
               <EmptyState
                 icon={<Package className="w-6 h-6" />}
-                title={stockSearch ? 'No products match your search.' : 'No products in this category yet'}
+                title={stockSelectedCategory === null || stockSearch ? 'No products match your search.' : 'No products in this category yet'}
               />
             ) : (
               <>
@@ -4609,6 +4692,8 @@ export default function AdminPage() {
               {([
                 { key: 'all' as const, label: 'All', count: storeGroups.length, cls: 'bg-stone-900 text-white border-stone-900' },
                 { key: 'pending' as const, label: 'Pending', count: pendingOrders, cls: 'bg-amber-500 text-white border-amber-500' },
+                { key: 'bkash_nagad_paid' as const, label: 'b-kash/Nagad Paid', count: bkashNagadPaidOrders, cls: 'bg-emerald-600 text-white border-emerald-600' },
+                { key: 'booked' as const, label: 'Booked', count: bookedStatusOrders, cls: 'bg-sky-600 text-white border-sky-600' },
                 { key: 'delivered' as const, label: 'Delivered', count: deliveredOrders, cls: 'bg-emerald-500 text-white border-emerald-500' },
                 { key: 'canceled' as const, label: 'Canceled', count: canceledOrders, cls: 'bg-red-500 text-white border-red-500' },
               ]).map((f) => {
@@ -4893,43 +4978,26 @@ export default function AdminPage() {
                             {new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </span>
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
-                            {g.status === 'delivered'
-                              ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
-                              : g.status === 'canceled'
-                                ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
-                                : <><Clock className="w-3.5 h-3.5" /> Pending</>}
+                            {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
+                            {ORDER_STATUS_LABEL[g.status]}
                           </span>
                           <div className="relative">
                             <button
                               onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
                               disabled={updatingDelivery === g.key}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-60 ${
-                                g.status === 'delivered'
-                                  ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                                  : g.status === 'canceled'
-                                    ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                              }`}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
                             >
                               {updatingDelivery === g.key ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : g.status === 'delivered' ? (
-                                <Truck className="w-3.5 h-3.5" />
-                              ) : g.status === 'canceled' ? (
-                                <XCircle className="w-3.5 h-3.5" />
                               ) : (
-                                <Clock className="w-3.5 h-3.5" />
+                                orderStatusIcon(g.status, 'w-3.5 h-3.5')
                               )}
-                              {g.status === 'delivered' ? 'Delivered' : g.status === 'canceled' ? 'Canceled' : 'Pending'}
+                              {ORDER_STATUS_LABEL[g.status]}
                               <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${orderStatusOpen === g.key ? 'rotate-180' : ''}`} />
                             </button>
                             {orderStatusOpen === g.key && (
-                              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
-                                {([
-                                  { value: 'pending' as OrderStatus, label: 'Pending', icon: <Clock className="w-4 h-4" />, activeCls: 'bg-amber-50 text-amber-700' },
-                                  { value: 'delivered' as OrderStatus, label: 'Delivered', icon: <Truck className="w-4 h-4" />, activeCls: 'bg-emerald-50 text-emerald-700' },
-                                  { value: 'canceled' as OrderStatus, label: 'Canceled', icon: <XCircle className="w-4 h-4" />, activeCls: 'bg-red-50 text-red-700' },
-                                ]).map((opt) => (
+                              <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                                {ORDER_STATUS_OPTIONS.map((opt) => (
                                   <button
                                     key={opt.value}
                                     onClick={() => setGroupStatus(g, opt.value)}
@@ -5649,6 +5717,8 @@ export default function AdminPage() {
                 {([
                   { key: 'all' as const, label: 'All', count: manualStatusCounts.all, cls: 'bg-stone-900 text-white border-stone-900' },
                   { key: 'pending' as const, label: 'Pending', count: manualStatusCounts.pending, cls: 'bg-amber-500 text-white border-amber-500' },
+                  { key: 'bkash_nagad_paid' as const, label: 'b-kash/Nagad Paid', count: manualStatusCounts.bkash_nagad_paid, cls: 'bg-emerald-600 text-white border-emerald-600' },
+                  { key: 'booked' as const, label: 'Booked', count: manualStatusCounts.booked, cls: 'bg-sky-600 text-white border-sky-600' },
                   { key: 'delivered' as const, label: 'Delivered', count: manualStatusCounts.delivered, cls: 'bg-emerald-500 text-white border-emerald-500' },
                   { key: 'canceled' as const, label: 'Canceled', count: manualStatusCounts.canceled, cls: 'bg-red-500 text-white border-red-500' },
                 ]).map((f) => {
@@ -5754,37 +5824,21 @@ export default function AdminPage() {
                         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                           <span className="font-mono text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
-                            {g.status === 'delivered'
-                              ? <><CheckCheck className="w-3.5 h-3.5" /> Delivered</>
-                              : g.status === 'canceled'
-                                ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
-                                : <><Clock className="w-3.5 h-3.5" /> Pending</>}
+                            {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
+                            {ORDER_STATUS_LABEL[g.status]}
                           </span>
                           <div className="relative">
                             <button
                               onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                                g.status === 'delivered'
-                                  ? 'bg-emerald-500 text-white hover:bg-emerald-400'
-                                  : g.status === 'canceled'
-                                    ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                              }`}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${orderStatusButtonClass(g.status)}`}
                             >
-                              {g.status === 'delivered'
-                                ? <><Truck className="w-3.5 h-3.5" /> Delivered</>
-                                : g.status === 'canceled'
-                                  ? <><XCircle className="w-3.5 h-3.5" /> Canceled</>
-                                  : <><Clock className="w-3.5 h-3.5" /> Pending</>}
+                              {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
+                              {ORDER_STATUS_LABEL[g.status]}
                               <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${manualStatusOpen === g.key ? 'rotate-180' : ''}`} />
                             </button>
                             {manualStatusOpen === g.key && (
-                              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
-                                {([
-                                  { value: 'pending' as OrderStatus, label: 'Pending', icon: <Clock className="w-4 h-4" />, activeCls: 'bg-amber-50 text-amber-700' },
-                                  { value: 'delivered' as OrderStatus, label: 'Delivered', icon: <Truck className="w-4 h-4" />, activeCls: 'bg-emerald-50 text-emerald-700' },
-                                  { value: 'canceled' as OrderStatus, label: 'Canceled', icon: <XCircle className="w-4 h-4" />, activeCls: 'bg-red-50 text-red-700' },
-                                ]).map((opt) => (
+                              <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-30 overflow-hidden">
+                                {ORDER_STATUS_OPTIONS.map((opt) => (
                                   <button
                                     key={opt.value}
                                     onClick={() => setManualGroupStatus(g, opt.value)}
