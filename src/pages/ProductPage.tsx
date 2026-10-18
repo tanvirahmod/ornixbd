@@ -164,7 +164,7 @@ export default function ProductPage() {
       ``,
       `📦 ${product.title}`,
       product.product_code ? `🔖 Code: ${product.product_code}` : '',
-      selectedSize ? `📏 Size: ${selectedSize}` : '',
+      selectedSize ? `📏 Size: ${selectedSize.toUpperCase()}` : '',
       `🔢 Quantity: ${quantity}`,
       `🔗 ${link}`,
     ].filter(Boolean);
@@ -457,7 +457,7 @@ export default function ProductPage() {
                             : 'border-stone-200 text-stone-700 hover:border-stone-400 hover:bg-stone-50'
                         }`}
                       >
-                        {size}
+                        {size.trim().toUpperCase()}
                         <span className={`block text-[10px] font-normal mt-0.5 ${isSelected ? 'text-stone-300' : 'text-stone-400'}`}>
                           {remaining > 0 ? `${remaining} left` : 'Out of stock'}
                         </span>
@@ -468,8 +468,8 @@ export default function ProductPage() {
                 {selectedSize && (
                   <p className="mt-2 text-xs text-stone-500">
                     {selectedSizeStock > 0
-                      ? `${selectedSizeStock} ${selectedSize} available`
-                      : `Selected size (${selectedSize}) is out of stock`}
+                      ? `${selectedSizeStock} ${selectedSize.toUpperCase()} available`
+                      : `Selected size (${selectedSize.toUpperCase()}) is out of stock`}
                   </p>
                 )}
               </div>
@@ -504,7 +504,7 @@ export default function ProductPage() {
               </div>
               <p className="mt-2 text-xs text-stone-500">
                 {selectedSize
-                  ? `${selectedSizeStock} ${selectedSize} available`
+                  ? `${selectedSizeStock} ${selectedSize.toUpperCase()} available`
                   : product.stock_count > 0
                     ? `${product.stock_count} available in stock`
                     : 'Out of stock'}

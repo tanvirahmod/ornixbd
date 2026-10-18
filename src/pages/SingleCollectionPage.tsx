@@ -8,18 +8,27 @@ import ProductCard from '../components/ProductCard';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_OG_IMAGE } from '../lib/seo';
 
 type SortOption = 'newest' | 'price-low-high' | 'price-high-low';
+const PAGE_SIZE = 12;
 
 export default function SingleCollectionPage() {
   const { t } = useLanguage();
   const { slug } = useParams<{ slug: string }>();
   const [categoryName, setCategoryName] = useState<string>('');
+  const [categoryId, setCategoryId] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [sortOpen, setSortOpen] = useState(false);
 
   useEffect(() => {
+    let active = true;
+
     async function fetchCollection() {
+      setLoading(true);
+      setCategoryName('');
+      setCategoryId(null);
       if (!slug) {
         setLoading(false);
         return;
@@ -31,7 +40,9 @@ export default function SingleCollectionPage() {
         .order('priority', { ascending: true, nullsFirst: false })
         .order('name');
 
+      if (!active) return;
       if (catError || !categories) {
+        if (catError) console.error('Failed to load collection categories:', catError);
         setLoading(false);
         return;
       }
@@ -45,34 +56,57 @@ export default function SingleCollectionPage() {
         return;
       }
 
-      if (!matchedCategory) {
-        setLoading(false);
-        return;
-      }
-
       setCategoryName(matchedCategory.name);
+      setCategoryId(matchedCategory.id);
+      setProducts([]);
+      setTotalCount(0);
+      setPage(1);
+    }
 
-      const { data, error } = await supabase
+    fetchCollection();
+    return () => { active = false; };
+  }, [slug]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function fetchProducts() {
+      if (!categoryId) return;
+
+      setLoading(true);
+      const from = (page - 1) * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      const orderBy = sortBy === 'newest' ? 'created_at' : 'price';
+      const ascending = sortBy === 'price-low-high';
+      const { data, error, count } = await supabase
         .from('products')
-        .select('*, product_images(id, image_url, display_order)')
-        .eq('category_id', matchedCategory.id)
-        .order('created_at', { ascending: false })
-        .limit(48);
+        .select('*, product_images(id, image_url, display_order)', { count: 'exact' })
+        .eq('category_id', categoryId)
+        .order(orderBy, { ascending })
+        .range(from, to);
 
+      if (!active) return;
       if (!error && data) {
-        const sorted = data.map((product) => ({
-          ...product,
-          product_images: (product.product_images as Product['product_images'])?.sort(
-            (a, b) => a.display_order - b.display_order
-          ),
-        }));
-        setProducts(sorted);
+        setProducts(
+          data.map((product) => ({
+            ...product,
+            product_images: (product.product_images as Product['product_images'])?.sort(
+              (a, b) => a.display_order - b.display_order
+            ),
+          }))
+        );
+        setTotalCount(count ?? 0);
+      } else {
+        if (error) console.error('Failed to load collection products:', error);
+        setProducts([]);
+        setTotalCount(0);
       }
       setLoading(false);
     }
 
-    fetchCollection();
-  }, [slug]);
+    fetchProducts();
+    return () => { active = false; };
+  }, [categoryId, page, sortBy]);
 
   useEffect(() => {
     if (!categoryName) return;
@@ -80,7 +114,7 @@ export default function SingleCollectionPage() {
     const cover = products[0]?.product_images?.[0]?.image_url || DEFAULT_OG_IMAGE;
     setSEO({
       title: `${categoryName} — ${SITE_NAME}`,
-      description: `Shop ${categoryName} at ${SITE_NAME}. Premium quality, nationwide delivery across Bangladesh. ${products.length} product${products.length !== 1 ? 's' : ''} available.`,
+      description: `Shop ${categoryName} at ${SITE_NAME}. Premium quality, nationwide delivery across Bangladesh. ${totalCount} product${totalCount !== 1 ? 's' : ''} available.`,
       image: cover,
       url: `/collections/${slug}`,
     });
@@ -99,17 +133,10 @@ export default function SingleCollectionPage() {
         { '@type': 'ListItem', position: 3, name: categoryName, item: `${SITE_URL}/collections/${slug}` },
       ],
     }, 'page-breadcrumb-jsonld');
-  }, [categoryName, slug, products]);
+  }, [categoryName, slug, products, totalCount]);
 
-  const sortedProducts = [...products].sort((a, b) => {
-    if (sortBy === 'price-low-high') {
-      return Number(a.price) - Number(b.price);
-    }
-    if (sortBy === 'price-high-low') {
-      return Number(b.price) - Number(a.price);
-    }
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-  });
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
 
   const sortLabels: Record<SortOption, string> = {
     newest: t('newestArrivals'),
@@ -179,6 +206,7 @@ export default function SingleCollectionPage() {
                     key={option}
                     onClick={() => {
                       setSortBy(option);
+                      setPage(1);
                       setSortOpen(false);
                     }}
                     className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors ${
@@ -195,20 +223,43 @@ export default function SingleCollectionPage() {
           </div>
 
           <span className="text-sm text-stone-500">
-            {sortedProducts.length} {sortedProducts.length === 1 ? 'product' : 'products'}
+            {totalCount} {totalCount === 1 ? 'product' : 'products'}
           </span>
         </div>
 
-        {sortedProducts.length === 0 ? (
+        {totalCount === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <Package className="w-16 h-16 text-stone-300 mb-4" />
             <p className="text-stone-500">{t('noProductsInCategory') || 'No products in this category yet.'}</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
-            {sortedProducts.map((product) => (
+            {products.map((product) => (
               <ProductCard key={product.id} product={product} />
             ))}
+          </div>
+        )}
+        {totalPages > 1 && (
+          <div className="mt-10 flex items-center justify-center gap-4">
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={safePage === 1 || loading}
+              className="rounded-lg border border-stone-200 px-4 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-stone-500" aria-live="polite">
+              Page {safePage} of {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={safePage === totalPages || loading}
+              className="rounded-lg border border-stone-200 px-4 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
           </div>
         )}
       </div>

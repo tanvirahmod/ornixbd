@@ -724,6 +724,8 @@ export default function AdminPage() {
   const [productPage, setProductPage] = useState(1);
   const PRODUCT_PAGE_SIZE = 12;
   const [stockSearch, setStockSearch] = useState('');
+  const [stockPage, setStockPage] = useState(1);
+  const STOCK_PAGE_SIZE = 12;
   const [stockSelectedCategory, setStockSelectedCategory] = useState<string | null>(null);
   const [stockCatPickerOpen, setStockCatPickerOpen] = useState(false);
   const [stockCatSaving, setStockCatSaving] = useState<string | null>(null);
@@ -1252,6 +1254,27 @@ export default function AdminPage() {
   const pagedProducts = filteredProducts.slice(
     (productSafePage - 1) * PRODUCT_PAGE_SIZE,
     productSafePage * PRODUCT_PAGE_SIZE
+  );
+
+  const filteredStockProducts = stockSelectedCategory === null
+    ? []
+    : products
+        .filter((product) =>
+          stockSelectedCategory === '__uncategorized__'
+            ? !product.category_id
+            : product.category_id === stockSelectedCategory
+        )
+        .filter((product) => {
+          const q = stockSearch.trim().toLowerCase();
+          return !q ||
+            product.title.toLowerCase().includes(q) ||
+            (product.product_code ?? '').toLowerCase().includes(q);
+        });
+  const stockTotalPages = Math.max(1, Math.ceil(filteredStockProducts.length / STOCK_PAGE_SIZE));
+  const stockSafePage = Math.min(stockPage, stockTotalPages);
+  const pagedStockProducts = filteredStockProducts.slice(
+    (stockSafePage - 1) * STOCK_PAGE_SIZE,
+    stockSafePage * STOCK_PAGE_SIZE
   );
 
   // ── Steadfast delivery pipeline counts (booked → in review → picked up → in transit → delivered) ──
@@ -4078,14 +4101,16 @@ export default function AdminPage() {
               />
             ) : (
               <>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
                 {pagedProducts.map((product) => {
                   const cover = product.product_images?.[0]?.image_url
                     ?? 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400';
                   return (
                     <div key={product.id} className="bg-white rounded-2xl shadow-sm overflow-hidden border border-stone-100 hover:shadow-md transition-shadow">
-                      <div className="aspect-video bg-stone-100 overflow-hidden relative">
-                        <img src={cover} alt={product.title} className="w-full h-full object-cover"
+                      <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
+                        <img src={cover} alt={product.title} className="w-full h-full object-contain"
+                          loading="lazy"
+                          decoding="async"
                           onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400'; }}
                         />
                         {product.categories && (
@@ -4094,7 +4119,7 @@ export default function AdminPage() {
                           </span>
                         )}
                       </div>
-                      <div className="p-4">
+                      <div className="p-3">
                         <div className="flex items-start justify-between gap-2 mb-1">
                           <h3 className="font-semibold text-stone-900 text-sm leading-snug">{product.title}</h3>
                           <span className="text-brand-600 font-bold text-sm flex-shrink-0">৳{Number(product.price).toFixed(0)}</span>
@@ -4191,7 +4216,7 @@ export default function AdminPage() {
                 ) : (
                   <>
                     <button
-                      onClick={() => { setStockSelectedCategory(null); setStockSearch(''); }}
+                      onClick={() => { setStockSelectedCategory(null); setStockSearch(''); setStockPage(1); }}
                       className="flex items-center gap-1 text-sm font-medium text-stone-500 hover:text-stone-900 transition-colors mb-1"
                     >
                       ← All Categories
@@ -4325,7 +4350,7 @@ export default function AdminPage() {
                     return (
                       <button
                         key={cat.id}
-                        onClick={() => { setStockSelectedCategory(cat.id); setStockSearch(''); }}
+                        onClick={() => { setStockSelectedCategory(cat.id); setStockSearch(''); setStockPage(1); }}
                         className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5 flex items-center justify-between hover:shadow-md hover:border-brand-200 transition-all text-left"
                       >
                         <div className="flex items-center gap-3">
@@ -4343,7 +4368,7 @@ export default function AdminPage() {
                   })}
                   {products.some((p) => !p.category_id) && (
                     <button
-                      onClick={() => { setStockSelectedCategory('__uncategorized__'); setStockSearch(''); }}
+                      onClick={() => { setStockSelectedCategory('__uncategorized__'); setStockSearch(''); setStockPage(1); }}
                       className="bg-white rounded-2xl shadow-sm border border-dashed border-stone-200 p-5 flex items-center justify-between hover:shadow-md hover:border-brand-200 transition-all text-left"
                     >
                       <div className="flex items-center gap-3">
@@ -4368,31 +4393,29 @@ export default function AdminPage() {
               <input
                 type="text"
                 value={stockSearch}
-                onChange={(e) => setStockSearch(e.target.value)}
+                onChange={(e) => { setStockSearch(e.target.value); setStockPage(1); }}
                 placeholder="Search products..."
                 className="w-full border border-stone-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white"
               />
             </div>
 
-            {(() => {
-              const categoryProducts = products.filter((p) =>
-                stockSelectedCategory === '__uncategorized__' ? !p.category_id : p.category_id === stockSelectedCategory
-              );
-              return categoryProducts.length === 0 ? (
-                <EmptyState icon={<Package className="w-6 h-6" />} title="No products in this category yet" />
-              ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {categoryProducts.filter((p) => {
-                  const q = stockSearch.trim().toLowerCase();
-                  if (!q) return true;
-                  return p.title.toLowerCase().includes(q) || (p.product_code ?? '').toLowerCase().includes(q);
-                }).map((product) => {
+            {filteredStockProducts.length === 0 ? (
+              <EmptyState
+                icon={<Package className="w-6 h-6" />}
+                title={stockSearch ? 'No products match your search.' : 'No products in this category yet'}
+              />
+            ) : (
+              <>
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+                {pagedStockProducts.map((product) => {
                   const cover = product.product_images?.[0]?.image_url
                     ?? 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400';
                   return (
                     <div key={product.id} className="bg-white rounded-2xl shadow-sm overflow-hidden border border-stone-100">
-                      <div className="aspect-video bg-stone-100 overflow-hidden relative">
-                        <img src={cover} alt={product.title} className="w-full h-full object-cover"
+                      <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
+                        <img src={cover} alt={product.title} className="w-full h-full object-contain"
+                          loading="lazy"
+                          decoding="async"
                           onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400'; }}
                         />
                       </div>
@@ -4444,8 +4467,43 @@ export default function AdminPage() {
                   );
                 })}
               </div>
-              );
-            })()}
+              {stockTotalPages > 1 && (
+                <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    onClick={() => setStockPage((current) => Math.max(1, current - 1))}
+                    disabled={stockSafePage === 1}
+                    className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Prev
+                  </button>
+                  {pageNumbers(stockSafePage, stockTotalPages).map((n, i) =>
+                    n === '…' ? (
+                      <span key={`stock-dots-${i}`} className="px-1 text-sm text-stone-400">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setStockPage(n)}
+                        className={`min-w-[2.5rem] rounded-lg px-2 py-2 text-sm font-semibold transition-all ${
+                          n === stockSafePage
+                            ? 'bg-stone-900 text-white shadow-md'
+                            : 'border border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+                  <button
+                    onClick={() => setStockPage((current) => Math.min(stockTotalPages, current + 1))}
+                    disabled={stockSafePage === stockTotalPages}
+                    className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+              </>
+            )}
             </>
             )}
           </div>
