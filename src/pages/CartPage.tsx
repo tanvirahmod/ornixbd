@@ -5,8 +5,9 @@ import { useLanguage } from '../lib/LanguageContext';
 import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
 import { useSiteSettings } from '../lib/siteConfig';
-import { parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS } from '../components/ZoneSelect';
+import { parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS, HABIGANJ_RATE_KEY, deliveryRateForDistrict } from '../components/ZoneSelect';
 import { COVER_FALLBACK, productParam } from '../lib/utils';
+import { ikImage } from '../lib/imagekit';
 import { setSEO, SITE_NAME } from '../lib/seo';
 
 export default function CartPage() {
@@ -27,10 +28,19 @@ export default function CartPage() {
   // admin-set zone rates (Admin → Settings → Delivery & Payments). Show the
   // CHEAPEST zone rate here as an honest "from ৳X". No hardcoded fallback:
   // unconfigured rates show "charged at checkout" instead of an invented fee.
-  const { values: rateValues } = useSiteSettings([...ZONE_RATE_KEYS]);
+  const { values: rateValues } = useSiteSettings([...ZONE_RATE_KEYS, HABIGANJ_RATE_KEY]);
   const parsedRates = parseZoneRates(rateValues);
-  const minDeliveryFee = parsedRates ? minZoneRateOf(parsedRates) : null;
-  const maxDeliveryFee = parsedRates ? Math.max(parsedRates.dhaka_city, parsedRates.dhaka_suburban, parsedRates.outside_dhaka) : null;
+  const habiganjFee = parsedRates
+    ? deliveryRateForDistrict('Habiganj', parsedRates, rateValues[HABIGANJ_RATE_KEY])
+    : null;
+  const deliveryRates = parsedRates ? [
+    parsedRates.dhaka_city,
+    parsedRates.dhaka_suburban,
+    parsedRates.outside_dhaka,
+    ...(habiganjFee == null ? [] : [habiganjFee]),
+  ] : [];
+  const minDeliveryFee = parsedRates ? Math.min(minZoneRateOf(parsedRates), habiganjFee ?? Infinity) : null;
+  const maxDeliveryFee = parsedRates ? Math.max(...deliveryRates) : null;
 
   // The delivery charge (admin-set zone rates, Settings → Delivery &
   // Payments) is included in the total, exactly like checkout charges it.
@@ -94,7 +104,7 @@ export default function CartPage() {
                   aria-label={item.title}
                 >
                   <img
-                    src={item.imageUrl ?? COVER_FALLBACK}
+                    src={ikImage(item.imageUrl ?? COVER_FALLBACK, 200)}
                     alt={item.title}
                     className="w-full h-full object-cover"
                     onError={(e) => { (e.target as HTMLImageElement).src = COVER_FALLBACK; }}

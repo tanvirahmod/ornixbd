@@ -7,6 +7,7 @@ import { useNavigation } from '../lib/navigation';
 import { useCart } from '../lib/CartContext';
 import { extractProductCodeCandidates, productParam, slugify } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE } from '../lib/seo';
+import { ikImage } from '../lib/imagekit';
 import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
 
 // One shared select for every product lookup on this page.
@@ -294,7 +295,7 @@ export default function ProductPage() {
           <div className="product-gallery space-y-4">
             <div className="product-gallery__main relative aspect-[4/5] md:aspect-[4/5] bg-white rounded-3xl overflow-hidden shadow-md group">
               <img
-                src={images[currentImageIndex].image_url}
+                src={ikImage(images[currentImageIndex].image_url, 1200)}
                 alt={product.title}
                 className="w-full h-full object-cover transition-opacity duration-300"
                 onError={(e) => {
@@ -355,7 +356,7 @@ export default function ProductPage() {
                       i === currentImageIndex ? 'border-brand-500 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'
                     }`}
                   >
-                    <img src={img.image_url} alt="" className="w-full h-full object-cover"
+                    <img src={ikImage(img.image_url, 200)} alt="" className="w-full h-full object-cover"
                       onError={(e) => {
                         (e.target as HTMLImageElement).src =
                           'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400';

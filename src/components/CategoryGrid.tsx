@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { Category } from '../lib/supabase';
 import { slugify, COVER_FALLBACK } from '../lib/utils';
+import { ikImage } from '../lib/imagekit';
 
 interface CategoryGridProps {
   categories: Category[];
@@ -18,7 +19,7 @@ export default function CategoryGrid({ categories }: CategoryGridProps) {
           >
             <div className="store-collection-card__media relative aspect-[3/4] bg-street-beige overflow-hidden">
               <img
-                src={cat.background_image || COVER_FALLBACK}
+                src={ikImage(cat.background_image || COVER_FALLBACK, 600)}
                 alt={cat.name}
                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                 loading="lazy"

@@ -1,6 +1,7 @@
 import { ArrowRight } from 'lucide-react';
 import { Product } from '../lib/supabase';
 import { productParam, splitWatermarkedTitle } from '../lib/utils';
+import { ikImage } from '../lib/imagekit';
 
 interface NewArrivalsProps {
   products: Product[];
@@ -49,7 +50,7 @@ function ProductCard({
         style={{ aspectRatio: '3/4' }}
       >
         <img
-          src={getCoverImage(product)}
+          src={ikImage(getCoverImage(product), 500)}
           alt={product.title}
           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
           loading="lazy"

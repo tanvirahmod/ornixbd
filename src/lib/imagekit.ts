@@ -9,7 +9,7 @@ import { supabase } from './supabase';
 const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const IMAGEKIT_URL_ENDPOINT = 'https://ik.imagekit.io/oy2vruqkz';
+export const IMAGEKIT_URL_ENDPOINT = 'https://ik.imagekit.io/flh4anc2d';
 
 interface UploadAuth {
   token: string;
@@ -87,5 +87,5 @@ export function ikImage(url: string | null | undefined, width = 800): string {
   if (!url) return '';
   if (!url.includes('ik.imagekit.io')) return url;
   const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}tr=w-${width},f-auto,q-80`;
+  return `${url}${sep}tr=w-${width},f-auto,q-75`;
 }

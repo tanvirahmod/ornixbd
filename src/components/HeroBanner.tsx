@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowRight, Sparkles } from 'lucide-react';
 import { useSiteSettings, getHeroBgImage } from '../lib/siteConfig';
+import { ikImage } from '../lib/imagekit';
 
 interface HeroBannerProps {
   onNavigate: (page: string) => void;
@@ -52,8 +53,8 @@ export default function HeroBanner({ onNavigate }: HeroBannerProps) {
         <div className="editorial-hero__visual">
           <div className="editorial-hero__image-wrap">
             <picture>
-              <source media="(max-width: 767px)" srcSet={mobileBg} />
-              <img src={desktopBg} alt="Discover the latest ORNIX collection" loading="eager" />
+              <source media="(max-width: 767px)" srcSet={ikImage(mobileBg, 900)} />
+              <img src={ikImage(desktopBg, 1600)} alt="Discover the latest ORNIX collection" loading="eager" />
             </picture>
           </div>
           <p className="editorial-hero__vertical" aria-hidden="true">

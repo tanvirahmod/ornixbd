@@ -6,6 +6,7 @@ import { splitWatermarkedTitle } from '../lib/utils';
 import { useCategories } from '../lib/siteConfig';
 import { getCoverImage, COVER_FALLBACK, productParam } from '../lib/utils';
 import { setSEO, setJsonLd, SITE_NAME, DEFAULT_DESCRIPTION } from '../lib/seo';
+import { ikImage } from '../lib/imagekit';
 
 export default function ShopBySizePage() {
   const [titleFirstWord, titleRemainingWords] = splitWatermarkedTitle('Shop by Size');
@@ -171,7 +172,7 @@ export default function ShopBySizePage() {
                         >
                           <div className="store-product-card__media aspect-[3/4] bg-stone-100 overflow-hidden relative">
                             <img
-                              src={getCoverImage(product)}
+                              src={ikImage(getCoverImage(product), 500)}
                               alt={product.title}
                               className="w-full h-full object-cover hover:scale-105 transition-transform duration-500"
                               loading="lazy"

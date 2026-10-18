@@ -7,6 +7,7 @@ import { supabase, Product } from '../lib/supabase';
 import { useAnnouncements, useCategories, getAnnouncementText } from '../lib/siteConfig';
 import { useCart } from '../lib/CartContext';
 import { ORNIX_LOGO_URL } from '../lib/seo';
+import { ikImage } from '../lib/imagekit';
 
 // ── Search overlay ──
 function SearchOverlay({ onClose, onGoProduct }: { onClose: () => void; onGoProduct: (product: Product) => void }) {
@@ -132,7 +133,7 @@ function SearchOverlay({ onClose, onGoProduct }: { onClose: () => void; onGoProd
                       >
                         <div className="w-12 h-12 rounded-xl overflow-hidden bg-stone-100 flex-shrink-0">
                           <img
-                            src={cover}
+                            src={ikImage(cover, 150)}
                             alt={p.title}
                             className="w-full h-full object-cover"
                             onError={(e) => { (e.target as HTMLImageElement).src = COVER_FALLBACK; }}
@@ -322,7 +323,7 @@ export default function Navbar() {
               className="absolute left-1/2 -translate-x-1/2 flex items-center hover:opacity-80 transition-opacity duration-200 lg:static lg:translate-x-0"
             >
               <img
-                src={ORNIX_LOGO_URL}
+                src={ikImage(ORNIX_LOGO_URL, 300)}
                 alt="ORNIX"
                 className="ornix-logo h-12 sm:h-14 w-auto object-contain"
               />

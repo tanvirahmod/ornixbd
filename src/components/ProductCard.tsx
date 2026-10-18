@@ -2,6 +2,7 @@ import { ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Product } from '../lib/supabase';
 import { productParam, getCoverImage, COVER_FALLBACK } from '../lib/utils';
+import { ikImage } from '../lib/imagekit';
 
 interface ProductCardProps {
   product: Product;
@@ -18,7 +19,7 @@ export default function ProductCard({ product }: ProductCardProps) {
       <Link to={href} className="block">
         <div className="store-product-card__media aspect-[3/4] bg-stone-100 overflow-hidden relative">
           <img
-            src={getCoverImage(product)}
+            src={ikImage(getCoverImage(product), 500)}
             alt={product.title}
             className={`w-full h-full object-cover hover:scale-105 transition-transform duration-500 ${soldOut ? 'opacity-60' : ''}`}
             loading="lazy"

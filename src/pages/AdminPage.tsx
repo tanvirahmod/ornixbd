@@ -8,12 +8,13 @@ import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback,
 import { runBounded } from '../lib/supabaseQuery';
 import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
-import { zoneForDistrict, DELIVERY_ZONES, type DeliveryZone } from '../components/ZoneSelect';
+import { zoneForDistrict, DELIVERY_ZONES, HABIGANJ_RATE_KEY, deliveryRateForDistrict, type DeliveryZone } from '../components/ZoneSelect';
 import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
 import ThanaSelect from '../components/ThanaSelect';
 import { formatBDT, ORD_LBL, ORDER_STATUS_PILL, ORDER_STATUS_LABEL, FinCard, FinDelta, DailyBars, EmptyState, ToastStack, nextToastId, type Toast } from '../admin/ui';
 import { printLabels, type StickersPerPage } from '../lib/parcelLabel';
 import { normalizeBdMobileForCourier, toAsciiDigits } from '../lib/bdPhone';
+import { ikImage } from '../lib/imagekit';
 import { printManualOrdersReport, manualOrderInDateRange } from '../lib/manualOrdersReport';
 import { printFinanceReport, type FinanceReportRow } from '../lib/financeReport';
 import { useAdminAuth, ALL_CAPABILITIES } from '../lib/useAdminAuth';
@@ -130,7 +131,6 @@ function STORE_STAGE_DOT(b: boolean, stage: SteadfastStage | null): string {
     default: return 'bg-stone-400';
   }
 }
-
 function orderStageOf(b: boolean, rows: Order[]): SteadfastStage | null {
   if (!b) return null;
   const raw = rows.find((r) => r.steadfast_status)?.steadfast_status ?? null;
@@ -932,6 +932,7 @@ export default function AdminPage() {
   // site_settings (fetched below). No hardcoded defaults: blank means blank,
   // and an unconfigured rate pauses checkout rather than inventing a fee.
   const [steadfastRates, setSteadfastRates] = useState<Record<DeliveryZone, string>>({ dhaka_city: '', dhaka_suburban: '', outside_dhaka: '' });
+  const [habiganjRate, setHabiganjRate] = useState('');
   const [lowStockThreshold, setLowStockThreshold] = useState(5);
   const [thresholdInput, setThresholdInput] = useState('5');
   const [thresholdSaving, setThresholdSaving] = useState(false);
@@ -1497,9 +1498,14 @@ export default function AdminPage() {
     // use the admin-set zone rate when the zone is known; 0 when it isn't —
     // never a made-up flat fee, which silently mispriced rows and skewed the
     // Finance totals.
-    const zone = order.delivery_zone ? zoneForDistrict(order.delivery_zone) : null;
-    const zoneRate = zone ? Number(steadfastRates[zone as DeliveryZone]) : NaN;
-    const deliveryFee = order.delivery_fee != null ? Number(order.delivery_fee) : (isNaN(zoneRate) ? 0 : zoneRate);
+    const districtRate = order.delivery_zone
+      ? deliveryRateForDistrict(order.delivery_zone, {
+          dhaka_city: Number(steadfastRates.dhaka_city),
+          dhaka_suburban: Number(steadfastRates.dhaka_suburban),
+          outside_dhaka: Number(steadfastRates.outside_dhaka),
+        }, habiganjRate)
+      : null;
+    const deliveryFee = order.delivery_fee != null ? Number(order.delivery_fee) : (districtRate ?? 0);
     const total = subtotal + deliveryFee;
 
     return { unitPrice, qty, subtotal, deliveryFee, total };
@@ -1583,7 +1589,7 @@ export default function AdminPage() {
       }
     }
     return { count: codes.size, grossRevenue, deliveryCollected, grossTotal, advance, due, discounts, courierEst, couponSpend };
-  }, [financeOrders, products, steadfastRates]);
+  }, [financeOrders, products, steadfastRates, habiganjRate]);
 
   // ── In-store (manual) sales for the selected range ──
   const manualFin = useMemo(() => {
@@ -1671,7 +1677,7 @@ export default function AdminPage() {
       revenue += Math.max(0, storedTotal - pricing.deliveryFee);
     }
     return { count: prevFinanceOrders.length, revenue };
-  }, [prevFinanceOrders, products, steadfastRates]);
+  }, [prevFinanceOrders, products, steadfastRates, habiganjRate]);
 
   // ── Daily revenue buckets for the mini bar chart on the hero band ──
   const dailyBuckets = useMemo(() => {
@@ -2107,6 +2113,8 @@ export default function AdminPage() {
         }
         return next;
       });
+      const habiganjSetting = settings.find((s) => s.key === HABIGANJ_RATE_KEY);
+      if (habiganjSetting) setHabiganjRate(habiganjSetting.value ?? '');
       const merchantSetting = settings.find((s) => s.key === 'steadfast_merchant_id');
       setMerchantId(merchantSetting?.value ?? '');
       const checkoutBkashSetting = settings.find((s) => s.key === 'checkout_bkash_number');
@@ -3272,6 +3280,10 @@ export default function AdminPage() {
         return;
       }
     }
+    if (habiganjRate.trim() !== '' && (isNaN(Number(habiganjRate)) || Number(habiganjRate) < 0)) {
+      showToast('error', 'Habiganj delivery charge must be a valid non-negative number, or left blank to use the Outside Dhaka rate.');
+      return;
+    }
     if (checkoutBkash.trim() && checkoutBkash.replace(/\D/g, '').length < 11) {
       showToast('error', 'The checkout bKash number should be a valid BD mobile number (11 digits).');
       return;
@@ -3285,6 +3297,7 @@ export default function AdminPage() {
       { key: 'steadfast_rate_dhaka_city', label: 'Steadfast Rate — Inside Dhaka', description: 'Courier charge (৳) for orders delivered inside Dhaka City.', value: steadfastRates.dhaka_city },
       { key: 'steadfast_rate_dhaka_suburban', label: 'Steadfast Rate — Dhaka Suburban', description: 'Courier charge (৳) for Dhaka Suburban areas (Gazipur, Narayanganj, Savar, etc.).', value: steadfastRates.dhaka_suburban },
       { key: 'steadfast_rate_outside_dhaka', label: 'Steadfast Rate — Outside Dhaka', description: 'Courier charge (৳) for deliveries outside Dhaka and its suburbs.', value: steadfastRates.outside_dhaka },
+      { key: HABIGANJ_RATE_KEY, label: 'Steadfast Rate — Habiganj', description: 'Optional delivery charge (৳) for Habiganj District only. Leave blank to use the Outside Dhaka rate.', value: habiganjRate.trim() },
       { key: 'steadfast_merchant_id', label: 'Steadfast Merchant ID', description: 'Shown on printed parcel labels (e.g. 8JFK3PPH). Find it in your Steadfast merchant dashboard.', value: merchantId.trim() },
       { key: 'checkout_bkash_number', label: 'Checkout bKash Number', description: 'Personal bKash number shown on checkout — customers send the delivery-fee advance here.', value: checkoutBkash.trim() },
       { key: 'checkout_nagad_number', label: 'Checkout Nagad Number', description: 'Personal Nagad number shown on checkout. Leave blank to hide the Nagad option from customers.', value: checkoutNagad.trim() },
@@ -3660,12 +3673,18 @@ export default function AdminPage() {
     // Total matches what actually left the customer's wallet.
     // 'full_no_delivery' → no delivery charge at all (zoneFee stays 0), so a
     // missing rate never blocks a pickup sale.
-    const rateRaw = manualZone ? steadfastRates[manualZone as DeliveryZone] : undefined;
-    if (manualZone && collectsDeliveryFee && (rateRaw == null || String(rateRaw).trim() === '' || isNaN(Number(rateRaw)))) {
+    const rateRaw = manualForm.district
+      ? deliveryRateForDistrict(manualForm.district, {
+          dhaka_city: Number(steadfastRates.dhaka_city),
+          dhaka_suburban: Number(steadfastRates.dhaka_suburban),
+          outside_dhaka: Number(steadfastRates.outside_dhaka),
+        }, habiganjRate)
+      : null;
+    if (manualZone && collectsDeliveryFee && rateRaw == null) {
       showToast('error', `No delivery rate saved for ${manualZone.replace(/_/g, ' ')} — set it in Settings → Delivery & Payments, then record the sale.`);
       return;
     }
-    const zoneFee = manualZone && collectsDeliveryFee ? Math.max(0, Number(rateRaw) || 0) : 0;
+    const zoneFee = manualZone && collectsDeliveryFee ? Math.max(0, rateRaw ?? 0) : 0;
     const collectedFee = deliveryOnly ? zoneFee : 0;
     const deliveryFee = deliveryOnly ? 0 : zoneFee;
     // Per-row money split. 'full' → everything settled in store (delivered):
@@ -4176,7 +4195,7 @@ export default function AdminPage() {
                   return (
                     <div key={product.id} className="bg-white rounded-2xl shadow-sm overflow-hidden border border-stone-100 hover:shadow-md transition-shadow">
                       <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
-                        <img src={cover} alt={product.title} className="w-full h-full object-contain"
+                        <img src={ikImage(cover, 500)} alt={product.title} className="w-full h-full object-contain"
                           loading="lazy"
                           decoding="async"
                           onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400'; }}
@@ -4497,7 +4516,7 @@ export default function AdminPage() {
                   return (
                     <div key={product.id} className="bg-white rounded-2xl shadow-sm overflow-hidden border border-stone-100">
                       <div className="aspect-[3/4] bg-stone-100 overflow-hidden relative">
-                        <img src={cover} alt={product.title} className="w-full h-full object-contain"
+                        <img src={ikImage(cover, 500)} alt={product.title} className="w-full h-full object-contain"
                           loading="lazy"
                           decoding="async"
                           onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.pexels.com/photos/5632398/pexels-photo-5632398.jpeg?auto=compress&cs=tinysrgb&w=400'; }}
@@ -5286,13 +5305,19 @@ export default function AdminPage() {
           // Mirrors the save guard: blank rate → warn instead of showing ৳0.
           // 'full_no_delivery' collects no delivery charge, so no rate needed.
           const manualZoneId = manualForm.district ? zoneForDistrict(manualForm.district) : null;
-          const manualRateRaw = manualZoneId ? steadfastRates[manualZoneId as DeliveryZone] : undefined;
+          const manualRateRaw = manualForm.district
+            ? deliveryRateForDistrict(manualForm.district, {
+                dhaka_city: Number(steadfastRates.dhaka_city),
+                dhaka_suburban: Number(steadfastRates.dhaka_suburban),
+                outside_dhaka: Number(steadfastRates.outside_dhaka),
+              }, habiganjRate)
+            : null;
           const manualRateMissing = manualZoneId != null
             && manualForm.payment_mode !== 'full_no_delivery'
-            && (manualRateRaw == null || String(manualRateRaw).trim() === '' || isNaN(Number(manualRateRaw)));
+            && manualRateRaw == null;
           const manualZoneFee = manualForm.payment_mode === 'full_no_delivery'
             ? 0
-            : (manualRateMissing ? 0 : Math.max(0, Number(manualRateRaw) || 0));
+            : (manualRateMissing ? 0 : Math.max(0, manualRateRaw ?? 0));
           const grandTotal = saleTotal + (manualForm.payment_mode === 'delivery_only' ? 0 : manualZoneFee);
           const todaySum = manualToday.reduce((s, o) => s + Number(o.total_amount ?? 0), 0);
           return (
@@ -7319,6 +7344,23 @@ export default function AdminPage() {
                      <p className="text-xs text-stone-400 mt-1">{z.hint}{steadfastRates[z.key].trim() === '' ? ' — required: checkout pauses while a rate is blank' : " — applies everywhere instantly"}</p>
                    </div>
                  ))}
+                 <div>
+                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Habiganj District only</label>
+                   <div className="relative">
+                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-stone-400">৳</span>
+                     <input
+                       type="number"
+                       min="0"
+                       value={habiganjRate}
+                       onChange={(e) => setHabiganjRate(e.target.value)}
+                       placeholder={`Use Outside Dhaka rate (${steadfastRates.outside_dhaka || 'not set'})`}
+                       className="w-full border border-stone-200 rounded-xl pl-8 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                     />
+                   </div>
+                   <p className="text-xs text-stone-400 mt-1">
+                     Optional separate delivery charge for Habiganj only. Leave blank to use the Outside Dhaka rate.
+                   </p>
+                 </div>
                  <div>
                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Merchant ID</label>
                    <input

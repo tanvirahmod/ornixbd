@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Plus, Minus, Instagram, Facebook, MapPin, Phone, Clock } from 'lucide-react';
 import { useWhatsAppNumbers, waMeLink } from '../lib/whatsapp';
 import { ORNIX_LOGO_URL } from '../lib/seo';
+import { ikImage } from '../lib/imagekit';
 
 interface HelpFooterProps {
   onNavigate: (page: string) => void;
@@ -157,7 +158,7 @@ export default function HelpFooter({ onNavigate }: HelpFooterProps) {
               style={{ fontFamily: 'Anton, Impact, Arial Black, sans-serif' }}
             >
               <img
-                src={ORNIX_LOGO_URL}
+                src={ikImage(ORNIX_LOGO_URL, 300)}
                 alt="ORNIX"
                 className="h-14 w-auto object-contain"
               />

@@ -1,6 +1,7 @@
 import { ArrowRight, ArrowUpRight } from 'lucide-react';
 import { useCategories } from '../lib/siteConfig';
 import { slugify } from '../lib/utils';
+import { ikImage } from '../lib/imagekit';
 
 interface TopCategoriesProps {
   onNavigate: (page: string, param?: string) => void;
@@ -89,7 +90,7 @@ function CategoryCard({
       className="editorial-category group relative overflow-hidden"
     >
       <img
-        src={image}
+        src={ikImage(image, 600)}
         alt={label}
         className="editorial-category__image absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
         loading="lazy"

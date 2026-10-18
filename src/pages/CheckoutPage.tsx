@@ -6,13 +6,14 @@ import {
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { supabase, Product, Coupon } from '../lib/supabase';
 import { useLanguage } from '../lib/LanguageContext';
-import ZoneSelect, { zoneForDistrict, parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS, type ZoneRateMap } from '../components/ZoneSelect';
+import ZoneSelect, { parseZoneRates, minZoneRateOf, ZONE_RATE_KEYS, HABIGANJ_RATE_KEY, deliveryRateForDistrict, type ZoneRateMap } from '../components/ZoneSelect';
 import ThanaSelect from '../components/ThanaSelect';
 import { useNavigation } from '../lib/navigation';
 import { useCart, CartItem } from '../lib/CartContext';
 import { COVER_FALLBACK } from '../lib/utils';
 import { setSEO, SITE_NAME } from '../lib/seo';
 import { isValidBdMobile, toAsciiDigits } from '../lib/bdPhone';
+import { ikImage } from '../lib/imagekit';
 
 /* ────────────────────────────────────────────────────────────
    CHECKOUT CONSTANTS — tweak numbers here
@@ -138,15 +139,17 @@ export default function CheckoutPage() {
 
   // ── Steadfast courier charges + the bKash/Nagad numbers to pay the advance to, editable in Admin → Settings ──
   const [zoneRates, setZoneRates] = useState<ZoneRateMap | null>(null);
+  const [habiganjRate, setHabiganjRate] = useState<string | null>(null);
   useEffect(() => {
     async function fetchZoneRates() {
       // Rates come ONLY from the admin panel (site_settings). No hardcoded
       // fallback: if any zone rate is missing/blank, ordering pauses with a
       // clear notice instead of silently charging an invented fee.
-      const { data } = await supabase.from('site_settings').select('key, value').in('key', [...ZONE_RATE_KEYS, 'checkout_bkash_number', 'checkout_nagad_number']);
+      const { data } = await supabase.from('site_settings').select('key, value').in('key', [...ZONE_RATE_KEYS, HABIGANJ_RATE_KEY, 'checkout_bkash_number', 'checkout_nagad_number']);
       const values: Record<string, string | null> = {};
       for (const s of data ?? []) values[s.key] = s.value;
       setZoneRates(parseZoneRates(values));
+      setHabiganjRate(values[HABIGANJ_RATE_KEY] ?? null);
       const bkashRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_bkash_number');
       const nagadRow = (data ?? []).find((s: { key: string }) => s.key === 'checkout_nagad_number');
       // NEVER fall back to a placeholder number — customers would send real
@@ -270,14 +273,20 @@ export default function CheckoutPage() {
 
   // Steadfast zone fee (null until the district is chosen or rates load)
   const deliveryDistrict = form.deliveryDistrict;
-  const zone = deliveryDistrict ? zoneForDistrict(deliveryDistrict) : null;
-  const zoneFee = zone && zoneRates ? zoneRates[zone] : null;
+  const zoneFee = zoneRates
+    ? deliveryRateForDistrict(deliveryDistrict, zoneRates, habiganjRate)
+    : null;
 
   // Delivery charge — always the ADMIN-SET zone rate (Settings → Delivery &
   // Payments) for the chosen district. Before a district is picked, the
   // CHEAPEST zone rate stands in as an honest "from" amount. When rates
   // aren't configured, ordering pauses (ratesMissing) — no invented fee.
-  const minZoneRate = zoneRates ? minZoneRateOf(zoneRates) : null;
+  const habiganjZoneFee = zoneRates
+    ? deliveryRateForDistrict('Habiganj', zoneRates, habiganjRate)
+    : null;
+  const minZoneRate = zoneRates
+    ? Math.min(minZoneRateOf(zoneRates), habiganjZoneFee ?? Infinity)
+    : null;
   const deliveryFee = zoneFee ?? minZoneRate ?? 0;
   const ratesMissing = zoneRates === null;
 
@@ -901,7 +910,7 @@ export default function CheckoutPage() {
                 {summaryLines.map((line) => (
                   <div key={line.key} className="flex gap-3">
                     <div className="w-16 h-16 rounded-2xl overflow-hidden bg-stone-100 flex-shrink-0">
-                      <img src={line.imageUrl ?? COVER_FALLBACK} alt={line.title} className="w-full h-full object-cover"
+                      <img src={ikImage(line.imageUrl ?? COVER_FALLBACK, 200)} alt={line.title} className="w-full h-full object-cover"
                         onError={(e) => { (e.target as HTMLImageElement).src = COVER_FALLBACK; }}
                       />
                     </div>

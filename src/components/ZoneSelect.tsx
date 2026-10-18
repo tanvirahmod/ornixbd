@@ -45,6 +45,7 @@ export const ZONE_RATE_KEYS = [
   'steadfast_rate_dhaka_suburban',
   'steadfast_rate_outside_dhaka',
 ] as const;
+export const HABIGANJ_RATE_KEY = 'steadfast_rate_habiganj';
 
 export type ZoneRateMap = Record<DeliveryZone, number>;
 
@@ -69,6 +70,20 @@ export function parseZoneRates(values: Record<string, string | null | undefined>
 /** Cheapest zone rate — used only as an honest "from ৳X" hint before a district is picked. */
 export function minZoneRateOf(rates: ZoneRateMap): number {
   return Math.min(rates.dhaka_city, rates.dhaka_suburban, rates.outside_dhaka);
+}
+
+/** Apply the optional Habiganj-only override, otherwise use its normal zone rate. */
+export function deliveryRateForDistrict(
+  district: string,
+  rates: ZoneRateMap,
+  habiganjRate?: string | null
+): number | null {
+  if (district.trim().toLowerCase() === 'habiganj' && habiganjRate != null && habiganjRate.trim() !== '') {
+    const override = Number(habiganjRate);
+    if (!isNaN(override) && override >= 0) return override;
+  }
+  const zone = zoneForDistrict(district);
+  return zone ? rates[zone] : null;
 }
 
 /**
