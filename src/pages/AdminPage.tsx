@@ -5248,43 +5248,43 @@ export default function AdminPage() {
                 })}
               </div>
 
-              {/* Pagination */}
-              {orderTotalPages > 1 && (
-                <div className="flex items-center justify-center gap-2 mt-8 flex-wrap">
-                  <button
-                    onClick={() => setOrderPage((p) => Math.max(1, p - 1))}
-                    disabled={orderSafePage === 1}
-                    className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  >
-                    Prev
-                  </button>
-                  {pageNumbers(orderSafePage, orderTotalPages).map((n, i) =>
-                    n === '…' ? (
-                      <span key={`dots-${i}`} className="px-1 text-stone-400 text-sm">…</span>
-                    ) : (
-                      <button
-                        key={n}
-                        onClick={() => setOrderPage(n as number)}
-                        className={`min-w-[2.5rem] px-2 py-2 rounded-lg text-sm font-semibold transition-all ${
-                          n === orderSafePage
-                            ? 'bg-stone-900 text-white shadow-md'
-                            : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
-                        }`}
-                      >
-                        {n}
-                      </button>
-                    )
-                  )}
-                  <button
-                    onClick={() => setOrderPage((p) => Math.min(orderTotalPages, p + 1))}
-                    disabled={orderSafePage === orderTotalPages}
-                    className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
               </>
+            )}
+            {/* Shared pagination for every order-card view. */}
+            {orderTotalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 mt-8 flex-wrap">
+                <button
+                  onClick={() => setOrderPage((p) => Math.max(1, p - 1))}
+                  disabled={orderSafePage === 1}
+                  className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Prev
+                </button>
+                {pageNumbers(orderSafePage, orderTotalPages).map((n, i) =>
+                  n === '…' ? (
+                    <span key={`dots-${i}`} className="px-1 text-stone-400 text-sm">…</span>
+                  ) : (
+                    <button
+                      key={n}
+                      onClick={() => setOrderPage(n as number)}
+                      className={`min-w-[2.5rem] px-2 py-2 rounded-lg text-sm font-semibold transition-all ${
+                        n === orderSafePage
+                          ? 'bg-stone-900 text-white shadow-md'
+                          : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  )
+                )}
+                <button
+                  onClick={() => setOrderPage((p) => Math.min(orderTotalPages, p + 1))}
+                  disabled={orderSafePage === orderTotalPages}
+                  className="px-3 py-2 rounded-lg text-sm font-medium text-stone-600 bg-white border border-stone-200 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Next
+                </button>
+              </div>
             )}
           </div>
         )}
