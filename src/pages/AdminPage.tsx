@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';import {
+import { useState, useEffect, useMemo, useRef, useCallback, type FormEvent } from 'react';import {
   Lock, LogOut, Plus, Pencil, Trash2, X, Loader2, Ruler, ShieldCheck,
    Package, ShoppingBag, Eye, Image, Save, AlertCircle, Tag, Search,
    Bell, CheckCheck, CheckCircle2, Truck, Clock, MessageSquare, Mail, Settings, Minus, RefreshCw, ChevronDown, XCircle, Percent, Power, AlertTriangle, Banknote, EyeOff, Link2, MapPin, Printer, ChevronRight, Download, TrendingUp, TrendingDown, Users, Store, FileDown, KeyRound, LogIn, Smartphone, Wifi,
@@ -85,6 +85,257 @@ type ManualGroup = {
   status: OrderStatus;
 };
 
+type OrderEditRow = {
+  id: string;
+  product_id: string | null;
+  product_title: string;
+  product_code: string | null;
+  selected_size: string | null;
+  quantity: string;
+  subtotal: string;
+  delivery_fee: string;
+  discount_amount: string;
+  advance_amount: string;
+};
+
+type OrderEditValues = {
+  customer_name: string;
+  customer_phone: string;
+  customer_address: string;
+  delivery_zone: string | null;
+  rows: Array<{
+    id: string;
+    product_id: string | null;
+    product_title: string;
+    product_code: string | null;
+    selected_size: string | null;
+    quantity: number;
+    subtotal: number;
+    delivery_fee: number;
+    discount_amount: number;
+    advance_amount: number;
+  }>;
+};
+
+function OrderEditModal({ rows, products, saving, onClose, onSave }: {
+  rows: Order[];
+  products: Product[];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (values: OrderEditValues) => void;
+}) {
+  const first = rows[0];
+  const [customerName, setCustomerName] = useState(first.customer_name);
+  const [customerPhone, setCustomerPhone] = useState(first.customer_phone);
+  const [customerAddress, setCustomerAddress] = useState(first.customer_address);
+  const [deliveryZone, setDeliveryZone] = useState(first.delivery_zone ?? '');
+  const [lines, setLines] = useState<OrderEditRow[]>(() => rows.map((row) => {
+    const product = products.find((item) => item.id === row.product_id);
+    const subtotal = Number(row.subtotal ?? row.total_amount ?? (
+      product ? (product.discount_price != null && product.discount_price < product.price ? product.discount_price : product.price) * (row.quantity || 1) : 0
+    ));
+    const delivery = Number(row.delivery_fee ?? 0);
+    const discount = Number(row.discount_amount ?? 0);
+    const total = Number(row.total_amount ?? subtotal + delivery - discount);
+    const advance = Number(row.advance_amount ?? Math.max(0, total - Number(row.due_amount ?? total)));
+    return {
+      id: row.id,
+      product_id: row.product_id,
+      product_title: row.product_title,
+      product_code: row.product_code,
+      selected_size: row.selected_size,
+      quantity: String(row.quantity ?? 1),
+      subtotal: String(subtotal),
+      delivery_fee: String(delivery),
+      discount_amount: String(discount),
+      advance_amount: String(advance),
+    };
+  }));
+  const [error, setError] = useState('');
+  const inputClass = 'w-full border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white';
+
+  const updateLine = (id: string, patch: Partial<OrderEditRow>) => {
+    setLines((current) => current.map((line) => line.id === id ? { ...line, ...patch } : line));
+    setError('');
+  };
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+      setError('Customer name, phone, and address are required.');
+      return;
+    }
+    const normalized = lines.map((line) => {
+      const quantity = Number(line.quantity);
+      const subtotal = Number(line.subtotal);
+      const deliveryFee = Number(line.delivery_fee);
+      const discountAmount = Number(line.discount_amount);
+      const advanceAmount = Number(line.advance_amount);
+      const total = subtotal + deliveryFee - discountAmount;
+      return { line, quantity, subtotal, deliveryFee, discountAmount, advanceAmount, total };
+    });
+    if (normalized.some(({ line, quantity, subtotal, deliveryFee, discountAmount, advanceAmount, total }) =>
+      !line.product_title.trim() || !Number.isInteger(quantity) || quantity < 1 ||
+      ![subtotal, deliveryFee, discountAmount, advanceAmount, total].every(Number.isFinite) ||
+      subtotal < 0 || deliveryFee < 0 || discountAmount < 0 || total < 0 ||
+      advanceAmount < 0 || advanceAmount > total
+    )) {
+      setError('Check the item details and amounts. Advance cannot exceed the order total.');
+      return;
+    }
+    onSave({
+      customer_name: customerName.trim(),
+      customer_phone: customerPhone.trim(),
+      customer_address: customerAddress.trim(),
+      delivery_zone: deliveryZone || null,
+      rows: normalized.map(({ line, quantity, subtotal, deliveryFee, discountAmount, advanceAmount }) => ({
+        id: line.id,
+        product_id: line.product_id,
+        product_title: line.product_title.trim(),
+        product_code: line.product_code?.trim() || null,
+        selected_size: line.selected_size || null,
+        quantity,
+        subtotal: Math.round(subtotal * 100) / 100,
+        delivery_fee: Math.round(deliveryFee * 100) / 100,
+        discount_amount: Math.round(discountAmount * 100) / 100,
+        advance_amount: Math.round(advanceAmount * 100) / 100,
+      })),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[94vh] flex flex-col" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 px-5 sm:px-6 py-4 border-b border-stone-100">
+          <div>
+            <h3 className="font-display text-lg font-bold text-stone-900">Edit order — {first.order_code ?? first.id.slice(0, 8)}</h3>
+            <p className="text-xs text-stone-500 mt-1">Changes apply to all {rows.length} item{rows.length === 1 ? '' : 's'} in this order.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className="text-stone-400 hover:text-stone-700 disabled:opacity-50" aria-label="Close edit order">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="min-h-0 flex flex-col">
+          <div className="overflow-y-auto px-5 sm:px-6 py-4 space-y-5">
+            <section>
+              <h4 className="text-sm font-bold text-stone-800 mb-3">Customer and delivery</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="text-xs font-semibold text-stone-500">Customer name
+                  <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
+                </label>
+                <label className="text-xs font-semibold text-stone-500">Phone
+                  <input className={`${inputClass} mt-1 font-normal text-stone-800`} type="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} />
+                </label>
+                <label className="text-xs font-semibold text-stone-500 sm:col-span-2">Full address (including thana and district)
+                  <textarea className={`${inputClass} mt-1 font-normal text-stone-800 resize-y`} rows={2} value={customerAddress} onChange={(event) => setCustomerAddress(event.target.value)} />
+                </label>
+                <label className="text-xs font-semibold text-stone-500 sm:col-span-2">Delivery district
+                  <select className={`${inputClass} mt-1 font-normal text-stone-800`} value={deliveryZone} onChange={(event) => setDeliveryZone(event.target.value)}>
+                    <option value="">— not specified —</option>
+                    {deliveryZone && !DELIVERY_ZONES.some((zone) => zone.districts.includes(deliveryZone)) && <option value={deliveryZone}>{deliveryZone} (existing)</option>}
+                    {DELIVERY_ZONES.map((zone) => (
+                      <optgroup key={zone.id} label={zone.id.replace(/_/g, ' ')}>
+                        {zone.districts.map((district) => <option key={district} value={district}>{district}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </section>
+            <section className="space-y-3">
+              <h4 className="text-sm font-bold text-stone-800">Items and amounts</h4>
+              {lines.map((line, index) => {
+                const product = products.find((item) => item.id === line.product_id);
+                const total = Number(line.subtotal || 0) + Number(line.delivery_fee || 0) - Number(line.discount_amount || 0);
+                const due = total - Number(line.advance_amount || 0);
+                return (
+                  <div key={line.id} className="border border-stone-200 rounded-2xl p-3 sm:p-4 space-y-3">
+                    <p className="text-xs font-bold text-stone-500">Item {index + 1}</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-stone-500 sm:col-span-2">Catalog product
+                        <select
+                          className={`${inputClass} mt-1 font-normal text-stone-800`}
+                          value={line.product_id ?? ''}
+                          onChange={(event) => {
+                            const selected = products.find((item) => item.id === event.target.value);
+                            updateLine(line.id, {
+                              product_id: selected?.id ?? null,
+                              product_title: selected?.title ?? line.product_title,
+                              product_code: selected?.product_code ?? null,
+                              selected_size: null,
+                            });
+                          }}
+                        >
+                          <option value="">Custom / no linked product</option>
+                          {line.product_id && !product && <option value={line.product_id}>Current linked product unavailable</option>}
+                          {products.map((item) => <option key={item.id} value={item.id}>{item.product_code ? `${item.product_code} · ` : ''}{item.title}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold text-stone-500">Item name
+                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.product_title} onChange={(event) => updateLine(line.id, { product_title: event.target.value })} />
+                      </label>
+                      <label className="text-xs font-semibold text-stone-500">Product code
+                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.product_code ?? ''} onChange={(event) => updateLine(line.id, { product_code: event.target.value || null })} />
+                      </label>
+                      <label className="text-xs font-semibold text-stone-500">Size
+                        {product?.product_sizes?.length ? (
+                          <select className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.selected_size ?? ''} onChange={(event) => updateLine(line.id, { selected_size: event.target.value || null })}>
+                            <option value="">{line.selected_size ? 'No size selected' : 'Choose size if applicable'}</option>
+                            {line.selected_size && !product.product_sizes.some((size) => size.size === line.selected_size) && <option value={line.selected_size}>{line.selected_size} (unavailable)</option>}
+                            {product.product_sizes.map((size) => <option key={size.id} value={size.size}>{size.size} — stock {size.quantity}</option>)}
+                          </select>
+                        ) : product ? (
+                          <select className={`${inputClass} mt-1 font-normal text-stone-800`} value="" disabled>
+                            <option value="">No size options</option>
+                          </select>
+                        ) : (
+                          <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.selected_size ?? ''} onChange={(event) => updateLine(line.id, { selected_size: event.target.value || null })} />
+                        )}
+                      </label>
+                      <label className="text-xs font-semibold text-stone-500">Quantity
+                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} type="number" min="1" step="1" value={line.quantity} onChange={(event) => updateLine(line.id, { quantity: event.target.value })} />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {([
+                        ['subtotal', 'Subtotal'],
+                        ['delivery_fee', 'Delivery fee'],
+                        ['discount_amount', 'Discount'],
+                        ['advance_amount', 'Advance paid'],
+                      ] as const).map(([key, label]) => (
+                        <label key={key} className="text-[11px] font-semibold text-stone-500">{label}
+                          <input className={`${inputClass} mt-1 px-2 font-normal text-stone-800`} type="number" min="0" step="0.01" value={line[key]} onChange={(event) => updateLine(line.id, { [key]: event.target.value })} />
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-stone-600 text-right">
+                      Total <strong className="text-stone-900">৳{Number.isFinite(total) ? total.toLocaleString('en-IN') : '—'}</strong>
+                      {' · '}Due <strong className={due > 0 ? 'text-amber-600' : 'text-emerald-600'}>৳{Number.isFinite(due) ? due.toLocaleString('en-IN') : '—'}</strong>
+                    </p>
+                  </div>
+                );
+              })}
+            </section>
+            {error && <p role="alert" className="rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">{error}</p>}
+            {rows.some((row) => row.tracking_code) && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                This order is already booked with a courier. Saving edits here will not update the parcel details in the courier portal.
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 px-5 sm:px-6 py-4 border-t border-stone-100">
+            <button type="button" onClick={onClose} disabled={saving} className="px-4 py-2 rounded-xl border border-stone-200 text-sm font-semibold text-stone-600 hover:bg-stone-50 disabled:opacity-60">Cancel</button>
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-white text-sm font-semibold disabled:opacity-60">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 const ORDER_STATUS_OPTIONS: Array<{
   value: OrderStatus;
   label: string;
@@ -138,7 +389,7 @@ function orderStageOf(b: boolean, rows: Order[]): SteadfastStage | null {
 }
 
 /** Orders tab — COMPACT view: one dense row per purchase, all actions intact. */
-function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, orderStatusOpen, setOrderStatusOpen, setGroupStatus, setDeleteOrderConfirm, updatingDelivery, sendingToSteadfast, handleSendToSteadfast, checkingSteadfast, refreshGroupStatuses, handlePrintGroupLabel, steadfastConfigured }: {
+function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, orderStatusOpen, setOrderStatusOpen, setGroupStatus, setDeleteOrderConfirm, updatingDelivery, sendingToSteadfast, handleSendToSteadfast, checkingSteadfast, refreshGroupStatuses, handlePrintGroupLabel, steadfastConfigured, onEditOrder }: {
   groups: StoreGroup[];
   selectedOrderIds: Set<string>;
   toggleGroupSelection: (g: StoreGroup) => void;
@@ -153,6 +404,7 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
   refreshGroupStatuses: (g: StoreGroup) => void;
   handlePrintGroupLabel: (g: StoreGroup) => void;
   steadfastConfigured: boolean;
+  onEditOrder: (g: StoreGroup) => void;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-stone-100 shadow-sm divide-y divide-stone-100 overflow-hidden">
@@ -223,6 +475,12 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
                       <span className="inline-flex items-center gap-2">{opt.icon}{opt.label}</span>
                     </button>
                   ))}
+                  <button
+                    onClick={() => onEditOrder(g)}
+                    className="w-full px-4 py-2.5 text-sm font-medium text-left text-stone-700 hover:bg-stone-50 transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-2"><Pencil className="w-4 h-4" />Edit order</span>
+                  </button>
                   <div className="border-t border-stone-100 my-1" />
                   <button
                     onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
@@ -280,7 +538,7 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
 }
 
 /** Orders tab — GRID view: dense tiles, one per purchase. */
-function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupStatus, setDeleteOrderConfirm, updatingDelivery, sendingToSteadfast, handleSendToSteadfast, steadfastConfigured }: {
+function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupStatus, setDeleteOrderConfirm, updatingDelivery, sendingToSteadfast, handleSendToSteadfast, steadfastConfigured, onEditOrder }: {
   groups: StoreGroup[];
   orderStatusOpen: string | null;
   setOrderStatusOpen: (v: string | null) => void;
@@ -290,6 +548,7 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
   sendingToSteadfast: string | null;
   handleSendToSteadfast: (o: Order) => void;
   steadfastConfigured: boolean;
+  onEditOrder: (g: StoreGroup) => void;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
@@ -357,6 +616,12 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
                         <span className="inline-flex items-center gap-2">{opt.icon}{opt.label}</span>
                       </button>
                     ))}
+                    <button
+                      onClick={() => onEditOrder(g)}
+                      className="w-full px-4 py-2.5 text-sm font-medium text-left text-stone-700 hover:bg-stone-50 transition-colors"
+                    >
+                      <span className="inline-flex items-center gap-2"><Pencil className="w-4 h-4" />Edit order</span>
+                    </button>
                     <div className="border-t border-stone-100 my-1" />
                     <button
                       onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
@@ -386,7 +651,7 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
 }
 
 /** Manual Orders tab — COMPACT view: one dense row per in-store sale. */
-function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setManualGroupStatus, setDeleteOrderConfirm, sendingToSteadfast, handleBookManualGroup, checkingSteadfast, handleRefreshManualGroup, handlePrintManualGroup, printingLabels, steadfastConfigured }: {
+function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setManualGroupStatus, setDeleteOrderConfirm, sendingToSteadfast, handleBookManualGroup, checkingSteadfast, handleRefreshManualGroup, handlePrintManualGroup, printingLabels, steadfastConfigured, onEditOrder }: {
   groups: ManualGroup[];
   manualStatusOpen: string | null;
   setManualStatusOpen: (v: string | null) => void;
@@ -399,6 +664,7 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
   handlePrintManualGroup: (g: ManualGroup) => void;
   printingLabels: string | null;
   steadfastConfigured: boolean;
+  onEditOrder: (g: ManualGroup) => void;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-stone-100 shadow-sm divide-y divide-stone-100 overflow-hidden">
@@ -465,6 +731,12 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
                       </span>
                     </button>
                   ))}
+                  <button
+                    onClick={() => onEditOrder(g)}
+                    className="w-full px-4 py-2.5 text-sm font-medium text-left text-stone-700 hover:bg-stone-50 transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-2"><Pencil className="w-4 h-4" />Edit sale</span>
+                  </button>
                   <div className="border-t border-stone-100 my-1" />
                   <button
                     onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
@@ -514,7 +786,7 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
 }
 
 /** Manual Orders tab — GRID view: dense tiles, one per in-store sale. */
-function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManualGroupStatus, setDeleteOrderConfirm, sendingToSteadfast, handleBookManualGroup, steadfastConfigured }: {
+function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManualGroupStatus, setDeleteOrderConfirm, sendingToSteadfast, handleBookManualGroup, steadfastConfigured, onEditOrder }: {
   groups: ManualGroup[];
   manualStatusOpen: string | null;
   setManualStatusOpen: (v: string | null) => void;
@@ -523,6 +795,7 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
   sendingToSteadfast: string | null;
   handleBookManualGroup: (g: ManualGroup) => void;
   steadfastConfigured: boolean;
+  onEditOrder: (g: ManualGroup) => void;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
@@ -596,6 +869,12 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
                         </span>
                       </button>
                     ))}
+                    <button
+                      onClick={() => onEditOrder(g)}
+                      className="w-full px-4 py-2.5 text-sm font-medium text-left text-stone-700 hover:bg-stone-50 transition-colors"
+                    >
+                      <span className="inline-flex items-center gap-2"><Pencil className="w-4 h-4" />Edit sale</span>
+                    </button>
                     <div className="border-t border-stone-100 my-1" />
                     <button
                       onClick={() => setDeleteOrderConfirm(g.rows[0]?.id ?? null)}
@@ -705,6 +984,8 @@ export default function AdminPage() {
   }, [authReady, isAuthenticated, tab, isAdminOf]);
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [orderEditRows, setOrderEditRows] = useState<Order[] | null>(null);
+  const [orderEditSaving, setOrderEditSaving] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -2654,6 +2935,104 @@ export default function AdminPage() {
     if (results.some(Boolean)) {
       showToast('success', `Order marked as ${ORDER_STATUS_LABEL[status]}.`);
     }
+  };
+
+  const handleSaveOrderEdits = async (values: OrderEditValues) => {
+    if (!orderEditRows || orderEditSaving) return;
+    setOrderEditSaving(true);
+    let data: unknown;
+    let error: { message: string } | null;
+    try {
+      const result = await supabase.rpc('admin_edit_order_group', {
+        p_order_ids: values.rows.map((row) => row.id),
+        p_customer_name: values.customer_name,
+        p_customer_phone: values.customer_phone,
+        p_customer_address: values.customer_address,
+        p_delivery_zone: values.delivery_zone,
+        p_rows: values.rows,
+      });
+      data = result.data;
+      error = result.error;
+    } catch (err) {
+      showToast('error', `Could not save order edits: ${err instanceof Error ? err.message : 'Unexpected request failure.'}`);
+      setOrderEditSaving(false);
+      return;
+    }
+    if (error) {
+      showToast('error', `Could not save order edits: ${error.message}. If this is the first use, apply the latest Supabase migration.`);
+      setOrderEditSaving(false);
+      return;
+    }
+
+    const updatedById = new Map(values.rows.map((row) => [row.id, row]));
+    setOrders((previous) => previous.map((order) => {
+      const edited = updatedById.get(order.id);
+      if (!edited) return order;
+      const total = Math.round((edited.subtotal + edited.delivery_fee - edited.discount_amount) * 100) / 100;
+      return {
+        ...order,
+        customer_name: values.customer_name,
+        customer_phone: values.customer_phone,
+        customer_address: values.customer_address,
+        delivery_zone: values.delivery_zone,
+        product_id: edited.product_id,
+        product_title: edited.product_title,
+        product_code: edited.product_code,
+        selected_size: edited.selected_size,
+        quantity: edited.quantity,
+        subtotal: edited.subtotal,
+        delivery_fee: edited.delivery_fee,
+        discount_amount: edited.discount_amount,
+        total_amount: total,
+        advance_amount: edited.advance_amount,
+        due_amount: Math.round((total - edited.advance_amount) * 100) / 100,
+      };
+    }));
+    setNotifications((previous) => previous.map((order) => {
+      const edited = updatedById.get(order.id);
+      if (!edited) return order;
+      const total = Math.round((edited.subtotal + edited.delivery_fee - edited.discount_amount) * 100) / 100;
+      return {
+        ...order,
+        customer_name: values.customer_name,
+        customer_phone: values.customer_phone,
+        customer_address: values.customer_address,
+        delivery_zone: values.delivery_zone,
+        product_id: edited.product_id,
+        product_title: edited.product_title,
+        product_code: edited.product_code,
+        selected_size: edited.selected_size,
+        quantity: edited.quantity,
+        subtotal: edited.subtotal,
+        delivery_fee: edited.delivery_fee,
+        discount_amount: edited.discount_amount,
+        total_amount: total,
+        advance_amount: edited.advance_amount,
+        due_amount: Math.round((total - edited.advance_amount) * 100) / 100,
+      };
+    }));
+
+    const stockChanges = Array.isArray(data)
+      ? data as Array<{ product_id: string; size: string | null; delta: number }>
+      : [];
+    setProducts((previous) => previous.map((product) => {
+      const changes = stockChanges.filter((change) => change.product_id === product.id);
+      if (changes.length === 0) return product;
+      const sizeChanges = new Map(changes.filter((change) => change.size).map((change) => [change.size!, change.delta]));
+      const productSizes = product.product_sizes?.map((size) => ({
+        ...size,
+        quantity: size.quantity + (sizeChanges.get(size.size) ?? 0),
+      }));
+      const totalDelta = changes.reduce((sum, change) => sum + change.delta, 0);
+      return { ...product, stock_count: product.stock_count + totalDelta, product_sizes: productSizes };
+    }));
+    for (const change of stockChanges) {
+      void stockDelta(change.product_id, change.size, change.delta, 'order_edit', `Order ${orderEditRows[0]?.order_code ?? orderEditRows[0]?.id.slice(0, 8)} edited`);
+    }
+    void logAdmin('order_edit', orderEditRows[0]?.id, `Edited ${values.rows.length} item${values.rows.length === 1 ? '' : 's'}, customer details, and order amounts`);
+    setOrderEditRows(null);
+    setOrderEditSaving(false);
+    showToast('success', 'Order updated. Inventory has been adjusted.');
   };
 
   // Refresh the Steadfast status of a purchase: one API call per unique
@@ -4944,6 +5323,7 @@ export default function AdminPage() {
                 refreshGroupStatuses={(g) => void handleRefreshGroupStatus(g)}
                 handlePrintGroupLabel={handlePrintGroupLabel}
                 steadfastConfigured={steadfastConfigured}
+                onEditOrder={(g) => { setOrderStatusOpen(null); setOrderEditRows(g.rows); }}
               />
             ) : orderView === 'grid' ? (
               <OrdersGridView
@@ -4956,6 +5336,7 @@ export default function AdminPage() {
                 sendingToSteadfast={sendingToSteadfast}
                 handleSendToSteadfast={handleSendToSteadfast}
                 steadfastConfigured={steadfastConfigured}
+                onEditOrder={(g) => { setOrderStatusOpen(null); setOrderEditRows(g.rows); }}
               />
             ) : (
               <>
@@ -5039,6 +5420,12 @@ export default function AdminPage() {
                                     {g.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
                                   </button>
                                 ))}
+                                <button
+                                  onClick={() => { setOrderStatusOpen(null); setOrderEditRows(g.rows); }}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-left text-stone-700 hover:bg-stone-50 transition-colors"
+                                >
+                                  <Pencil className="w-4 h-4" />Edit order
+                                </button>
                                 <div className="border-t border-stone-100 my-1" />
                                 <button
                                   onClick={() => { setOrderStatusOpen(null); setDeleteOrderConfirm(g.rows[0]?.id ?? null); }}
@@ -5849,6 +6236,7 @@ export default function AdminPage() {
                   handlePrintManualGroup={(g) => void handlePrintManualGroup(g)}
                   printingLabels={printingLabels}
                   steadfastConfigured={steadfastConfigured}
+                  onEditOrder={(g) => { setManualStatusOpen(null); setOrderEditRows(g.rows); }}
                 />
               ) : manualView === 'grid' ? (
                 <ManualGridView
@@ -5860,6 +6248,7 @@ export default function AdminPage() {
                   sendingToSteadfast={sendingToSteadfast}
                   handleBookManualGroup={(g) => void handleBookManualGroup(g)}
                   steadfastConfigured={steadfastConfigured}
+                  onEditOrder={(g) => { setManualStatusOpen(null); setOrderEditRows(g.rows); }}
                 />
               ) : (
               <div className="space-y-2">
@@ -5926,6 +6315,12 @@ export default function AdminPage() {
                                     {g.status === opt.value && <CheckCheck className="w-3.5 h-3.5 ml-auto" />}
                                   </button>
                                 ))}
+                                <button
+                                  onClick={() => { setManualStatusOpen(null); setOrderEditRows(g.rows); }}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-left text-stone-700 hover:bg-stone-50 transition-colors"
+                                >
+                                  <Pencil className="w-4 h-4" />Edit sale
+                                </button>
                                 <div className="border-t border-stone-100 my-1" />
                                 <button
                                   onClick={() => { setManualStatusOpen(null); setDeleteOrderConfirm(g.rows[0]?.id ?? null); }}
@@ -6609,6 +7004,16 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {orderEditRows && (
+          <OrderEditModal
+            rows={orderEditRows}
+            products={products}
+            saving={orderEditSaving}
+            onClose={() => { if (!orderEditSaving) setOrderEditRows(null); }}
+            onSave={(values) => void handleSaveOrderEdits(values)}
+          />
         )}
 
         {/* ── Stock movement history modal ── */}
