@@ -691,14 +691,14 @@ export default function AdminPage() {
     if (adminEmail) setCurrentAdminId(adminEmail);
   }, [adminEmail]);
 
-  const [tab, setTab] = useState<Tab>('products');
+  const [tab, setTab] = useState<Tab>('orders');
 
   // If the signed-in admin lacks permission for the current tab, fall back to
   // the first tab they can use (e.g. after the super admin restricts them).
   useEffect(() => {
     if (!authReady || !isAuthenticated) return;
     if (!isAdminOf(tab)) {
-      const fallback = (['products', 'stock', 'categories', 'orders', 'manual', 'finance', 'coupons', 'feedback', 'settings'] as Tab[])
+      const fallback = (['orders', 'manual', 'products', 'stock', 'categories', 'finance', 'coupons', 'feedback', 'settings'] as Tab[])
         .find((t) => isAdminOf(t));
       if (fallback) setTab(fallback);
     }
@@ -4094,11 +4094,11 @@ export default function AdminPage() {
       <div className="bg-white border-b border-stone-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
           {([
+            { key: 'orders' as Tab, label: 'Orders', icon: <ShoppingBag className="w-4 h-4" />, count: storeOrders.length, highlight: pendingOrders > 0 ? `${pendingOrders} pending` : undefined, cap: 'orders' as const },
+            { key: 'manual' as Tab, label: 'Manual Orders', icon: <Store className="w-4 h-4" />, count: manualOrders.length, cap: 'manual' as const },
             { key: 'products' as Tab, label: 'Products', icon: <Package className="w-4 h-4" />, count: products.length, cap: 'products' as const },
             { key: 'stock' as Tab, label: 'Stock', icon: <Package className="w-4 h-4" />, count: lowStockCount, cap: 'stock' as const },
             { key: 'categories' as Tab, label: 'Categories', icon: <Tag className="w-4 h-4" />, count: categories.length, cap: 'categories' as const },
-            { key: 'orders' as Tab, label: 'Orders', icon: <ShoppingBag className="w-4 h-4" />, count: storeOrders.length, highlight: pendingOrders > 0 ? `${pendingOrders} pending` : undefined, cap: 'orders' as const },
-            { key: 'manual' as Tab, label: 'Manual Orders', icon: <Store className="w-4 h-4" />, count: manualOrders.length, cap: 'manual' as const },
             { key: 'finance' as Tab, label: 'Finance', icon: <Banknote className="w-4 h-4" />, cap: 'finance' as const },
             { key: 'coupons' as Tab, label: 'Coupons', icon: <Percent className="w-4 h-4" />, count: couponsUnavailable ? undefined : coupons.length, cap: 'coupons' as const },
             { key: 'feedback' as Tab, label: 'Feedback', icon: <MessageSquare className="w-4 h-4" />, count: feedbackList.length, badge: unreadFeedback, cap: 'feedback' as const },
