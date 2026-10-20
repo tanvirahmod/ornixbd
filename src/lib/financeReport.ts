@@ -12,9 +12,10 @@
 //   • totals row + footer
 
 import { ORNIX_LOGO_URL } from './seo';
+import { ikImage } from './imagekit';
 
 // Same logo as the storefront navbar / other reports (ImageKit CDN).
-const LOGO_URL = ORNIX_LOGO_URL;
+const LOGO_URL = ikImage(ORNIX_LOGO_URL, 300);
 
 function esc(v: unknown): string {
   return String(v ?? '')

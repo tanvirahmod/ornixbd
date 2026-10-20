@@ -13,9 +13,10 @@
 import QRCode from 'qrcode';
 import type { Order } from './supabase';
 import { ORNIX_LOGO_URL } from './seo';
+import { ikImage } from './imagekit';
 
 // Same logo as the storefront navbar (ImageKit CDN).
-const LOGO_URL = ORNIX_LOGO_URL;
+const LOGO_URL = ikImage(ORNIX_LOGO_URL, 300);
 
 // Declared parcel weight printed on labels and sent with every booking.
 const WEIGHT_KG = 0.5;

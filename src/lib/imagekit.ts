@@ -10,6 +10,7 @@ const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const IMAGEKIT_URL_ENDPOINT = 'https://ik.imagekit.io/flh4anc2d';
+const IMAGE_CDN_BASE = (import.meta.env.VITE_IMAGE_CDN_BASE ?? '').replace(/\/+$/, '');
 
 interface UploadAuth {
   token: string;
@@ -87,5 +88,13 @@ export function ikImage(url: string | null | undefined, width = 800): string {
   if (!url) return '';
   if (!url.includes('ik.imagekit.io')) return url;
   const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}tr=w-${width},f-auto,q-75`;
+  const transformedUrl = `${url}${sep}tr=w-${width},f-auto,q-75`;
+  if (!IMAGE_CDN_BASE) return transformedUrl;
+
+  const imageUrl = new URL(transformedUrl);
+  const endpointPath = new URL(IMAGEKIT_URL_ENDPOINT).pathname;
+  const imagePath = imageUrl.pathname.startsWith(`${endpointPath}/`)
+    ? imageUrl.pathname.slice(endpointPath.length)
+    : imageUrl.pathname;
+  return `${IMAGE_CDN_BASE}${imagePath}${imageUrl.search}`;
 }

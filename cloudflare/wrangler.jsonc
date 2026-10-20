@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ornix-image-proxy",
+  "main": "image-worker.js",
+  "compatibility_date": "2025-01-01",
+  "workers_dev": true,
+  "vars": {
+    "IMAGEKIT_ENDPOINT": "flh4anc2d"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
