@@ -86,7 +86,8 @@ type ManualGroup = {
 };
 
 type OrderEditRow = {
-  id: string;
+  id: string | null;
+  key: string;
   product_id: string | null;
   product_title: string;
   product_code: string | null;
@@ -104,7 +105,7 @@ type OrderEditValues = {
   customer_address: string;
   delivery_zone: string | null;
   rows: Array<{
-    id: string;
+    id: string | null;
     product_id: string | null;
     product_title: string;
     product_code: string | null;
@@ -140,6 +141,7 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
     const advance = Number(row.advance_amount ?? Math.max(0, total - Number(row.due_amount ?? total)));
     return {
       id: row.id,
+      key: row.id,
       product_id: row.product_id,
       product_title: row.product_title,
       product_code: row.product_code,
@@ -152,10 +154,59 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
     };
   }));
   const [error, setError] = useState('');
+  const [activeProductPicker, setActiveProductPicker] = useState<string | null>(null);
+  const [productSearch, setProductSearch] = useState('');
   const inputClass = 'w-full border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white';
 
+  const splitDeliveryFee = (items: OrderEditRow[], deliveryTotal: number) => {
+    const gross = items.map((line) => Math.max(0, Number(line.subtotal) || 0));
+    const grossTotal = gross.reduce((sum, amount) => sum + amount, 0) || 1;
+    const allocations = gross.map((amount, index) => index === 0
+      ? 0
+      : Math.round((deliveryTotal * amount / grossTotal) * 100) / 100);
+    if (allocations.length > 0) {
+      allocations[0] = Math.round((deliveryTotal - allocations.slice(1).reduce((sum, fee) => sum + fee, 0)) * 100) / 100;
+    }
+    return items.map((line, index) => ({ ...line, delivery_fee: String(allocations[index] ?? 0) }));
+  };
+
   const updateLine = (id: string, patch: Partial<OrderEditRow>) => {
-    setLines((current) => current.map((line) => line.id === id ? { ...line, ...patch } : line));
+    setLines((current) => current.map((line) => line.key === id ? { ...line, ...patch } : line));
+    setError('');
+  };
+
+  const addLine = () => {
+    const key = `new-${crypto.randomUUID()}`;
+    setLines((current) => [...current, {
+      id: null,
+      key,
+      product_id: null,
+      product_title: '',
+      product_code: null,
+      selected_size: null,
+      quantity: '1',
+      subtotal: '0',
+      delivery_fee: '0',
+      discount_amount: '0',
+      advance_amount: '0',
+    }]);
+    setError('');
+  };
+
+  const removeLine = (key: string) => {
+    setLines((current) => {
+      if (current.length <= 1) return current;
+      const removed = current.find((line) => line.key === key);
+      const remaining = current.filter((line) => line.key !== key);
+      if (!removed || remaining.length === 0) return current;
+      const deliveryTotal = current.reduce((sum, line) => sum + (Number(line.delivery_fee) || 0), 0);
+      const withoutDelivery = remaining.map((line) => line.key === remaining[0].key ? {
+          ...line,
+          discount_amount: String(Number(line.discount_amount) + Number(removed.discount_amount)),
+          advance_amount: String(Number(line.advance_amount) + Number(removed.advance_amount)),
+        } : line);
+      return splitDeliveryFee(withoutDelivery, deliveryTotal);
+    });
     setError('');
   };
 
@@ -174,13 +225,18 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
       const total = subtotal + deliveryFee - discountAmount;
       return { line, quantity, subtotal, deliveryFee, discountAmount, advanceAmount, total };
     });
-    if (normalized.some(({ line, quantity, subtotal, deliveryFee, discountAmount, advanceAmount, total }) =>
+    if (lines.length === 0 || normalized.some(({ line, quantity, subtotal, deliveryFee, discountAmount, advanceAmount, total }) =>
       !line.product_title.trim() || !Number.isInteger(quantity) || quantity < 1 ||
       ![subtotal, deliveryFee, discountAmount, advanceAmount, total].every(Number.isFinite) ||
-      subtotal < 0 || deliveryFee < 0 || discountAmount < 0 || total < 0 ||
-      advanceAmount < 0 || advanceAmount > total
+      subtotal < 0 || deliveryFee < 0 || discountAmount < 0 || total < 0 || advanceAmount < 0
     )) {
-      setError('Check the item details and amounts. Advance cannot exceed the order total.');
+      setError('Check each item and amount. Values must be valid and non-negative.');
+      return;
+    }
+    const orderTotal = normalized.reduce((sum, item) => sum + item.total, 0);
+    const orderAdvance = normalized.reduce((sum, item) => sum + item.advanceAmount, 0);
+    if (orderAdvance > orderTotal) {
+      setError('Total advance paid cannot exceed the full order total.');
       return;
     }
     onSave({
@@ -209,7 +265,7 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
         <div className="flex items-start justify-between gap-4 px-5 sm:px-6 py-4 border-b border-stone-100">
           <div>
             <h3 className="font-display text-lg font-bold text-stone-900">Edit order — {first.order_code ?? first.id.slice(0, 8)}</h3>
-            <p className="text-xs text-stone-500 mt-1">Changes apply to all {rows.length} item{rows.length === 1 ? '' : 's'} in this order.</p>
+            <p className="text-xs text-stone-500 mt-1">Changes apply to all {lines.length} item{lines.length === 1 ? '' : 's'} in this order.</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} className="text-stone-400 hover:text-stone-700 disabled:opacity-50" aria-label="Close edit order">
             <X className="w-5 h-5" />
@@ -246,40 +302,97 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
               <h4 className="text-sm font-bold text-stone-800">Items and amounts</h4>
               {lines.map((line, index) => {
                 const product = products.find((item) => item.id === line.product_id);
+                const productQuery = activeProductPicker === line.key ? productSearch : '';
+                const matchingProducts = products.filter((item) => {
+                  const query = productQuery.trim().toLowerCase();
+                  return !query || `${item.title} ${item.product_code ?? ''}`.toLowerCase().includes(query);
+                });
                 const total = Number(line.subtotal || 0) + Number(line.delivery_fee || 0) - Number(line.discount_amount || 0);
                 const due = total - Number(line.advance_amount || 0);
                 return (
-                  <div key={line.id} className="border border-stone-200 rounded-2xl p-3 sm:p-4 space-y-3">
-                    <p className="text-xs font-bold text-stone-500">Item {index + 1}</p>
+                  <div key={line.key} className="border border-stone-200 rounded-2xl p-3 sm:p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold text-stone-500">Item {index + 1}</p>
+                      <button type="button" onClick={() => removeLine(line.key)} disabled={saving || lines.length <= 1} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40" title={lines.length <= 1 ? 'An order must contain at least one item.' : 'Remove this item'}>
+                        <Trash2 className="w-3.5 h-3.5" />Remove
+                      </button>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <label className="text-xs font-semibold text-stone-500 sm:col-span-2">Catalog product
-                        <select
-                          className={`${inputClass} mt-1 font-normal text-stone-800`}
-                          value={line.product_id ?? ''}
-                          onChange={(event) => {
-                            const selected = products.find((item) => item.id === event.target.value);
-                            updateLine(line.id, {
-                              product_id: selected?.id ?? null,
-                              product_title: selected?.title ?? line.product_title,
-                              product_code: selected?.product_code ?? null,
-                              selected_size: null,
-                            });
-                          }}
-                        >
-                          <option value="">Custom / no linked product</option>
-                          {line.product_id && !product && <option value={line.product_id}>Current linked product unavailable</option>}
-                          {products.map((item) => <option key={item.id} value={item.id}>{item.product_code ? `${item.product_code} · ` : ''}{item.title}</option>)}
-                        </select>
-                      </label>
+                      <div className="relative sm:col-span-2">
+                        <label className="text-xs font-semibold text-stone-500" htmlFor={`order-product-${line.key}`}>Catalog product
+                          <input
+                            id={`order-product-${line.key}`}
+                            className={`${inputClass} mt-1 font-normal text-stone-800`}
+                            type="search"
+                            autoComplete="off"
+                            placeholder={product ? `${product.product_code ? `${product.product_code} · ` : ''}${product.title}` : 'Search products by name or code...'}
+                            value={productQuery}
+                            onFocus={() => { setActiveProductPicker(line.key); setProductSearch(''); }}
+                            onChange={(event) => { setActiveProductPicker(line.key); setProductSearch(event.target.value); }}
+                            onBlur={() => window.setTimeout(() => {
+                              setActiveProductPicker((active) => active === line.key ? null : active);
+                              setProductSearch('');
+                            }, 120)}
+                          />
+                        </label>
+                        {activeProductPicker === line.key && (
+                          <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-stone-200 bg-white py-1 shadow-xl">
+                            <button
+                              type="button"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => {
+                                updateLine(line.key, { product_id: null, product_code: null, selected_size: null });
+                                setActiveProductPicker(null);
+                                setProductSearch('');
+                              }}
+                              className="w-full px-3 py-2 text-left text-xs font-medium text-stone-600 hover:bg-stone-50"
+                            >Custom / no linked product</button>
+                            {line.product_id && !product && (
+                              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => {
+                                setActiveProductPicker(null);
+                                setProductSearch('');
+                              }} className="w-full px-3 py-2 text-left text-xs text-stone-500 hover:bg-stone-50">
+                                Current linked product unavailable
+                              </button>
+                            )}
+                            {matchingProducts.length ? matchingProducts.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => {
+                                  const unitPrice = item.discount_price != null && item.discount_price < item.price ? item.discount_price : item.price;
+                                  setLines((current) => {
+                                    const updated = current.map((entry) => entry.key === line.key ? {
+                                      ...entry,
+                                      product_id: item.id,
+                                      product_title: item.title,
+                                      product_code: item.product_code,
+                                      selected_size: null,
+                                      subtotal: String(unitPrice * (Number(entry.quantity) || 1)),
+                                    } : entry);
+                                    const feeTotal = current.reduce((sum, entry) => sum + (Number(entry.delivery_fee) || 0), 0);
+                                    return splitDeliveryFee(updated, feeTotal);
+                                  });
+                                  setActiveProductPicker(null);
+                                  setProductSearch('');
+                                  setError('');
+                                }}
+                                className={`w-full px-3 py-2 text-left text-xs hover:bg-brand-50 ${item.id === line.product_id ? 'bg-brand-50 font-semibold text-brand-700' : 'text-stone-700'}`}
+                              >{item.product_code ? `${item.product_code} · ` : ''}{item.title}</button>
+                            )) : <p className="px-3 py-2 text-xs text-stone-400">No products match that search.</p>}
+                          </div>
+                        )}
+                      </div>
                       <label className="text-xs font-semibold text-stone-500">Item name
-                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.product_title} onChange={(event) => updateLine(line.id, { product_title: event.target.value })} />
+                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.product_title} onChange={(event) => updateLine(line.key, { product_title: event.target.value })} />
                       </label>
                       <label className="text-xs font-semibold text-stone-500">Product code
-                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.product_code ?? ''} onChange={(event) => updateLine(line.id, { product_code: event.target.value || null })} />
+                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.product_code ?? ''} onChange={(event) => updateLine(line.key, { product_code: event.target.value || null })} />
                       </label>
                       <label className="text-xs font-semibold text-stone-500">Size
                         {product?.product_sizes?.length ? (
-                          <select className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.selected_size ?? ''} onChange={(event) => updateLine(line.id, { selected_size: event.target.value || null })}>
+                          <select className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.selected_size ?? ''} onChange={(event) => updateLine(line.key, { selected_size: event.target.value || null })}>
                             <option value="">{line.selected_size ? 'No size selected' : 'Choose size if applicable'}</option>
                             {line.selected_size && !product.product_sizes.some((size) => size.size === line.selected_size) && <option value={line.selected_size}>{line.selected_size} (unavailable)</option>}
                             {product.product_sizes.map((size) => <option key={size.id} value={size.size}>{size.size} — stock {size.quantity}</option>)}
@@ -289,11 +402,22 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
                             <option value="">No size options</option>
                           </select>
                         ) : (
-                          <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.selected_size ?? ''} onChange={(event) => updateLine(line.id, { selected_size: event.target.value || null })} />
+                          <input className={`${inputClass} mt-1 font-normal text-stone-800`} value={line.selected_size ?? ''} onChange={(event) => updateLine(line.key, { selected_size: event.target.value || null })} />
                         )}
                       </label>
                       <label className="text-xs font-semibold text-stone-500">Quantity
-                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} type="number" min="1" step="1" value={line.quantity} onChange={(event) => updateLine(line.id, { quantity: event.target.value })} />
+                        <input className={`${inputClass} mt-1 font-normal text-stone-800`} type="number" min="1" step="1" value={line.quantity} onChange={(event) => {
+                          const quantity = event.target.value;
+                          const nextQuantity = Number(quantity);
+                          const currentQuantity = Number(line.quantity);
+                          const unitPrice = Number(line.subtotal) / (currentQuantity || 1);
+                          updateLine(line.key, {
+                            quantity,
+                            ...(Number.isInteger(nextQuantity) && nextQuantity > 0 && Number.isFinite(unitPrice) ? {
+                              subtotal: String(Math.round(unitPrice * nextQuantity * 100) / 100),
+                            } : {}),
+                          });
+                        }} />
                       </label>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -304,7 +428,7 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
                         ['advance_amount', 'Advance paid'],
                       ] as const).map(([key, label]) => (
                         <label key={key} className="text-[11px] font-semibold text-stone-500">{label}
-                          <input className={`${inputClass} mt-1 px-2 font-normal text-stone-800`} type="number" min="0" step="0.01" value={line[key]} onChange={(event) => updateLine(line.id, { [key]: event.target.value })} />
+                          <input className={`${inputClass} mt-1 px-2 font-normal text-stone-800`} type="number" min="0" step="0.01" value={line[key]} onChange={(event) => updateLine(line.key, { [key]: event.target.value })} />
                         </label>
                       ))}
                     </div>
@@ -315,6 +439,17 @@ function OrderEditModal({ rows, products, saving, onClose, onSave }: {
                   </div>
                 );
               })}
+              <div className="rounded-xl border border-brand-100 bg-brand-50/60 px-3 py-2 text-right text-xs text-stone-600">
+                Order total <strong className="text-stone-900">৳{lines.reduce((sum, line) => sum + Number(line.subtotal || 0) + Number(line.delivery_fee || 0) - Number(line.discount_amount || 0), 0).toLocaleString('en-IN')}</strong>
+                {' · '}Advance <strong className="text-stone-900">৳{lines.reduce((sum, line) => sum + Number(line.advance_amount || 0), 0).toLocaleString('en-IN')}</strong>
+                {' · '}COD due <strong className="text-amber-700">৳{lines.reduce((sum, line) => sum + Number(line.subtotal || 0) + Number(line.delivery_fee || 0) - Number(line.discount_amount || 0) - Number(line.advance_amount || 0), 0).toLocaleString('en-IN')}</strong>
+              </div>
+              <p className="text-[11px] text-stone-400">New catalog items start at the current product price. Removing an item keeps the order’s delivery fee, discount, and advance amounts.</p>
+              <div className="flex justify-end pt-1">
+                <button type="button" onClick={addLine} disabled={saving} className="inline-flex items-center gap-1.5 rounded-xl bg-brand-50 px-3 py-2 text-xs font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-60">
+                  <Plus className="w-4 h-4" />Add item
+                </button>
+              </div>
             </section>
             {error && <p role="alert" className="rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">{error}</p>}
             {rows.some((row) => row.tracking_code) && (
@@ -2944,7 +3079,7 @@ export default function AdminPage() {
     let error: { message: string } | null;
     try {
       const result = await supabase.rpc('admin_edit_order_group', {
-        p_order_ids: values.rows.map((row) => row.id),
+        p_order_ids: orderEditRows.map((row) => row.id),
         p_customer_name: values.customer_name,
         p_customer_phone: values.customer_phone,
         p_customer_address: values.customer_address,
@@ -2964,57 +3099,24 @@ export default function AdminPage() {
       return;
     }
 
-    const updatedById = new Map(values.rows.map((row) => [row.id, row]));
-    setOrders((previous) => previous.map((order) => {
-      const edited = updatedById.get(order.id);
-      if (!edited) return order;
-      const total = Math.round((edited.subtotal + edited.delivery_fee - edited.discount_amount) * 100) / 100;
-      return {
-        ...order,
-        customer_name: values.customer_name,
-        customer_phone: values.customer_phone,
-        customer_address: values.customer_address,
-        delivery_zone: values.delivery_zone,
-        product_id: edited.product_id,
-        product_title: edited.product_title,
-        product_code: edited.product_code,
-        selected_size: edited.selected_size,
-        quantity: edited.quantity,
-        subtotal: edited.subtotal,
-        delivery_fee: edited.delivery_fee,
-        discount_amount: edited.discount_amount,
-        total_amount: total,
-        advance_amount: edited.advance_amount,
-        due_amount: Math.round((total - edited.advance_amount) * 100) / 100,
-      };
-    }));
-    setNotifications((previous) => previous.map((order) => {
-      const edited = updatedById.get(order.id);
-      if (!edited) return order;
-      const total = Math.round((edited.subtotal + edited.delivery_fee - edited.discount_amount) * 100) / 100;
-      return {
-        ...order,
-        customer_name: values.customer_name,
-        customer_phone: values.customer_phone,
-        customer_address: values.customer_address,
-        delivery_zone: values.delivery_zone,
-        product_id: edited.product_id,
-        product_title: edited.product_title,
-        product_code: edited.product_code,
-        selected_size: edited.selected_size,
-        quantity: edited.quantity,
-        subtotal: edited.subtotal,
-        delivery_fee: edited.delivery_fee,
-        discount_amount: edited.discount_amount,
-        total_amount: total,
-        advance_amount: edited.advance_amount,
-        due_amount: Math.round((total - edited.advance_amount) * 100) / 100,
-      };
-    }));
+    const resultData = data as { rows?: unknown; stock_changes?: unknown } | null;
+    const savedRows = Array.isArray(resultData?.rows) && resultData.rows.every((row) =>
+      typeof row === 'object' && row !== null && typeof (row as { id?: unknown }).id === 'string'
+    ) ? resultData.rows as Order[] : null;
+    if (!savedRows || !Array.isArray(resultData?.stock_changes)) {
+      showToast('error', 'The order was saved, but the updated order details could not be loaded. Refresh the page before making more changes.');
+      setOrderEditSaving(false);
+      setOrderEditRows(null);
+      return;
+    }
+    const oldIds = new Set(orderEditRows.map((row) => row.id));
+    setOrders((previous) => [...previous.filter((order) => !oldIds.has(order.id)), ...savedRows]);
+    setNotifications((previous) => {
+      if (!previous.some((order) => oldIds.has(order.id))) return previous;
+      return [...previous.filter((order) => !oldIds.has(order.id)), ...savedRows];
+    });
 
-    const stockChanges = Array.isArray(data)
-      ? data as Array<{ product_id: string; size: string | null; delta: number }>
-      : [];
+    const stockChanges = resultData.stock_changes as Array<{ product_id: string; size: string | null; delta: number }>;
     setProducts((previous) => previous.map((product) => {
       const changes = stockChanges.filter((change) => change.product_id === product.id);
       if (changes.length === 0) return product;
@@ -3029,7 +3131,7 @@ export default function AdminPage() {
     for (const change of stockChanges) {
       void stockDelta(change.product_id, change.size, change.delta, 'order_edit', `Order ${orderEditRows[0]?.order_code ?? orderEditRows[0]?.id.slice(0, 8)} edited`);
     }
-    void logAdmin('order_edit', orderEditRows[0]?.id, `Edited ${values.rows.length} item${values.rows.length === 1 ? '' : 's'}, customer details, and order amounts`);
+    void logAdmin('order_edit', orderEditRows[0]?.id, `Edited ${savedRows.length} item${savedRows.length === 1 ? '' : 's'}, customer details, and order amounts`);
     setOrderEditRows(null);
     setOrderEditSaving(false);
     showToast('success', 'Order updated. Inventory has been adjusted.');
