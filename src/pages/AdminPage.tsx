@@ -6,7 +6,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, type FormEvent } fro
 } from 'lucide-react';
 import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback, Announcement, SiteSetting, Coupon, AdminLog, AdminLogin, StockMovement, Expense, Seller, SizeChartTemplate } from '../lib/supabase';
 import { runBounded } from '../lib/supabaseQuery';
-import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
+import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, steadfastStageFor, steadfastStageMeta, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
 import { zoneForDistrict, DELIVERY_ZONES, HABIGANJ_RATE_KEY, deliveryRateForDistrict, type DeliveryZone } from '../components/ZoneSelect';
 import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
@@ -59,6 +59,7 @@ type StoreGroup = {
   code: string;
   key: string;
   rows: Order[];
+  trackingCodes: string[];
   createdAt: string;
   total: number;
   due: number;
@@ -70,6 +71,7 @@ type ManualGroup = {
   code: string;
   key: string;
   rows: Order[];
+  trackingCodes: string[];
   customer: string;
   phone: string;
   seller: string | null;
@@ -512,15 +514,46 @@ function STORE_STAGE_DOT(b: boolean, stage: SteadfastStage | null): string {
     case 'in_review': return 'bg-sky-400';
     case 'picked_up': return 'bg-amber-400';
     case 'in_transit': return 'bg-orange-400';
+    case 'awaiting_confirmation': return 'bg-violet-400';
+    case 'partially_delivered': return 'bg-orange-500';
     case 'delivered': return 'bg-emerald-500';
     case 'cancelled': return 'bg-red-400';
+    case 'needs_attention': return 'bg-amber-500';
     default: return 'bg-stone-400';
   }
 }
 function orderStageOf(b: boolean, rows: Order[]): SteadfastStage | null {
   if (!b) return null;
-  const raw = rows.find((r) => r.steadfast_status)?.steadfast_status ?? null;
-  return (raw as SteadfastStage) ?? null;
+  return steadfastStageForRows(rows);
+}
+
+function steadfastStageForRows(rows: Order[]): SteadfastStage | null {
+  const codes = [...new Set(rows.map((row) => row.tracking_code).filter(Boolean))] as string[];
+  if (codes.length === 0) return null;
+
+  const parcelStages = codes.map((code) => {
+    const parcelRows = rows.filter((row) => row.tracking_code === code);
+    const statuses = [...new Set(parcelRows.map((row) => row.steadfast_status).filter(Boolean))] as string[];
+    if (statuses.length === 0) return 'booked' as const;
+    const stages = statuses.map(steadfastStageFor);
+    if (stages.some((stage) => stage === null)) return 'needs_attention' as const;
+    const uniqueStages = [...new Set(stages)];
+    return uniqueStages.length === 1 ? uniqueStages[0]! : 'needs_attention' as const;
+  });
+  const uniqueParcelStages = [...new Set(parcelStages)];
+  return uniqueParcelStages.length === 1 ? uniqueParcelStages[0]! : 'needs_attention';
+}
+
+function trackingCodesForGroup(rows: Order[], status: OrderStatus, logs: AdminLog[]): string[] {
+  const savedCodes = [...new Set(rows.map((row) => row.tracking_code).filter(Boolean))] as string[];
+  if (savedCodes.length > 0 || status !== 'delivered') return savedCodes;
+
+  const rowIds = new Set(rows.map((row) => row.id));
+  const historicalCodes = logs
+    .filter((log) => log.action === 'steadfast_book' && log.target && rowIds.has(log.target))
+    .map((log) => log.detail?.match(/tracking(?: code)?\s+([a-z0-9-]+)/i)?.[1])
+    .filter((code): code is string => Boolean(code));
+  return [...new Set(historicalCodes)];
 }
 
 /** Orders tab — COMPACT view: one dense row per purchase, all actions intact. */
@@ -545,10 +578,12 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
     <div className="bg-white rounded-2xl border border-stone-100 shadow-sm divide-y divide-stone-100 overflow-hidden">
       {groups.map((g) => {
         const firstRow = g.rows[0];
-        const sharedCodes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+        const sharedCodes = g.trackingCodes;
         const booked = sharedCodes.length > 0;
         return (
-          <div key={g.key} className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-stone-50 transition-colors border-l-4 ${
+          <div key={g.key} className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1.5 px-3 sm:px-4 py-2.5 transition-colors border-l-4 sm:flex sm:items-center sm:gap-3 ${
+            g.status === 'delivered' ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-white hover:bg-stone-50'
+          } ${
             g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
           }`}>
             <input
@@ -558,43 +593,49 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
               title="Select the whole purchase for bulk actions"
               className="w-4 h-4 accent-brand-500 flex-shrink-0 cursor-pointer"
             />
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 font-bold text-xs ${
+            <div className={`hidden sm:flex w-8 h-8 rounded-lg items-center justify-center flex-shrink-0 font-bold text-xs ${
               g.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : g.status === 'canceled' ? 'bg-red-100 text-red-500' : 'bg-amber-100 text-amber-700'
             }`}>
               {(firstRow.customer_name || '?').trim().charAt(0).toUpperCase()}
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <p className="font-semibold text-stone-900 text-sm truncate">{firstRow.customer_name || 'Unknown customer'}</p>
+            <div className="col-start-2 row-start-1 min-w-0 sm:flex-1">
+              <div className="flex items-center gap-2 min-w-0 flex-wrap sm:flex-nowrap">
+                <p className="font-semibold text-stone-900 text-sm break-words sm:truncate">{firstRow.customer_name || 'Unknown customer'}</p>
                 <span className="font-mono text-[11px] font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.code}</span>
-                <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                <span className={`hidden sm:inline-flex text-[11px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
                   {ORDER_STATUS_LABEL[g.status]}
                 </span>
                 {g.rows.length > 1 && (
                   <span className="text-[11px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.rows.length} items</span>
                 )}
+                {g.status === 'delivered' && sharedCodes.map((code) => (
+                  <span key={code} className="font-mono text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded-full flex-shrink-0">Tracking {code}</span>
+                ))}
+                {g.status === 'delivered' && !booked && <span className="text-[10px] font-semibold text-emerald-700">Tracking code unavailable</span>}
                 <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STORE_STAGE_DOT(booked, orderStageOf(booked, g.rows))}`} title={booked ? 'Booked with Steadfast' : 'Not booked'} />
               </div>
-              <p className="text-xs text-stone-500 truncate mt-0.5">
+              <a href={`tel:${firstRow.customer_phone}`} className="block text-xs text-stone-500 break-all sm:truncate mt-0.5">
                 {firstRow.customer_phone}
-                {' · '}{firstRow.product_title}{g.rows.length > 1 ? ` +${g.rows.length - 1} more` : ''}
+              </a>
+              <p className="text-[11px] text-stone-400 truncate mt-0.5">
+                {firstRow.product_title}{g.rows.length > 1 ? ` +${g.rows.length - 1} more` : ''}
                 {firstRow.selected_size ? ` · ${firstRow.selected_size}` : ''}
                 {' · '}{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
               </p>
             </div>
-            <div className="text-right flex-shrink-0">
+            <div className="col-start-2 row-start-2 text-left sm:text-right sm:flex-shrink-0">
               <p className="font-bold text-stone-900 text-sm leading-tight">৳{g.total.toLocaleString('en-IN')}</p>
               {g.due > 0 && <p className="text-[11px] font-semibold text-amber-600 leading-tight">Due ৳{g.due.toLocaleString('en-IN')}</p>}
             </div>
             {/* Status dropdown — same options as the comfort cards */}
-            <div className="relative flex-shrink-0">
+            <div className="col-start-3 row-start-1 row-span-2 relative flex-shrink-0 self-start sm:self-auto">
               <button
                 onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
                 disabled={updatingDelivery === g.key}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
               >
                 {updatingDelivery === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : orderStatusIcon(g.status, 'w-3.5 h-3.5')}
-                <span className="hidden sm:inline">{ORDER_STATUS_LABEL[g.status]}</span>
+                <span>{ORDER_STATUS_LABEL[g.status]}</span>
                 <ChevronDown className="w-3 h-3" />
               </button>
               {orderStatusOpen === g.key && (
@@ -654,6 +695,10 @@ function OrdersCompactView({ groups, selectedOrderIds, toggleGroupSelection, ord
                   <Printer className="w-3.5 h-3.5" />
                 </button>
               </div>
+            ) : g.status === 'delivered' ? (
+              <span className="hidden md:inline text-[11px] font-semibold text-emerald-700">
+                {sharedCodes.length ? `Tracking ${sharedCodes[0]}` : 'Delivered · tracking code unavailable'}
+              </span>
             ) : g.status !== 'canceled' && steadfastConfigured ? (
               <button
                 onClick={() => void handleSendToSteadfast(firstRow)}
@@ -689,10 +734,12 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
       {groups.map((g) => {
         const firstRow = g.rows[0];
-        const sharedCodes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+        const sharedCodes = g.trackingCodes;
         const booked = sharedCodes.length > 0;
         return (
-          <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-3.5 hover:shadow-md transition-shadow ${
+          <div key={g.key} className={`rounded-2xl border border-stone-100 border-l-4 p-3.5 hover:shadow-md transition-shadow ${
+            g.status === 'delivered' ? 'bg-emerald-50' : 'bg-white'
+          } ${
             g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
           }`}>
             <div className="flex items-center gap-2">
@@ -713,7 +760,8 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
               <span className="font-mono font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full">{g.code}</span>
               <span className="text-stone-400">{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
               <span className={`w-2 h-2 rounded-full ${STORE_STAGE_DOT(booked, orderStageOf(booked, g.rows))}`} title={booked ? 'Booked with Steadfast' : 'Not booked'} />
-              {booked && <span className="font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full truncate max-w-[110px]">{sharedCodes[0]}</span>}
+              {booked && <span className="font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full truncate max-w-[110px]">{g.status === 'delivered' ? `Tracking ${sharedCodes[0]}` : sharedCodes[0]}</span>}
+              {g.status === 'delivered' && !booked && <span className="text-emerald-700">Tracking code unavailable</span>}
             </div>
             <div className="mt-2 space-y-0.5">
               {(g.rows.length > 2 ? g.rows.slice(0, 2) : g.rows).map((r) => (
@@ -768,7 +816,7 @@ function OrdersGridView({ groups, orderStatusOpen, setOrderStatusOpen, setGroupS
                 )}
               </div>
             </div>
-            {!booked && g.status !== 'canceled' && steadfastConfigured && (
+            {!booked && g.status !== 'canceled' && g.status !== 'delivered' && steadfastConfigured && (
               <button
                 onClick={() => void handleSendToSteadfast(firstRow)}
                 disabled={sendingToSteadfast === g.key}
@@ -804,10 +852,12 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
   return (
     <div className="bg-white rounded-2xl border border-stone-100 shadow-sm divide-y divide-stone-100 overflow-hidden">
       {groups.map((g) => {
-        const sharedCode = g.rows.find((r) => r.tracking_code)?.tracking_code ?? null;
+        const sharedCode = g.trackingCodes[0] ?? null;
         const booked = !!sharedCode;
         return (
-          <div key={g.key} className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-stone-50 transition-colors border-l-4 ${
+          <div key={g.key} className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 transition-colors border-l-4 ${
+            g.status === 'delivered' ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-white hover:bg-stone-50'
+          } ${
             g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
           }`}>
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 font-bold text-xs ${
@@ -825,7 +875,9 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
                 {g.rows.length > 1 && (
                   <span className="text-[11px] font-semibold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full flex-shrink-0">{g.rows.length} items</span>
                 )}
-                {booked && <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STORE_STAGE_DOT(true, (g.rows.find((r) => r.steadfast_status)?.steadfast_status as SteadfastStage) ?? null)}`} title="Booked with Steadfast" />}
+                {booked && <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STORE_STAGE_DOT(true, steadfastStageForRows(g.rows))}`} title="Booked with Steadfast" />}
+                {g.status === 'delivered' && sharedCode && <span className="font-mono text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded-full">Tracking {sharedCode}</span>}
+                {g.status === 'delivered' && !sharedCode && <span className="text-[10px] font-semibold text-emerald-700">Tracking code unavailable</span>}
               </div>
               <p className="text-xs text-stone-500 truncate mt-0.5">
                 {g.rows[0].product_title}{g.rows.length > 1 ? ` +${g.rows.length - 1} more` : ''}
@@ -902,6 +954,10 @@ function ManualCompactView({ groups, manualStatusOpen, setManualStatusOpen, setM
                   {printingLabels === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                 </button>
               </div>
+            ) : g.status === 'delivered' ? (
+              <span className="hidden md:inline text-[11px] font-semibold text-emerald-700">
+                {sharedCode ? `Tracking ${sharedCode}` : 'Delivered · tracking code unavailable'}
+              </span>
             ) : g.status !== 'canceled' && steadfastConfigured ? (
               <button
                 onClick={() => void handleBookManualGroup(g)}
@@ -935,10 +991,12 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
       {groups.map((g) => {
-        const sharedCode = g.rows.find((r) => r.tracking_code)?.tracking_code ?? null;
+        const sharedCode = g.trackingCodes[0] ?? null;
         const booked = !!sharedCode;
         return (
-          <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-3.5 hover:shadow-md transition-shadow ${
+          <div key={g.key} className={`rounded-2xl border border-stone-100 border-l-4 p-3.5 hover:shadow-md transition-shadow ${
+            g.status === 'delivered' ? 'bg-emerald-50' : 'bg-white'
+          } ${
             g.status === 'pending' ? 'border-l-amber-400' : g.status === 'canceled' ? 'border-l-red-300' : 'border-l-emerald-400'
           }`}>
             <div className="flex items-center gap-2">
@@ -958,7 +1016,8 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
             <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[11px]">
               <span className="font-mono font-bold text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded-full">{g.code}</span>
               <span className="text-stone-400">{new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-              {booked && <span className="font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full truncate max-w-[110px]">{sharedCode}</span>}
+              {booked && <span className="font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full truncate max-w-[110px]">{g.status === 'delivered' ? `Tracking ${sharedCode}` : sharedCode}</span>}
+              {g.status === 'delivered' && !booked && <span className="text-emerald-700">Tracking code unavailable</span>}
             </div>
             <div className="mt-2 space-y-0.5">
               {(g.rows.length > 2 ? g.rows.slice(0, 2) : g.rows).map((r) => (
@@ -1021,7 +1080,7 @@ function ManualGridView({ groups, manualStatusOpen, setManualStatusOpen, setManu
                 )}
               </div>
             </div>
-            {!booked && g.status !== 'canceled' && steadfastConfigured && (
+            {!booked && g.status !== 'canceled' && g.status !== 'delivered' && steadfastConfigured && (
               <button
                 onClick={() => void handleBookManualGroup(g)}
                 disabled={sendingToSteadfast === g.key}
@@ -1081,14 +1140,17 @@ const ZONE_GROUP_LABELS: Record<DeliveryZone, string> = {
 };
 
 // Steadfast pipeline stages shown on order cards (must match steadfast.ts)
-const STEADFAST_STAGE_ORDER: SteadfastStage[] = ['booked', 'in_review', 'picked_up', 'in_transit', 'delivered'];
+const STEADFAST_STAGE_ORDER: SteadfastStage[] = ['booked', 'in_review', 'picked_up', 'in_transit', 'awaiting_confirmation', 'partially_delivered', 'delivered'];
 const STEADFAST_STAGE_LABELS: Record<SteadfastStage, string> = {
   booked: 'Booked',
   in_review: 'In review',
   picked_up: 'Picked up',
   in_transit: 'In transit',
+  awaiting_confirmation: 'Awaiting confirmation',
+  partially_delivered: 'Partially delivered',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
+  needs_attention: 'Needs attention',
 };
 
 
@@ -1169,6 +1231,8 @@ export default function AdminPage() {
   );
   useEffect(() => { localStorage.setItem('ornix_manual_view', manualView); }, [manualView]);
   const [deliveryStageFilter, setDeliveryStageFilter] = useState<'all' | SteadfastStage | 'not_booked'>('all');
+  const [mobilePipelineOpen, setMobilePipelineOpen] = useState(false);
+  const [mobileLabelsOpen, setMobileLabelsOpen] = useState(false);
   const ORDER_PAGE_SIZE = 15;
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Order[]>([]);
@@ -1569,7 +1633,7 @@ export default function AdminPage() {
       const code = o.order_code ?? o.id;
       let g = map.get(code);
       if (!g) {
-        map.set(code, g = { code, key: code, rows: [], createdAt: o.created_at, total: 0, due: 0, status: o.status });
+        map.set(code, g = { code, key: code, rows: [], trackingCodes: [], createdAt: o.created_at, total: 0, due: 0, status: o.status });
       }
       g.rows.push(o);
       g.total += Number(o.total_amount ?? 0);
@@ -1579,8 +1643,11 @@ export default function AdminPage() {
       if (o.status !== 'canceled') g.status = o.status;
       if (o.created_at < g.createdAt) g.createdAt = o.created_at;
     }
-    return [...map.values()];
-  }, [storeOrders]);
+    return [...map.values()].map((group) => ({
+      ...group,
+      trackingCodes: trackingCodesForGroup(group.rows, group.status, adminLogs),
+    }));
+  }, [storeOrders, adminLogs]);
 
   // ── Dashboard at-a-glance stats (Orders tab is website orders only, one purchase = one order) ──
   const pendingOrders = storeGroups.filter((g) => g.status === 'pending').length;
@@ -1603,6 +1670,7 @@ export default function AdminPage() {
           code,
           key: code,
           rows: [],
+          trackingCodes: [],
           customer: o.customer_name,
           phone: o.customer_phone,
           seller: o.seller_name ?? null,
@@ -1622,8 +1690,11 @@ export default function AdminPage() {
       if (g.status !== 'canceled' && o.status === 'canceled') g.status = 'canceled'; // any canceled row cancels the sale
       if (o.created_at < g.createdAt) g.createdAt = o.created_at;
     }
-    return [...map.values()];
-  }, [manualOrders]);
+    return [...map.values()].map((group) => ({
+      ...group,
+      trackingCodes: trackingCodesForGroup(group.rows, group.status, adminLogs),
+    }));
+  }, [manualOrders, adminLogs]);
   const manualSearchable = (g: ManualGroup) =>
     [g.code, g.customer, g.phone, g.seller ?? '', ...g.rows.map((r) => `${r.product_title} ${r.product_code ?? ''}`)]
       .join(' ')
@@ -1717,21 +1788,15 @@ export default function AdminPage() {
   // Per PURCHASE: a group's stage comes from its shared tracking code (all rows
   // of a cart booking share one code; legacy per-row bookings keep their own).
   const stageOfGroup = (g: StoreGroup): SteadfastStage | 'not_booked' => {
-    const codes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
-    if (codes.length === 0) return g.status === 'canceled' ? 'cancelled' : 'not_booked';
-    // Canceled wins over whatever the courier last said — a canceled purchase
-    // with a stale tracking code must not show up as "Delivered".
-    if (g.status === 'canceled') return 'cancelled';
-    // Prefer the live status of any row; fall back to 'booked'.
-    for (const r of g.rows) {
-      if (!r.tracking_code) continue;
-      const b = steadfastStageBadge(r.steadfast_status);
-      if (b) return b.stage;
-    }
-    return 'booked';
+    const hasTrackingCode = g.rows.some((row) => row.tracking_code);
+    if (!hasTrackingCode) return 'not_booked';
+    // This is a courier pipeline, so only a returned Steadfast status—not the
+    // website's separate order status—can mark a parcel delivered or canceled.
+    return steadfastStageForRows(g.rows) ?? 'needs_attention';
   };
   const stageCounts: Record<SteadfastStage | 'not_booked', number> = {
-    not_booked: 0, booked: 0, in_review: 0, picked_up: 0, in_transit: 0, delivered: 0, cancelled: 0,
+    not_booked: 0, booked: 0, in_review: 0, picked_up: 0, in_transit: 0,
+    awaiting_confirmation: 0, partially_delivered: 0, delivered: 0, cancelled: 0, needs_attention: 0,
   };
   for (const g of storeGroups) stageCounts[stageOfGroup(g)] += 1;
   const trackedCount = storeGroups.filter((g) => g.rows.some((r) => r.tracking_code)).length;
@@ -1757,7 +1822,7 @@ export default function AdminPage() {
     for (const o of orders) {
       if (!o.tracking_code || o.status === 'canceled' || o.status === 'delivered') continue;
       const b = steadfastStageBadge(o.steadfast_status);
-      if (b && (b.stage === 'delivered' || b.stage === 'cancelled')) continue;
+      if (b && (b.stage === 'delivered' || b.stage === 'partially_delivered' || b.stage === 'cancelled')) continue;
       amount += Number(o.due_amount ?? 0);
       count += 1;
     }
@@ -1778,7 +1843,7 @@ export default function AdminPage() {
       const cod = Math.max(0, Number(o.due_amount ?? 0));
       const b = steadfastStageBadge(o.steadfast_status);
       const stage = b?.stage ?? 'booked';
-      if (stage === 'delivered' || o.status === 'delivered') {
+      if (stage === 'delivered' || stage === 'partially_delivered' || o.status === 'delivered') {
         collected += cod;
         collectedCount += 1;
       } else if (stage === 'cancelled') {
@@ -2273,7 +2338,8 @@ export default function AdminPage() {
     const updates = new Map<string, string>();
     const CONCURRENCY = 4;
     let failed = 0;
-    const deletedPickups: string[] = []; // orders whose consignment vanished from Steadfast
+    let preservedDelivered = 0;
+    const deletedPickups: string[] = []; // undelivered orders whose consignment vanished from Steadfast
     // Multi-item purchases share one tracking code — check each unique code
     // once, then fan the result out to every row carrying it.
     const codes = [...new Set(tracked.map((o) => o.tracking_code!))];
@@ -2294,7 +2360,13 @@ export default function AdminPage() {
         if (res.ok && res.status) {
           for (const o of rows) updates.set(o.id, res.status);
         } else if (res.notFound) {
-          for (const o of rows) deletedPickups.push(o.id);
+          for (const o of rows) {
+            if (o.status === 'delivered') {
+              preservedDelivered += 1;
+            } else {
+              deletedPickups.push(o.id);
+            }
+          }
         } else {
           failed += 1;
         }
@@ -2304,15 +2376,15 @@ export default function AdminPage() {
       await Promise.all(
         Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker())
       );
-      // Consignments deleted from the Steadfast portal: drop the stale tracking
-      // code so those orders become bookable again.
+      // Keep tracking history for delivered orders even if the courier no
+      // longer returns a live status for that tracking code.
       if (deletedPickups.length > 0) {
         const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', deletedPickups);
         if (error) {
           showToast('error', `Could not clear deleted pickup${deletedPickups.length > 1 ? 's' : ''}: ${error.message}`);
         } else {
           setOrders((prev) => prev.map((o) => (deletedPickups.includes(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
-          if (!silent) showToast('info', `${deletedPickups.length} pickup${deletedPickups.length > 1 ? 's were' : ' was'} deleted from Steadfast — the order${deletedPickups.length > 1 ? 's are' : ' is'} unbooked again.`);
+          if (!silent) showToast('info', `${deletedPickups.length} undelivered pickup${deletedPickups.length > 1 ? 's were' : ' was'} deleted from Steadfast — those orders are unbooked again.`);
         }
       }
       if (updates.size > 0) {
@@ -2330,7 +2402,8 @@ export default function AdminPage() {
     }
     if (!silent) {
       if (failed > 0) showToast('error', `${failed} status check${failed > 1 ? 's' : ''} failed — Steadfast may be unreachable.`);
-      else showToast('success', `Updated ${updates.size} Steadfast status${updates.size === 1 ? '' : 'es'}.`);
+      else if (preservedDelivered > 0 && updates.size === 0) showToast('info', `Kept tracking history for ${preservedDelivered} delivered item${preservedDelivered === 1 ? '' : 's'}.`);
+      else showToast('success', `Updated ${updates.size} Steadfast status${updates.size === 1 ? '' : 'es'}.${preservedDelivered > 0 ? ` Kept tracking history for ${preservedDelivered} delivered item${preservedDelivered === 1 ? '' : 's'}.` : ''}`);
     }
   };
 
@@ -3140,13 +3213,14 @@ export default function AdminPage() {
   // Refresh the Steadfast status of a purchase: one API call per unique
   // tracking code, the result applied to every row carrying that code.
   const handleRefreshGroupStatus = async (g: StoreGroup) => {
-    const codes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+    const codes = g.trackingCodes;
     if (codes.length === 0) return;
     setCheckingSteadfast(g.key);
     try {
       for (const code of codes) {
         const result = await checkSteadfastStatus(code);
-        const rows = g.rows.filter((r) => r.tracking_code === code);
+        const matchedRows = g.rows.filter((r) => r.tracking_code === code);
+        const rows = matchedRows.length ? matchedRows : g.rows;
         if (result.ok && result.status) {
           const ids = new Set(rows.map((r) => r.id));
           setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, steadfast_status: result.status } : o)));
@@ -3155,6 +3229,10 @@ export default function AdminPage() {
             for (const r of rows) if (r.status !== 'delivered') await applyOrderStatus(r.id, 'delivered');
           }
         } else if (result.notFound) {
+          if (g.status === 'delivered') {
+            showToast('info', `Kept tracking code ${code} because this order is marked delivered.`);
+            continue;
+          }
           const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', rows.map((r) => r.id));
           if (error) {
             showToast('error', `Steadfast has no record of ${code}, but clearing it failed: ${error.message}`);
@@ -3266,7 +3344,7 @@ export default function AdminPage() {
   };
 
   const bulkBookSteadfast = async () => {
-    const targets = orders.filter((o) => selectedOrderIds.has(o.id) && !o.tracking_code && o.status !== 'canceled' && o.courier_name !== 'Store Pickup');
+    const targets = orders.filter((o) => selectedOrderIds.has(o.id) && !o.tracking_code && o.status !== 'canceled' && o.status !== 'delivered' && o.courier_name !== 'Store Pickup');
     if (targets.length === 0) {
       showToast('info', 'Nothing to book — selected orders are already booked, canceled, or store pickups.');
       return;
@@ -3315,11 +3393,12 @@ export default function AdminPage() {
   // Multi-item carts share one order_code → ONE consignment with every item
   // in the note (same path as the bulk booking above).
   const handleSendToSteadfast = async (order: Order) => {
-    if (order.tracking_code) return;
+    if (order.tracking_code || order.status === 'delivered') return;
+    const groupKey = order.order_code ?? order.id;
     const rows = order.order_code
       ? orders.filter((o) => o.order_code === order.order_code && !o.tracking_code && o.status !== 'canceled')
       : [order];
-    setSendingToSteadfast(order.id);
+    setSendingToSteadfast(groupKey);
     const code = await bookCartConsignment(rows.length > 0 ? rows : [order]);
     if (code) {
       showToast('success', `Booked one Steadfast pickup for ${rows.length} item${rows.length === 1 ? '' : 's'} — tracking code ${code}`);
@@ -3335,6 +3414,10 @@ export default function AdminPage() {
   // single parcel with one tracking code shared by every row (Steadfast bills
   // per consignment, so a multi-item sale costs one pickup, not several).
   const handleBookManualGroup = async (g: ManualGroup) => {
+    if (g.status === 'delivered') {
+      showToast('info', 'This sale is marked delivered and cannot be booked again.');
+      return;
+    }
     const targets = g.rows.filter((r) => !r.tracking_code && r.status !== 'canceled');
     if (targets.length === 0) {
       showToast('info', 'Every item in this sale is already booked or canceled.');
@@ -3405,7 +3488,7 @@ export default function AdminPage() {
   // Pull the latest Steadfast status for the sale's shared tracking code and
   // apply it to every row (one parcel → one status).
   const handleRefreshManualGroup = async (g: ManualGroup) => {
-    const code = g.rows.find((r) => r.tracking_code)?.tracking_code;
+    const code = g.trackingCodes[0];
     if (!code) return;
     setCheckingSteadfast(g.key);
     const result = await checkSteadfastStatus(code);
@@ -3418,6 +3501,11 @@ export default function AdminPage() {
         for (const r of g.rows) if (r.status !== 'delivered') await applyOrderStatus(r.id, 'delivered');
       }
     } else if (result.notFound) {
+      if (g.status === 'delivered') {
+        showToast('info', `Kept tracking code ${code} because this sale is marked delivered.`);
+        setCheckingSteadfast(null);
+        return;
+      }
       // Consignment deleted from Steadfast's portal — unbook the whole sale.
       const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', g.rows.map((r) => r.id));
       if (error) {
@@ -5181,10 +5269,6 @@ export default function AdminPage() {
                   </button>
                 </p>
               </div>
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                <div className="hidden sm:block"><ViewToggle value={orderView} onChange={(v) => { setOrderView(v); setOrderPage(1); }} /></div>
-                <div className="sm:hidden"><ViewToggle value={orderView} onChange={(v) => { setOrderView(v); setOrderPage(1); }} /></div>
-              </div>
               <div className="relative w-full sm:w-80">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
                 <input
@@ -5229,31 +5313,62 @@ export default function AdminPage() {
 
             {/* Steadfast delivery pipeline: click a stage to see its parcels */}
             {orders.length > 0 && (
-              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-4 mb-6">
-                <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-3 sm:p-4 mb-4 sm:mb-6">
+                <div className="flex items-center justify-between gap-3 sm:mb-3">
+                  <button
+                    type="button"
+                    onClick={() => setMobilePipelineOpen((open) => !open)}
+                    aria-expanded={mobilePipelineOpen}
+                    aria-controls="steadfast-pipeline-content"
+                    className="sm:hidden flex flex-1 items-center justify-between gap-3 text-left"
+                  >
+                    <span className="text-xs font-semibold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5" /> Steadfast delivery pipeline
+                    </span>
+                    <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform ${mobilePipelineOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  <p className="hidden sm:flex text-xs font-semibold uppercase tracking-wider text-stone-400 items-center gap-1.5">
                     <Truck className="w-3.5 h-3.5" /> Steadfast delivery pipeline
                   </p>
                   {steadfastConfigured && trackedCount > 0 && (
                     <button
                       onClick={() => void refreshAllSteadfastStatuses(false)}
                       disabled={bulkChecking}
-                      className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 disabled:opacity-60 transition-colors"
+                      className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 disabled:opacity-60 transition-colors"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${bulkChecking ? 'animate-spin' : ''}`} />
                       {bulkChecking ? 'Checking…' : 'Refresh all statuses'}
                     </button>
                     )}
                 </div>
-                <div className="flex items-stretch gap-1.5 overflow-x-auto pb-1">
+                <div id="steadfast-pipeline-content" className={`${mobilePipelineOpen ? 'block' : 'hidden'} sm:block`}>
+                  <div className="sm:hidden flex justify-end mt-2">
+                    {steadfastConfigured && trackedCount > 0 && (
+                      <button
+                        onClick={() => void refreshAllSteadfastStatuses(false)}
+                        disabled={bulkChecking}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 disabled:opacity-60 transition-colors"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${bulkChecking ? 'animate-spin' : ''}`} />
+                        {bulkChecking ? 'Checking…' : 'Refresh all statuses'}
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-stone-400 mb-3 mt-2 sm:mt-0">
+                    Counts are per purchase and reflect the latest status fetched from Steadfast. Mixed or unrecognized parcel statuses appear under Needs attention.
+                  </p>
+                  <div className="flex items-stretch gap-1.5 overflow-x-auto pb-1">
                   {([
                     { key: 'not_booked' as const, label: 'Not booked', desc: 'Awaiting pickup booking', count: stageCounts.not_booked, dot: 'bg-stone-300' },
                     { key: 'booked' as const, label: 'Booked', desc: 'Sent to Steadfast', count: stageCounts.booked, dot: 'bg-stone-400' },
-                    { key: 'in_review' as const, label: 'In review', desc: 'Steadfast is approving', count: stageCounts.in_review, dot: 'bg-sky-400' },
-                    { key: 'picked_up' as const, label: 'Picked up', desc: 'Parcel with the rider', count: stageCounts.picked_up, dot: 'bg-amber-400' },
+                    { key: 'in_review' as const, label: 'In review', desc: 'Steadfast is processing the parcel', count: stageCounts.in_review, dot: 'bg-sky-400' },
+                    { key: 'picked_up' as const, label: 'With rider', desc: 'The courier has picked up the parcel', count: stageCounts.picked_up, dot: 'bg-amber-400' },
                     { key: 'in_transit' as const, label: 'In transit', desc: 'On the way to the customer', count: stageCounts.in_transit, dot: 'bg-orange-400' },
+                    { key: 'awaiting_confirmation' as const, label: 'Awaiting confirmation', desc: 'Delivery or cancellation is pending Steadfast confirmation', count: stageCounts.awaiting_confirmation, dot: 'bg-violet-400' },
+                    { key: 'partially_delivered' as const, label: 'Partially delivered', desc: 'Steadfast confirms only part of the shipment was delivered', count: stageCounts.partially_delivered, dot: 'bg-orange-500' },
                     { key: 'delivered' as const, label: 'Delivered', desc: 'Payment collected', count: stageCounts.delivered, dot: 'bg-emerald-500' },
                     { key: 'cancelled' as const, label: 'Cancelled', desc: 'Returned or cancelled', count: stageCounts.cancelled, dot: 'bg-red-400' },
+                    { key: 'needs_attention' as const, label: 'Needs attention', desc: 'Status is unknown or parcels in this purchase differ', count: stageCounts.needs_attention, dot: 'bg-amber-500' },
                   ]).map((s, i, arr) => (
                     <div key={s.key} className="flex items-center flex-shrink-0">
                       <button
@@ -5274,23 +5389,39 @@ export default function AdminPage() {
                       {i < arr.length - 1 && <span className="text-stone-300 px-0.5">›</span>} 
                     </div>
                   ))}
+                  </div>
+                  {deliveryStageFilter !== 'all' && (
+                    <p className="mt-2 text-xs text-stone-500">
+                      Showing only <span className="font-semibold">{deliveryStageFilter.replace(/_/g, ' ')}</span> parcels —{' '}
+                      <button onClick={() => setDeliveryStageFilter('all')} className="text-brand-600 font-semibold hover:underline">clear</button>
+                    </p>
+                    )}
                 </div>
-                {deliveryStageFilter !== 'all' && (
-                  <p className="mt-2 text-xs text-stone-500">
-                    Showing only <span className="font-semibold">{deliveryStageFilter.replace(/_/g, ' ')}</span> parcels —{' '}
-                    <button onClick={() => setDeliveryStageFilter('all')} className="text-brand-600 font-semibold hover:underline">clear</button>
-                  </p>
-                  )}
               </div>
             )}
 
             {/* Bulk parcel label printing */}
             {labelCount > 0 && (
-              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-4 mb-6">
-                <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+              <div className="bg-white rounded-2xl border border-stone-100 shadow-sm p-3 sm:p-4 mb-4 sm:mb-6">
+                <div className="flex items-center justify-between gap-3 sm:mb-3">
+                  <button
+                    type="button"
+                    onClick={() => setMobileLabelsOpen((open) => !open)}
+                    aria-expanded={mobileLabelsOpen}
+                    aria-controls="parcel-label-content"
+                    className="sm:hidden flex flex-1 items-center justify-between gap-3 text-left"
+                  >
+                    <span className="text-xs font-semibold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                      <Printer className="w-3.5 h-3.5" /> Print parcel stickers ({labelCount} booked)
+                    </span>
+                    <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform ${mobileLabelsOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  <p className="hidden sm:flex text-xs font-semibold uppercase tracking-wider text-stone-400 items-center gap-1.5">
                     <Printer className="w-3.5 h-3.5" /> Print parcel stickers ({labelCount} booked)
                   </p>
+                </div>
+                <div id="parcel-label-content" className={`${mobileLabelsOpen ? 'block' : 'hidden'} sm:block`}>
+                  <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                   {/* A4 sticker-sheet density: stickers per page */}
                   <div className="flex items-center gap-1.5">
                     <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">A4 · per page</span>
@@ -5325,8 +5456,8 @@ export default function AdminPage() {
                       Yesterday's labels
                     </button>
                   </div>
-                </div>
-                <div className="flex items-end gap-2 flex-wrap">
+                  </div>
+                  <div className="flex items-end gap-2 flex-wrap">
                   <div>
                     <label className="block text-[11px] font-semibold text-stone-500 mb-1">From</label>
                     <input
@@ -5353,9 +5484,14 @@ export default function AdminPage() {
                     {printingLabels === 'bulk' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
                     Print range ({ordersInDateRange(labelFrom, labelTo).length})
                   </button>
+                  </div>
                 </div>
               </div>
             )}
+
+            <div className="flex justify-end mb-4">
+              <ViewToggle value={orderView} onChange={(v) => { setOrderView(v); setOrderPage(1); }} />
+            </div>
 
             {/* Bulk actions bar — appears when orders are ticked */}
             {selectedOrderIds.size > 0 && (
@@ -5445,11 +5581,14 @@ export default function AdminPage() {
               <div className="space-y-2" ref={orderStatusRef}>
                 {pagedGroups.map((g) => {
                   const firstRow = g.rows[0];
-                  const sharedCodes = [...new Set(g.rows.map((r) => r.tracking_code).filter(Boolean))] as string[];
+                  const sharedCodes = g.trackingCodes;
                   const booked = sharedCodes.length > 0;
-                  const stageInfo = booked ? steadfastStageBadge(g.rows.find((r) => r.steadfast_status)?.steadfast_status) : null;
+                  const groupStage = steadfastStageForRows(g.rows);
+                  const stageInfo = booked ? steadfastStageMeta(groupStage ?? 'needs_attention') : null;
                   return (
-                    <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
+                    <div key={g.key} className={`rounded-xl sm:rounded-2xl border border-stone-100 border-l-4 p-3 sm:p-5 hover:shadow-md transition-shadow ${
+                      g.status === 'delivered' ? 'bg-emerald-50' : 'bg-white'
+                    } ${
                       g.status === 'pending'
                         ? 'border-l-amber-400'
                         : g.status === 'canceled'
@@ -5468,7 +5607,7 @@ export default function AdminPage() {
                             title="Select the whole purchase for bulk actions"
                             className="w-4 h-4 accent-brand-500 flex-shrink-0 cursor-pointer"
                           />
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm ${
+                          <div className={`hidden sm:flex w-10 h-10 rounded-xl items-center justify-center flex-shrink-0 font-bold text-sm ${
                             g.status === 'delivered'
                               ? 'bg-emerald-100 text-emerald-700'
                               : g.status === 'canceled'
@@ -5484,12 +5623,14 @@ export default function AdminPage() {
                             </a>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="font-mono text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
-                          <span className="hidden md:block text-xs text-stone-400">
+                        <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono text-[10px] sm:text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
+                            <span className="text-[10px] sm:text-xs text-stone-400">
                             {new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                          </span>
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                            </span>
+                          </div>
+                          <span className={`hidden sm:flex text-xs font-semibold px-2 py-0.5 rounded-full items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
                             {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
                             {ORDER_STATUS_LABEL[g.status]}
                           </span>
@@ -5497,7 +5638,7 @@ export default function AdminPage() {
                             <button
                               onClick={() => setOrderStatusOpen(orderStatusOpen === g.key ? null : g.key)}
                               disabled={updatingDelivery === g.key}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
+                              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all disabled:opacity-60 ${orderStatusButtonClass(g.status)}`}
                             >
                               {updatingDelivery === g.key ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -5543,23 +5684,27 @@ export default function AdminPage() {
                       </div>
 
                       {/* Items — one line per product of the purchase */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 space-y-1.5">
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 space-y-1.5">
                         {firstRow.delivery_zone && (
                           <span className="text-[11px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
                             <MapPin className="w-3 h-3" /> {firstRow.delivery_zone}
                           </span>
                         )}
                         {g.rows.map((row) => (
-                          <div key={row.id} className="flex items-center gap-2 flex-wrap text-sm">
-                            <span className="font-semibold text-stone-800">{row.product_title}</span>
-                            {row.product_code && (
-                              <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">{row.product_code}</span>
-                            )}
-                            {row.selected_size && (
-                              <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
-                            )}
-                            <span className="text-[11px] text-stone-400">Qty: {row.quantity ?? 1}</span>
-                            <span className="ml-auto text-xs font-semibold text-stone-600">
+                          <div key={row.id} className="flex items-start justify-between gap-2 text-xs sm:text-sm">
+                            <div className="min-w-0">
+                              <p className="font-semibold text-stone-800 break-words">{row.product_title}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                {row.product_code && (
+                                  <span className="text-[10px] font-mono bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded-full">{row.product_code}</span>
+                                )}
+                                {row.selected_size && (
+                                  <span className="text-[10px] font-semibold bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
+                                )}
+                                <span className="text-[10px] text-stone-400">Qty: {row.quantity ?? 1}</span>
+                              </div>
+                            </div>
+                            <span className="font-semibold text-stone-600 whitespace-nowrap pt-0.5">
                               ৳{Number(row.total_amount ?? 0).toLocaleString('en-IN')}
                             </span>
                           </div>
@@ -5567,7 +5712,7 @@ export default function AdminPage() {
                       </div>
 
                       {/* Courier: booking + live status (one parcel per purchase) */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap">
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 flex items-center gap-1.5 sm:gap-2 flex-wrap">
                         {booked ? (
                           <>
                             {sharedCodes.map((code) => (
@@ -5579,18 +5724,18 @@ export default function AdminPage() {
                                     .catch(() => showToast('info', `Tracking code: ${code}`));
                                 }}
                                 title="Click to copy tracking code"
-                                className="flex items-center gap-1.5 text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
+                                className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
                               >
                                 <Truck className="w-3.5 h-3.5" /> {code}
                               </button>
                             ))}
                             {stageInfo && (
-                              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${stageInfo.cls}`}>{stageInfo.label}</span>
+                              <span className={`text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded-full ${stageInfo.cls}`}>{stageInfo.label}</span>
                             )}
                             <button
                               onClick={() => void handleRefreshGroupStatus(g)}
                               disabled={checkingSteadfast === g.key}
-                              className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                              className="flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
                             >
                               {checkingSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                               Refresh status
@@ -5599,7 +5744,7 @@ export default function AdminPage() {
                               href={`https://steadfast.com.bd/t/${sharedCodes[0]}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
+                              className="text-[10px] sm:text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
                             >
                               Track ↗
                             </a>
@@ -5607,7 +5752,7 @@ export default function AdminPage() {
                               onClick={() => void handlePrintGroupLabel(g)}
                               disabled={printingLabels === g.key}
                               title="Print the Steadfast parcel sticker for this purchase"
-                              className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                              className="flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
                             >
                               {printingLabels === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                               Print label
@@ -5615,6 +5760,8 @@ export default function AdminPage() {
                           </>
                         ) : g.status === 'canceled' ? (
                           <span className="text-xs text-stone-400">Not booked with Steadfast</span>
+                        ) : g.status === 'delivered' ? (
+                          <span className="text-xs font-semibold text-emerald-700">Delivered · tracking code unavailable</span>
                         ) : steadfastConfigured ? (
                           <button
                             onClick={() => void handleSendToSteadfast(firstRow)}
@@ -5635,7 +5782,7 @@ export default function AdminPage() {
                         const stage = stageInfo?.stage ?? 'booked';
                         const activeIdx = stage === 'cancelled' ? -1 : STEADFAST_STAGE_ORDER.indexOf(stage as SteadfastStage);
                         return (
-                          <div className={`mt-2 flex items-center gap-1 rounded-xl px-3 py-2 ${stage === 'cancelled' ? 'bg-red-50/60' : 'bg-stone-50/70'}`}>
+                          <div className={`hidden sm:flex mt-2 items-center gap-1 rounded-xl px-3 py-2 ${stage === 'cancelled' ? 'bg-red-50/60' : 'bg-stone-50/70'}`}>
                             {STEADFAST_STAGE_ORDER.map((s, i) => {
                               const done = activeIdx >= 0 && i < activeIdx;
                               const active = i === activeIdx;
@@ -5660,25 +5807,28 @@ export default function AdminPage() {
                             {stage === 'cancelled' && (
                               <span className="text-[10px] font-bold text-red-500 uppercase ml-1 flex-shrink-0">Cancelled</span>
                             )}
+                            {stage === 'needs_attention' && (
+                              <span className="text-[10px] font-bold text-amber-700 uppercase ml-1 flex-shrink-0">Needs attention</span>
+                            )}
                           </div>
                         );
                       })()}
 
                       {/* Details: money + payment */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-3">
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 sm:gap-x-4 gap-y-2 sm:gap-y-3">
                         <div>
-                          <p className={ORD_LBL}>Total</p>
-                          <p className="font-bold text-stone-900 text-sm">৳{g.total.toLocaleString('en-IN')}</p>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Total</p>
+                          <p className="font-bold text-stone-900 text-xs sm:text-sm">৳{g.total.toLocaleString('en-IN')}</p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Due</p>
-                          <p className={`font-bold text-sm ${g.due > 0 ? 'text-amber-600' : 'text-stone-900'}`}>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Due</p>
+                          <p className={`font-bold text-xs sm:text-sm ${g.due > 0 ? 'text-amber-600' : 'text-stone-900'}`}>
                             ৳{g.due.toLocaleString('en-IN')}
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Wallet</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Wallet</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm break-all">
                             {(() => {
                               const payer = g.rows.find((r) => r.bkash_number);
                               return payer
@@ -5688,14 +5838,14 @@ export default function AdminPage() {
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>TrxID</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>TrxID</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm break-all">
                             {g.rows.find((r) => r.trx_id)?.trx_id ?? '—'}
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Payment</p>
-                          <p className="font-medium text-stone-800 text-sm">
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Payment</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm">
                             {firstRow.payment_method === 'full_advance'
                               ? 'Full advance'
                               : firstRow.payment_method === 'advance_partial'
@@ -5711,13 +5861,13 @@ export default function AdminPage() {
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Delivery</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">{firstRow.courier_name ?? '—'}</p>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Delivery</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm break-words">{firstRow.courier_name ?? '—'}</p>
                         </div>
                         {g.rows.some((r) => r.coupon_code) && (
                           <div>
-                            <p className={ORD_LBL}>Coupon</p>
-                            <p className="font-medium text-emerald-600 text-sm">
+                            <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Coupon</p>
+                            <p className="font-medium text-emerald-600 text-xs sm:text-sm">
                               {g.rows.find((r) => r.coupon_code)?.coupon_code}
                               {firstRow.discount_amount != null && Number(firstRow.discount_amount) > 0
                                 ? ` (−৳${Number(firstRow.discount_amount).toFixed(0)})`
@@ -5728,9 +5878,9 @@ export default function AdminPage() {
                       </div>
 
                       {/* Address */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-start gap-3">
-                        <p className={`${ORD_LBL} mt-0.5 flex-shrink-0`}>Address</p>
-                        <p className="text-sm text-stone-700 break-words">{firstRow.customer_address}</p>
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 flex items-start gap-2">
+                        <p className={`${ORD_LBL} text-[9px] sm:text-[10px] mt-0.5 flex-shrink-0`}>Address</p>
+                        <p className="text-xs sm:text-sm text-stone-700 break-words">{firstRow.customer_address}</p>
                       </div>
                     </div>
                   );
@@ -6358,7 +6508,9 @@ export default function AdminPage() {
                     const firstRow = g.rows[0];
                     const codDue = g.due;
                     return (
-                    <div key={g.key} className={`bg-white rounded-2xl border border-stone-100 border-l-4 p-4 sm:p-5 hover:shadow-md transition-shadow ${
+                    <div key={g.key} className={`rounded-xl sm:rounded-2xl border border-stone-100 border-l-4 p-3 sm:p-5 hover:shadow-md transition-shadow ${
+                      g.status === 'delivered' ? 'bg-emerald-50' : 'bg-white'
+                    } ${
                       g.status === 'pending'
                         ? 'border-l-amber-400'
                         : g.status === 'canceled'
@@ -6368,7 +6520,7 @@ export default function AdminPage() {
                       {/* Header: customer + status dropdown (mirrors the Orders tab) */}
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm ${
+                          <div className={`hidden sm:flex w-10 h-10 rounded-xl items-center justify-center flex-shrink-0 font-bold text-sm ${
                             g.status === 'delivered'
                               ? 'bg-emerald-100 text-emerald-700'
                               : g.status === 'canceled'
@@ -6387,16 +6539,16 @@ export default function AdminPage() {
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
-                          <span className="font-mono text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
+                        <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0 flex-wrap">
+                          <span className="font-mono text-[10px] sm:text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
+                          <span className={`hidden sm:flex text-xs font-semibold px-2 py-0.5 rounded-full items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
                             {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
                             {ORDER_STATUS_LABEL[g.status]}
                           </span>
                           <div className="relative">
                             <button
                               onClick={() => setManualStatusOpen(manualStatusOpen === g.key ? null : g.key)}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${orderStatusButtonClass(g.status)}`}
+                              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all ${orderStatusButtonClass(g.status)}`}
                             >
                               {orderStatusIcon(g.status, 'w-3.5 h-3.5')}
                               {ORDER_STATUS_LABEL[g.status]}
@@ -6438,7 +6590,7 @@ export default function AdminPage() {
                       </div>
 
                       {/* Items — every row of the purchase; multi-item sales expand */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 space-y-2">
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 space-y-1.5">
                         {g.rows.length > 1 && !manualGroupsOpen.has(g.key) ? (
                           <button
                             onClick={() => setManualGroupsOpen((prev) => new Set(prev).add(g.key))}
@@ -6448,19 +6600,23 @@ export default function AdminPage() {
                           </button>
                         ) : (
                           g.rows.map((row) => (
-                            <div key={row.id} className="flex items-center gap-2 flex-wrap text-sm">
-                              <span className="font-semibold text-stone-800">{row.product_title}</span>
+                            <div key={row.id} className="flex items-start justify-between gap-2 text-xs sm:text-sm">
+                              <div className="min-w-0">
+                              <p className="font-semibold text-stone-800 break-words">{row.product_title}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                               {row.product_code && (
-                                <span className="text-[11px] font-mono bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">{row.product_code}</span>
+                                <span className="text-[10px] font-mono bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded-full">{row.product_code}</span>
                               )}
                               {row.selected_size && (
-                                <span className="text-[11px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
+                                <span className="text-[10px] font-semibold bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
                               )}
-                              <span className="text-[11px] text-stone-400">Qty: {row.quantity ?? 1}</span>
+                              <span className="text-[10px] text-stone-400">Qty: {row.quantity ?? 1}</span>
                               {row.tracking_code && (
-                                <span className="text-[11px] font-mono text-brand-700 bg-brand-50 border border-brand-200 px-2 py-0.5 rounded-full">{row.tracking_code}</span>
+                                <span className="text-[10px] font-mono text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full">{row.tracking_code}</span>
                               )}
-                              <span className="ml-auto text-xs font-semibold text-stone-600">৳{Number(row.total_amount ?? 0).toLocaleString('en-IN')}</span>
+                              </div>
+                              </div>
+                              <span className="font-semibold text-stone-600 whitespace-nowrap pt-0.5">৳{Number(row.total_amount ?? 0).toLocaleString('en-IN')}</span>
                             </div>
                           ))
                         )}
@@ -6475,11 +6631,11 @@ export default function AdminPage() {
                       </div>
 
                       {/* Courier: ONE Steadfast consignment per sale (shared tracking code) */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 flex-wrap">
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 flex items-center gap-1.5 sm:gap-2 flex-wrap">
                         {(() => {
-                          const sharedCode = g.rows.find((r) => r.tracking_code)?.tracking_code ?? null;
+                          const sharedCode = g.trackingCodes[0] ?? null;
                           if (sharedCode) {
-                            const stageInfo = steadfastStageBadge(g.rows.find((r) => r.steadfast_status)?.steadfast_status);
+                            const stageInfo = steadfastStageMeta(steadfastStageForRows(g.rows) ?? 'needs_attention');
                             return (
                               <>
                                 <button
@@ -6489,17 +6645,17 @@ export default function AdminPage() {
                                       .catch(() => showToast('info', `Tracking code: ${sharedCode}`));
                                   }}
                                   title="Click to copy the tracking code (shared by all items in this sale)"
-                                  className="flex items-center gap-1.5 text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
+                                  className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono bg-brand-50 text-brand-700 border border-brand-200 px-2 py-1 rounded-full hover:bg-brand-100 transition-colors"
                                 >
                                   <Truck className="w-3.5 h-3.5" /> {sharedCode}
                                 </button>
                                 {stageInfo && (
-                                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${stageInfo.cls}`}>{stageInfo.label}</span>
+                                  <span className={`text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded-full ${stageInfo.cls}`}>{stageInfo.label}</span>
                                 )}
                                 <button
                                   onClick={() => void handleRefreshManualGroup(g)}
                                   disabled={checkingSteadfast === g.key}
-                                  className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                                  className="flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
                                 >
                                   {checkingSteadfast === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                                   Refresh status
@@ -6508,7 +6664,7 @@ export default function AdminPage() {
                                   href={`https://steadfast.com.bd/t/${sharedCode}`}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
+                                  className="text-[10px] sm:text-xs font-semibold text-stone-400 hover:text-brand-600 transition-colors"
                                 >
                                   Track ↗
                                 </a>
@@ -6516,7 +6672,7 @@ export default function AdminPage() {
                                   onClick={() => void handlePrintManualGroup(g)}
                                   disabled={printingLabels === g.key}
                                   title="Print the parcel sticker for this sale"
-                                  className="flex items-center gap-1 text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
+                                  className="flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-stone-500 hover:text-brand-600 disabled:opacity-60 transition-colors"
                                 >
                                   {printingLabels === g.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                                   Print label
@@ -6526,6 +6682,9 @@ export default function AdminPage() {
                           }
                           if (g.status === 'canceled') {
                             return <span className="text-xs text-stone-400">Canceled sale — not booked with Steadfast</span>;
+                          }
+                          if (g.status === 'delivered') {
+                            return <span className="text-xs font-semibold text-emerald-700">Delivered · tracking code unavailable</span>;
                           }
                           if (!steadfastConfigured) {
                             return <span className="text-xs text-stone-400">Steadfast API keys not configured — add them to .env to book pickups.</span>;
@@ -6550,29 +6709,29 @@ export default function AdminPage() {
                       </div>
 
                       {/* Details: money + payment + seller (mirrors the Orders tab grid) */}
-                      <div className="mt-3 pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-3">
+                      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-stone-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 sm:gap-x-4 gap-y-2 sm:gap-y-3">
                         <div>
-                          <p className={ORD_LBL}>Total</p>
-                          <p className="font-bold text-stone-900 text-sm">৳{g.total.toLocaleString('en-IN')}</p>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Total</p>
+                          <p className="font-bold text-stone-900 text-xs sm:text-sm">৳{g.total.toLocaleString('en-IN')}</p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Due</p>
-                          <p className={`font-bold text-sm ${codDue > 0 ? 'text-amber-600' : 'text-stone-900'}`}>৳{codDue.toLocaleString('en-IN')}</p>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Due</p>
+                          <p className={`font-bold text-xs sm:text-sm ${codDue > 0 ? 'text-amber-600' : 'text-stone-900'}`}>৳{codDue.toLocaleString('en-IN')}</p>
                           {g.collected > 0 && (
-                            <p className="text-[11px] text-emerald-600 font-medium mt-0.5">+৳{g.collected.toLocaleString('en-IN')} collected</p>
+                            <p className="text-[10px] sm:text-[11px] text-emerald-600 font-medium mt-0.5">+৳{g.collected.toLocaleString('en-IN')} collected</p>
                           )}
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Wallet</p>
-                          <p className="font-medium text-stone-800 text-sm truncate">
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Wallet</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm break-all">
                             {firstRow?.bkash_number
                               ? `${firstRow.payment_channel === 'nagad' ? 'Nagad' : 'bKash'} ${firstRow.bkash_number}`
                               : 'Cash'}
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Payment</p>
-                          <p className="font-medium text-stone-800 text-sm">
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Payment</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm">
                             {g.paymentMode === 'advance_paid'
                               ? 'Advance paid'
                               : g.paymentMode === 'full_payment_no_delivery'
@@ -6585,12 +6744,12 @@ export default function AdminPage() {
                           </p>
                         </div>
                         <div>
-                          <p className={ORD_LBL}>Sold by</p>
-                          <p className="font-medium text-stone-800 text-sm">{g.seller ?? '—'}</p>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Sold by</p>
+                          <p className="font-medium text-stone-800 text-xs sm:text-sm">{g.seller ?? '—'}</p>
                         </div>
                         <div className="col-span-2">
-                          <p className={ORD_LBL}>Address</p>
-                          <p className="text-sm text-stone-700 break-words">{g.address}</p>
+                          <p className={`${ORD_LBL} text-[9px] sm:text-[10px]`}>Address</p>
+                          <p className="text-xs sm:text-sm text-stone-700 break-words">{g.address}</p>
                         </div>
                       </div>
                     </div>

@@ -162,8 +162,15 @@ export async function checkSteadfastStatus(trackingCode: string): Promise<Steadf
 
 // Map Steadfast delivery statuses to { label, classes } for admin badges.
 const STEADFAST_STATUS_META: Record<string, { label: string; cls: string }> = {
+  entered: { label: 'Steadfast: Entered', cls: 'bg-stone-100 text-stone-600 border border-stone-200' },
   pending: { label: 'Steadfast: Pending', cls: 'bg-stone-100 text-stone-600 border border-stone-200' },
+  approved: { label: 'Steadfast: Approved', cls: 'bg-sky-50 text-sky-700 border border-sky-200' },
   in_review: { label: 'Steadfast: In review', cls: 'bg-sky-50 text-sky-700 border border-sky-200' },
+  picked_up: { label: 'Steadfast: With a rider', cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  with_a_rider: { label: 'Steadfast: With a rider', cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  with_rider: { label: 'Steadfast: With a rider', cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  in_transit: { label: 'Steadfast: In transit', cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  out_for_delivery: { label: 'Steadfast: Out for delivery', cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
   hold: { label: 'Steadfast: On hold', cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
   unknown: { label: 'Steadfast: Unknown', cls: 'bg-stone-100 text-stone-500 border border-stone-200' },
   delivered_approval_pending: { label: 'Steadfast: Delivered (pending approval)', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
@@ -182,37 +189,62 @@ export function steadfastStatusMeta(status: string | null | undefined) {
 
 // ── Delivery pipeline (admin tracker) ──
 // Steadfast's 11 raw statuses collapse into 5 meaningful stages.
-export type SteadfastStage = 'booked' | 'in_review' | 'picked_up' | 'in_transit' | 'delivered' | 'cancelled';
+export type SteadfastStage =
+  | 'booked'
+  | 'in_review'
+  | 'picked_up'
+  | 'in_transit'
+  | 'awaiting_confirmation'
+  | 'partially_delivered'
+  | 'delivered'
+  | 'cancelled'
+  | 'needs_attention';
 
 export const STEADFAST_STAGES: Array<{ key: SteadfastStage; label: string }> = [
   { key: 'booked', label: 'Booked' },
   { key: 'in_review', label: 'In review' },
   { key: 'picked_up', label: 'Picked up' },
   { key: 'in_transit', label: 'In transit' },
+  { key: 'awaiting_confirmation', label: 'Awaiting confirmation' },
+  { key: 'partially_delivered', label: 'Partially delivered' },
   { key: 'delivered', label: 'Delivered' },
+  { key: 'needs_attention', label: 'Needs attention' },
 ];
 
 const STAGE_FINAL: Record<string, 'delivered' | 'cancelled' | null> = {
   delivered: 'delivered',
-  delivered_approval_pending: 'delivered',
-  partial_delivered: 'delivered',
-  partial_delivered_approval_pending: 'delivered',
   cancelled: 'cancelled',
-  cancelled_approval_pending: 'cancelled',
 };
 
-/** Collapse a raw Steadfast status into a pipeline stage (null = not booked/unknown). */
+/** Collapse a raw Steadfast status into a pipeline stage (null = no status). */
 export function steadfastStageFor(status: string | null | undefined): SteadfastStage | null {
   if (!status) return null;
-  const final = STAGE_FINAL[status];
+  const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const final = STAGE_FINAL[normalized];
   if (final) return final;
-  switch (status) {
+  switch (normalized) {
+    case 'entered':
     case 'pending': return 'booked';
-    case 'in_review': return 'in_review';
+    case 'approved':
+    case 'in_review':
+      return 'in_review';
+    case 'picked_up':
+    case 'with_a_rider':
+    case 'with_rider':
+      return 'picked_up';
+    case 'in_transit':
+    case 'out_for_delivery':
+      return 'in_transit';
+    case 'delivered_approval_pending':
+    case 'partial_delivered_approval_pending':
+    case 'cancelled_approval_pending':
+      return 'awaiting_confirmation';
+    case 'partial_delivered':
+      return 'partially_delivered';
     case 'hold':
     case 'unknown':
     case 'unknown_approval_pending':
-      return 'picked_up';
+      return 'needs_attention';
     default: return null;
   }
 }
@@ -222,8 +254,11 @@ const STAGE_CLS: Record<SteadfastStage, string> = {
   in_review: 'bg-sky-50 text-sky-700 border border-sky-200',
   picked_up: 'bg-amber-50 text-amber-700 border border-amber-200',
   in_transit: 'bg-amber-50 text-amber-700 border border-amber-200',
+  awaiting_confirmation: 'bg-violet-50 text-violet-700 border border-violet-200',
+  partially_delivered: 'bg-orange-50 text-orange-700 border border-orange-200',
   delivered: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
   cancelled: 'bg-red-50 text-red-600 border border-red-200',
+  needs_attention: 'bg-amber-50 text-amber-800 border border-amber-200',
 };
 
 const STAGE_LABEL: Record<SteadfastStage, string> = {
@@ -231,13 +266,20 @@ const STAGE_LABEL: Record<SteadfastStage, string> = {
   in_review: 'In review',
   picked_up: 'Picked up',
   in_transit: 'In transit',
+  awaiting_confirmation: 'Awaiting confirmation',
+  partially_delivered: 'Partially delivered',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
+  needs_attention: 'Needs attention',
 };
+
+export function steadfastStageMeta(stage: SteadfastStage) {
+  return { stage, label: STAGE_LABEL[stage], cls: STAGE_CLS[stage] };
+}
 
 export function steadfastStageBadge(status: string | null | undefined) {
   const stage = steadfastStageFor(status);
-  return stage ? { stage, label: STAGE_LABEL[stage], cls: STAGE_CLS[stage] } : null;
+  return stage ? steadfastStageMeta(stage) : null;
 }
 
 export type SteadfastBalanceResult = {

@@ -647,9 +647,9 @@ export default function CheckoutPage() {
       }
     }
 
-    let submitError: { message: string } | null = null;
+    let submitError: { message: string; code?: string } | null = null;
     for (let i = 0; i < lineItems.length; i++) {
-      let itemError: { message: string } | null = null;
+      let itemError: { message: string; code?: string } | null = null;
       for (const payload of payloadCandidates[i]) {
         const response = await supabase.from('orders').insert(payload);
         if (!response.error) {
@@ -674,6 +674,12 @@ export default function CheckoutPage() {
         }
       }
       if (itemError) {
+        if (itemError.code === '23505' && itemError.message.includes('already been used for this payment operator')) {
+          setPaymentErrors((previous) => ({
+            ...previous,
+            trxId: t('trxIdAlreadyUsed', { channel: channelLabel }),
+          }));
+        }
         submitError = itemError;
         break;
       }
@@ -685,7 +691,9 @@ export default function CheckoutPage() {
         try { await supabase.rpc('checkout_restore_coupon', { p_code: coupon!.code }); } catch { /* best effort */ }
       }
       try { await supabase.rpc('checkout_restore_stock', { p_items: stockPayload }); } catch { /* best effort */ }
-      setError(t('somethingWentWrong'));
+      if (!(submitError.code === '23505' && submitError.message.includes('already been used for this payment operator'))) {
+        setError(t('somethingWentWrong'));
+      }
       setSubmitting(false);
       return;
     }

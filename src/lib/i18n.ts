@@ -87,6 +87,7 @@ export type TranslationKey =
   | 'bkashNumberRequired'
   | 'bkashNumberInvalid'
   | 'trxIdRequired'
+  | 'trxIdAlreadyUsed'
   | 'somethingWentWrong'
   | 'feedbackReceived'
   | 'productPageDescriptionTitle'
@@ -296,6 +297,7 @@ const en: TranslationMap = {
   bkashNumberRequired: 'Your bKash/Nagad number is required',
   bkashNumberInvalid: 'Enter a valid bKash/Nagad number',
   trxIdRequired: 'Transaction ID is required',
+  trxIdAlreadyUsed: 'This {{channel}} transaction ID has already been used. Check the TrxID and try again.',
   sendUsFeedback: 'Send Us Feedback',
   feedbackSubtitle: "Have a question, suggestion, or complaint? We'd love to hear from you.",
   yourName: 'Your Name',
@@ -518,6 +520,7 @@ const bn: TranslationMap = {
   bkashNumberInvalid: 'সঠিক বিকাশ/নগদ নম্বর লিখুন',
   trxIdRequired: '{{channel}} কনফার্মেশন এসএমএস-এর TrxID লিখুন',
   trxIdInvalid: '{{channel}} কনফার্মেশন এসএমএস থেকে TrxID লিখুন',
+  trxIdAlreadyUsed: 'এই {{channel}} TrxID আগে ব্যবহার করা হয়েছে। TrxID দেখে আবার চেষ্টা করুন।',
   mustAgreeTerms: 'অর্ডার দিতে শর্তাবলি মেনে নিন',
   agreePrefix: 'আমি',
   agreeTermsLink: 'শর্তাবলি',
