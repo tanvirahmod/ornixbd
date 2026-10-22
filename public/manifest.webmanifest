@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "ORNIX — Modern Fashion",
+  "short_name": "ORNIX",
+  "description": "ORNIX store and admin order alerts",
+  "start_url": "/admin",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111110",
+  "theme_color": "#111110",
+  "icons": [
+    {
+      "src": "/ornix-pwa-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ornix-pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

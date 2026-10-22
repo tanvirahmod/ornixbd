@@ -8,6 +8,7 @@ import { supabase, Product, ProductSize, Order, OrderStatus, Category, Feedback,
 import { runBounded } from '../lib/supabaseQuery';
 import { createSteadfastConsignment, checkSteadfastStatus, steadfastStatusMeta, steadfastConfigured, steadfastStageBadge, steadfastStageFor, steadfastStageMeta, SteadfastStage, getSteadfastBalance } from '../lib/steadfast';
 import ImageUploader from '../components/ImageUploader';
+import AdminPushNotifications from '../components/AdminPushNotifications';
 import { zoneForDistrict, DELIVERY_ZONES, HABIGANJ_RATE_KEY, deliveryRateForDistrict, type DeliveryZone } from '../components/ZoneSelect';
 import { DISTRICT_NAMES_BN } from '../lib/districtNamesBn';
 import ThanaSelect from '../components/ThanaSelect';
@@ -26,6 +27,18 @@ type Tab = 'products' | 'stock' | 'categories' | 'orders' | 'manual' | 'finance'
 type ModalMode = 'add' | 'edit';
 
 type OrderViewMode = 'comfort' | 'compact' | 'grid';
+
+function showAdminBrowserNotification(title: string, body: string, tag: string) {
+  if (!('Notification' in window) || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+  void navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    .then(() => navigator.serviceWorker.ready)
+    .then((registration) => registration.showNotification(title, {
+      body,
+      icon: '/ornix-pwa-icon-192.png',
+      tag,
+    }))
+    .catch((error: unknown) => console.error('Could not display the admin notification.', error));
+}
 
 /** Comfort / Compact / Grid density switch for the order lists. */
 function ViewToggle({ value, onChange }: { value: OrderViewMode; onChange: (v: OrderViewMode) => void }) {
@@ -2423,12 +2436,11 @@ export default function AdminPage() {
           setOrders((prev) => (prev.some((o) => o.id === newOrder.id) ? prev : [newOrder, ...prev]));
           setNotifications((prev) => (prev.some((n) => n.id === newOrder.id) ? prev : [newOrder, ...prev]));
           // Browser notification
-          if (Notification.permission === 'granted') {
-            new Notification('New Order on Ornix!', {
-              body: `${newOrder.customer_name} ordered ${newOrder.product_title}`,
-              icon: '/vite.svg',
-            });
-          }
+          showAdminBrowserNotification(
+            'New Order on Ornix!',
+            `${newOrder.customer_name} ordered ${newOrder.product_title}`,
+            `ornix-order-${newOrder.order_code ?? newOrder.id}`,
+          );
         }
       )
       .on('postgres_changes',
@@ -2443,12 +2455,11 @@ export default function AdminPage() {
         (payload) => {
           const newFeedback = payload.new as Feedback;
           setFeedbackList((prev) => [newFeedback, ...prev]);
-          if (Notification.permission === 'granted') {
-            new Notification('New Feedback on Ornix!', {
-              body: `${newFeedback.name}: ${newFeedback.message.slice(0, 60)}`,
-              icon: '/vite.svg',
-            });
-          }
+          showAdminBrowserNotification(
+            'New Feedback on Ornix!',
+            `${newFeedback.name}: ${newFeedback.message.slice(0, 60)}`,
+            `feedback-${newFeedback.id}`,
+          );
         }
       )
       .on('postgres_changes',
@@ -2511,11 +2522,6 @@ export default function AdminPage() {
         }
       )
       .subscribe();
-
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
 
     return () => { supabase.removeChannel(channel); };
   }, [isAuthenticated, isSuperAdmin, currentAdminId]);
@@ -4563,6 +4569,7 @@ export default function AdminPage() {
             <div className="relative">
               <button
                 onClick={() => setShowNotifPanel((v) => !v)}
+                aria-label="Open notifications"
                 className="relative flex items-center justify-center w-9 h-9 bg-stone-800 hover:bg-stone-700 rounded-xl transition-all"
               >
                 <Bell className="w-4 h-4 text-stone-300" />
@@ -4575,7 +4582,7 @@ export default function AdminPage() {
               {showNotifPanel && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotifPanel(false)} />
-                  <div className="absolute right-0 top-12 z-50 w-80 max-h-96 overflow-y-auto bg-white rounded-2xl shadow-2xl border border-stone-100 animate-fade-in-up">
+                  <div className="absolute right-0 top-12 z-50 w-80 max-h-[min(32rem,calc(100vh-6rem))] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-stone-100 animate-fade-in-up">
                     <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 sticky top-0 bg-white">
                       <span className="font-semibold text-stone-900 text-sm">Notifications</span>
                       {unreadCount > 0 && (
@@ -4587,6 +4594,7 @@ export default function AdminPage() {
                         </button>
                       )}
                     </div>
+                    <AdminPushNotifications />
                     {bellNotifications.length === 0 ? (
                       <div className="px-4 py-8 text-center text-sm text-stone-400">
                         <Bell className="w-8 h-8 mx-auto mb-2 text-stone-200" />
@@ -5632,8 +5640,16 @@ export default function AdminPage() {
                         <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="font-mono text-[10px] sm:text-xs font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-full">{g.code}</span>
-                            <span className="text-[10px] sm:text-xs text-stone-400">
-                            {new Date(g.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            <span className="text-[10px] sm:text-xs text-stone-400 whitespace-nowrap">
+                              {new Date(g.createdAt).toLocaleString('en-US', {
+                                timeZone: 'Asia/Dhaka',
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                                hour12: true,
+                              })}
                             </span>
                           </div>
                           <span className={`hidden sm:flex text-xs font-semibold px-2 py-0.5 rounded-full items-center gap-1 flex-shrink-0 ${ORDER_STATUS_PILL[g.status]}`}>
@@ -5698,9 +5714,8 @@ export default function AdminPage() {
                         )}
                         {g.rows.map((row) => (
                           <div key={row.id} className="flex items-start justify-between gap-2 text-xs sm:text-sm">
-                            <div className="min-w-0">
-                              <p className="font-semibold text-stone-800 break-words">{row.product_title}</p>
-                              <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                                <span className="font-semibold text-stone-800 break-words">{row.product_title}</span>
                                 {row.product_code && (
                                   <span className="text-[10px] font-mono bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded-full">{row.product_code}</span>
                                 )}
@@ -5708,7 +5723,6 @@ export default function AdminPage() {
                                   <span className="text-[10px] font-semibold bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded-full uppercase">Size: {row.selected_size}</span>
                                 )}
                                 <span className="text-[10px] text-stone-400">Qty: {row.quantity ?? 1}</span>
-                              </div>
                             </div>
                             <span className="font-semibold text-stone-600 whitespace-nowrap pt-0.5">
                               ৳{Number(row.total_amount ?? 0).toLocaleString('en-IN')}
