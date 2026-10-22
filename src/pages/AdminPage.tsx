@@ -2379,11 +2379,11 @@ export default function AdminPage() {
       // Keep tracking history for delivered orders even if the courier no
       // longer returns a live status for that tracking code.
       if (deletedPickups.length > 0) {
-        const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', deletedPickups);
+        const { error } = await supabase.from('orders').update({ tracking_code: null, consignment_id: null }).in('id', deletedPickups);
         if (error) {
           showToast('error', `Could not clear deleted pickup${deletedPickups.length > 1 ? 's' : ''}: ${error.message}`);
         } else {
-          setOrders((prev) => prev.map((o) => (deletedPickups.includes(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+          setOrders((prev) => prev.map((o) => (deletedPickups.includes(o.id) ? { ...o, tracking_code: null, consignment_id: null, steadfast_status: null } : o)));
           if (!silent) showToast('info', `${deletedPickups.length} undelivered pickup${deletedPickups.length > 1 ? 's were' : ' was'} deleted from Steadfast — those orders are unbooked again.`);
         }
       }
@@ -3233,12 +3233,12 @@ export default function AdminPage() {
             showToast('info', `Kept tracking code ${code} because this order is marked delivered.`);
             continue;
           }
-          const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', rows.map((r) => r.id));
+          const { error } = await supabase.from('orders').update({ tracking_code: null, consignment_id: null }).in('id', rows.map((r) => r.id));
           if (error) {
             showToast('error', `Steadfast has no record of ${code}, but clearing it failed: ${error.message}`);
           } else {
             const ids = new Set(rows.map((r) => r.id));
-            setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+            setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, tracking_code: null, consignment_id: null, steadfast_status: null } : o)));
             showToast('info', `Steadfast has no record of ${code} — those rows are unbooked again.`);
           }
         } else {
@@ -3333,12 +3333,15 @@ export default function AdminPage() {
       return null;
     }
     const code = result.trackingCode;
-    const { error } = await supabase.from('orders').update({ tracking_code: code }).in('id', rows.map((r) => r.id));
+    const { error } = await supabase.from('orders').update({
+      tracking_code: code,
+      consignment_id: result.consignmentId,
+    }).in('id', rows.map((r) => r.id));
     if (error) {
       showToast('error', `Booked with Steadfast (${code}) but saving to the order failed: ${error.message}`);
       return null;
     }
-    setOrders((prev) => prev.map((o) => (rows.some((r) => r.id === o.id) ? { ...o, tracking_code: code } : o)));
+    setOrders((prev) => prev.map((o) => (rows.some((r) => r.id === o.id) ? { ...o, tracking_code: code, consignment_id: result.consignmentId } : o)));
     void logAdmin('steadfast_book', rows[0].id, `${rows[0].order_code ?? ''} (${rows.length} item${rows.length === 1 ? '' : 's'}, single parcel) · Tracking ${code} · COD ৳${codAmount}`);
     return code;
   };
@@ -3455,11 +3458,14 @@ export default function AdminPage() {
     if (result.ok && result.trackingCode) {
       // One tracking code, written back to every row of the sale.
       const code = result.trackingCode;
-      const { error } = await supabase.from('orders').update({ tracking_code: code }).in('id', targets.map((r) => r.id));
+      const { error } = await supabase.from('orders').update({
+        tracking_code: code,
+        consignment_id: result.consignmentId,
+      }).in('id', targets.map((r) => r.id));
       if (error) {
         showToast('error', `Booked with Steadfast (${code}) but saving to the sale failed: ${error.message}`);
       } else {
-        setOrders((prev) => prev.map((o) => (targets.some((t) => t.id === o.id) ? { ...o, tracking_code: code } : o)));
+        setOrders((prev) => prev.map((o) => (targets.some((t) => t.id === o.id) ? { ...o, tracking_code: code, consignment_id: result.consignmentId } : o)));
         showToast('success', `Booked one Steadfast pickup for ${g.code} — tracking code ${code}${codAmount > 0 ? ` · COD ৳${codAmount.toLocaleString('en-IN')}` : ' · no COD (paid in store)'}`);
       }
       void logAdmin('steadfast_book', targets[0].id, `Manual sale ${g.code} (${targets.length} item${targets.length === 1 ? '' : 's'}, single parcel) · Tracking ${code} · COD ৳${codAmount}`);
@@ -3507,12 +3513,12 @@ export default function AdminPage() {
         return;
       }
       // Consignment deleted from Steadfast's portal — unbook the whole sale.
-      const { error } = await supabase.from('orders').update({ tracking_code: null }).in('id', g.rows.map((r) => r.id));
+      const { error } = await supabase.from('orders').update({ tracking_code: null, consignment_id: null }).in('id', g.rows.map((r) => r.id));
       if (error) {
         showToast('error', `Steadfast has no record of this tracking code, but clearing it failed: ${error.message}`);
       } else {
         const ids = new Set(g.rows.map((r) => r.id));
-        setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, tracking_code: null, steadfast_status: null } : o)));
+        setOrders((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, tracking_code: null, consignment_id: null, steadfast_status: null } : o)));
         showToast('info', 'Steadfast has no record of this pickup — the sale is unbooked and can be booked again.');
       }
     } else {

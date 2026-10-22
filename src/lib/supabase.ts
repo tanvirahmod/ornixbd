@@ -123,6 +123,7 @@ export type Order = {
   courier_name: string | null;
   delivery_zone: string | null;
   tracking_code: string | null;
+  consignment_id?: string | null;
   /** Latest Steadfast delivery status fetched on the fly (not persisted). */
   steadfast_status?: string | null;
   delivered: boolean;

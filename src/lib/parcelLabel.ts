@@ -1,10 +1,10 @@
 // ── Steadfast parcel label generator ──
 // The Steadfast API v1 has no label/sticker endpoint (only create_order,
 // status checks and balance), so we reproduce their sticker layout locally:
-//   • header: ORNIX logo box + merchant ID
+//   • header: ORNIX.COM.BD logo box + merchant ID
 //   • Code-128 barcode of the courier tracking code (scannable)
 //   • QR code linking to the parcel's public tracking page
-//   • invoice / SF-ID / delivery / weight block
+//   • invoice / consignment ID / delivery / weight block
 //   • customer name / phone / address / area
 //   • cash-on-delivery strip, printed-at footer
 // Printing happens through a hidden iframe + window.print(), so any
@@ -90,6 +90,7 @@ type LabelData = {
   barcodeText: string;
   qrDataUrl: string;
   invoice: string;
+  consignmentId: string;
   delivery: string;
   name: string;
   phone: string;
@@ -101,16 +102,39 @@ type LabelData = {
 function labelDataFor(order: Order): LabelData {
   const code = order.tracking_code || order.order_code || '0';
   const cod = Math.max(0, Number(order.due_amount ?? order.total_amount ?? 0));
+  const addressParts = (order.customer_address || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const zone = order.delivery_zone?.trim() ?? '';
+  const zoneIsDistrict = Boolean(zone && !Object.prototype.hasOwnProperty.call(ZONE_LABELS, zone));
+  const district = zoneIsDistrict
+    ? zone
+    : addressParts[addressParts.length - 1] || (zone ? ZONE_LABELS[zone] ?? zone : '');
+  let districtIndex = -1;
+  for (let index = addressParts.length - 1; index >= 0; index -= 1) {
+    if (addressParts[index].toLowerCase() === district.toLowerCase()) {
+      districtIndex = index;
+      break;
+    }
+  }
+  const thana = districtIndex > 0
+    ? addressParts[districtIndex - 1]
+    : !zoneIsDistrict && addressParts.length > 1
+      ? addressParts[addressParts.length - 2]
+      : '';
+  const area = [thana, district].filter(Boolean).join(', ');
   return {
     barcodeSvg: code128Svg(code),
     barcodeText: code,
     qrDataUrl: '', // filled in buildLabelHtml (async QR)
     invoice: order.order_code || '—',
+    consignmentId: order.consignment_id || '—',
     delivery: order.courier_name === 'Store Pickup' ? 'Store Pickup' : 'Home',
     name: order.customer_name || '—',
     phone: order.customer_phone || '—',
     address: order.customer_address || '—',
-    area: (order.delivery_zone && (ZONE_LABELS[order.delivery_zone] ?? order.delivery_zone)) || '—',
+    area: area || '—',
     codAmount: cod,
   };
 }
@@ -147,7 +171,7 @@ const LABEL_CSS = `
                overflow: hidden; border-radius: 50%; background: #000; }
   .logo { width: 54px; height: 54px; object-fit: contain; }
   .brand { text-align: right; }
-  .brand-name { font-size: 26px; font-weight: 900; letter-spacing: 3px; }
+  .brand-name { font-size: 20px; font-weight: 900; letter-spacing: 1px; white-space: nowrap; }
   .merchant { font-size: 15px; color: #222; margin-top: 6px; }
   .barcode-wrap { text-align: center; padding: 10px 0 8px; }
   .barcode-wrap svg { display: block; margin: 0 auto; }
@@ -177,7 +201,7 @@ const LABEL_CSS = `
 function labelHtml(data: LabelData, merchantId: string | null): string {
   const rows: Array<[string, string]> = [
     ['INVOICE', data.invoice],
-    ['SF-ID', data.barcodeText],
+    ['CONSI.. ID', data.consignmentId],
     ['DELIVERY', data.delivery],
     ['WEIGHT', `${WEIGHT_KG} KG`],
   ];
@@ -193,7 +217,7 @@ function labelHtml(data: LabelData, merchantId: string | null): string {
       <div class="head">
         <div class="logo-mark"><img class="logo" src="${LOGO_URL}" alt="ORNIX" /></div>
         <div class="brand">
-          <div class="brand-name">ORNIX</div>
+          <div class="brand-name">ORNIX.COM.BD</div>
           <div class="merchant">Merchant ID: ${esc(merchantId || '—')}</div>
         </div>
       </div>
